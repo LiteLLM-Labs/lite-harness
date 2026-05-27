@@ -2,13 +2,31 @@
 
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useHarness } from "@/lib/use-harness";
 
 export default function SessionsPage() {
+  const [harness, setHarness] = useHarness();
   return (
     <div className="flex h-screen bg-background text-foreground">
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-12 border-b border-border flex items-center justify-end px-4 shrink-0">
+        <header className="h-12 border-b border-border flex items-center justify-end gap-2 px-4 shrink-0">
+          <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
+            <SelectTrigger className="h-8 text-xs w-[140px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
+              <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
+            </SelectContent>
+          </Select>
           <ThemeToggle />
         </header>
         <main className="flex-1 flex items-center justify-center">
