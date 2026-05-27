@@ -65,41 +65,12 @@ curl -X POST localhost:4096/session \
 
 ## Send a prompt
 
-Same shape, every harness. Pick any LiteLLM-routed model.
-
-### Claude via opencode
+Same call for every harness. Swap `modelID` for any model your LiteLLM gateway routes (Claude, GPT, Gemini, Bedrock, ...).
 
 ```bash
 curl -X POST localhost:4096/session/$SID/prompt_async \
   -H 'content-type: application/json' \
   -d '{"model": {"providerID": "litellm", "modelID": "claude-sonnet-4-6"},
-       "parts": [{"type": "text", "text": "summarize this repo"}]}'
-```
-
-### GPT via opencode
-
-```bash
-curl -X POST localhost:4096/session/$SID/prompt_async \
-  -H 'content-type: application/json' \
-  -d '{"model": {"providerID": "litellm", "modelID": "gpt-4o"},
-       "parts": [{"type": "text", "text": "summarize this repo"}]}'
-```
-
-### Gemini via claude-code
-
-```bash
-curl -X POST localhost:4096/session/$SID/prompt_async \
-  -H 'content-type: application/json' \
-  -d '{"model": {"providerID": "litellm", "modelID": "gemini-2.5-pro"},
-       "parts": [{"type": "text", "text": "summarize this repo"}]}'
-```
-
-### Bedrock Claude via claude-agent-sdk
-
-```bash
-curl -X POST localhost:4096/session/$SID/prompt_async \
-  -H 'content-type: application/json' \
-  -d '{"model": {"providerID": "litellm", "modelID": "bedrock/anthropic.claude-sonnet-4"},
        "parts": [{"type": "text", "text": "summarize this repo"}]}'
 ```
 
