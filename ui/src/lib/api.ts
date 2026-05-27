@@ -1,6 +1,7 @@
 import type { HarnessMessage, OpencodeSession } from "./types";
 
 const BASE = "";
+const MASTER_KEY_STORAGE = "lite-harness-master-key";
 
 export class ApiError extends Error {
   status: number;
@@ -12,8 +13,59 @@ export class ApiError extends Error {
   }
 }
 
+export function getStoredMasterKey(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(MASTER_KEY_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredMasterKey(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(MASTER_KEY_STORAGE, key);
+  } catch {
+    /* noop */
+  }
+}
+
+export function clearStoredMasterKey(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(MASTER_KEY_STORAGE);
+  } catch {
+    /* noop */
+  }
+}
+
+function withAuth(init?: RequestInit): RequestInit {
+  const key = getStoredMasterKey();
+  if (!key) return { cache: "no-store", ...init };
+  const headers = new Headers(init?.headers);
+  if (!headers.has("authorization")) headers.set("authorization", `Bearer ${key}`);
+  return { cache: "no-store", ...init, headers };
+}
+
 async function req(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(BASE + path, { cache: "no-store", ...init });
+  const res = await fetch(BASE + path, withAuth(init));
+  if (res.status === 401 && typeof window !== "undefined") {
+    clearStoredMasterKey();
+    const next = encodeURIComponent(window.location.pathname + window.location.search);
+    if (!window.location.pathname.startsWith("/login")) {
+      window.location.replace(`/login/?next=${next}`);
+    }
+  }
+  return res;
+}
+
+export async function whoami(): Promise<void> {
+  const res = await req("/whoami");
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new ApiError(res.status, body);
+  }
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -89,7 +141,9 @@ export function subscribeEvents(opts: {
 }): () => void {
   let es: EventSource | null = null;
   try {
-    es = new EventSource(BASE + "/event");
+    const key = getStoredMasterKey();
+    const qs = key ? `?key=${encodeURIComponent(key)}` : "";
+    es = new EventSource(BASE + "/event" + qs);
   } catch (e) {
     opts.onError?.(e);
     return () => {};
