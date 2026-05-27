@@ -1,7 +1,8 @@
 # Harness API
 
-One server (`:4096`) fronts both the **opencode** and **claude-code** harnesses.
-The HTTP surface is identical for both — only the `harness` field at session-create time differs.
+The lite-harness server implements a subset of the **[opencode server API](https://opencode.ai/docs/server)** — the same HTTP contract `opencode serve` exposes on `:4096`. Any client that speaks the opencode protocol works against both the `opencode` and `claude-code` harnesses without modification.
+
+The one addition beyond the opencode spec: a `harness` field on `POST /session` and in session responses.
 
 ## Base URL
 
@@ -11,21 +12,51 @@ http://localhost:4096   # local dev (start-local.sh)
 
 ---
 
-## Sessions
+## Opencode-compatible endpoints
 
-### Create a session
+These follow the [opencode server spec](https://opencode.ai/docs/server) verbatim.
+
+### Sessions
+
+```http
+GET    /session                 # list sessions → Session[]
+POST   /session                 # create session → Session
+GET    /session/:id             # get session → Session
+DELETE /session/:id             # delete session → boolean
+```
+
+### Messages
+
+```http
+GET  /session/:id/message          # list messages → {info, parts}[]
+POST /session/:id/message          # send message (sync, blocks until reply)
+POST /session/:id/prompt_async     # send message (async, returns 204 immediately)
+POST /session/:id/abort            # cancel in-flight turn
+```
+
+### Events (SSE)
+
+```http
+GET /event    # SSE bus — same event shapes as opencode
+```
+
+---
+
+## lite-harness extension: `harness` field
+
+`POST /session` accepts one extra field not in the opencode spec:
 
 ```http
 POST /session
 Content-Type: application/json
 
 {
-  "title": "my session",
+  "title":   "my session",
   "harness": "opencode"       // "opencode" (default) | "claude-code"
 }
 ```
 
-**Response**
+The `harness` field is also present in every session response:
 
 ```json
 {
@@ -36,27 +67,13 @@ Content-Type: application/json
 }
 ```
 
-`harness` is locked for the lifetime of the session — it cannot be changed after creation.
-
-### List sessions
-
-```http
-GET /session
-```
-
-Returns an array of session objects sorted newest-first, each with a `harness` field.
-
-### Delete a session
-
-```http
-DELETE /session/:id
-```
+`harness` is immutable after the first message is sent.
 
 ---
 
 ## Sending messages
 
-### Fire-and-forget (recommended)
+### Async (recommended)
 
 ```http
 POST /session/:id/prompt_async
@@ -73,7 +90,15 @@ Content-Type: application/json
 }
 ```
 
-Returns `204 No Content` immediately. The turn runs in the background; subscribe to `/event` for live output.
+Returns `204 No Content` immediately. Subscribe to `/event` for live output.
+
+### Sync
+
+```http
+POST /session/:id/message
+```
+
+Same body. Blocks until the full reply is ready.
 
 ### Get message history
 
@@ -81,26 +106,19 @@ Returns `204 No Content` immediately. The turn runs in the background; subscribe
 GET /session/:id/message
 ```
 
-Returns the full conversation as an array:
-
 ```json
 [
   {
-    "info": { "id": "msg_...", "role": "user",      "time": { "created": 1700000000000 } },
+    "info":  { "id": "msg_...", "role": "user",      "time": { "created": 1700000000000 } },
     "parts": [{ "id": "prt_...", "type": "text", "text": "your prompt" }]
   },
   {
-    "info": { "id": "msg_...", "role": "assistant", "time": { "created": 1700000000000, "completed": 1700000003000 },
-              "finish": "stop", "tokens": { "input": 10, "output": 42 } },
+    "info":  { "id": "msg_...", "role": "assistant", "finish": "stop",
+               "time": { "created": 1700000000000, "completed": 1700000003000 },
+               "tokens": { "input": 10, "output": 42 } },
     "parts": [{ "id": "prt_...", "type": "text", "text": "the reply" }]
   }
 ]
-```
-
-### Abort an in-flight turn
-
-```http
-POST /session/:id/abort
 ```
 
 ---
@@ -111,7 +129,7 @@ POST /session/:id/abort
 GET /event
 ```
 
-Server-sent events for all sessions. Filter client-side by `properties.sessionID`.
+Follows the opencode SSE protocol. Filter client-side on `properties.sessionID`.
 
 ### Event types
 
@@ -133,26 +151,27 @@ es.onmessage = ({ data }) => {
   if (ev.properties?.sessionID !== MY_SESSION_ID) return;
 
   if (ev.type === 'message.part.delta' && ev.properties.field === 'text') {
-    process.stdout.write(ev.properties.delta);   // live token
+    process.stdout.write(ev.properties.delta);
   }
-  if (ev.type === 'session.idle') {
-    es.close();   // turn complete
-  }
+  if (ev.type === 'session.idle') es.close();
 };
 ```
 
 ---
 
-## Full example: spawn a session and get a reply
+## Full example: spawn a session and stream a reply
 
 ```bash
-# 1. Create session (opencode or claude-code)
+# 1. Create session — pick harness here, locked for life of session
 SESSION=$(curl -s -X POST http://localhost:4096/session \
   -H 'content-type: application/json' \
   -d '{"title":"demo","harness":"claude-code"}')
 SID=$(echo $SESSION | jq -r '.id')
 
-# 2. Send a message
+# 2. Subscribe to events before sending (avoids missing early tokens)
+curl -sN "http://localhost:4096/event" &
+
+# 3. Send a message (async)
 curl -s -X POST "http://localhost:4096/session/$SID/prompt_async" \
   -H 'content-type: application/json' \
   -d '{
@@ -160,21 +179,30 @@ curl -s -X POST "http://localhost:4096/session/$SID/prompt_async" \
     "parts": [{"type":"text","text":"hello"}]
   }'
 
-# 3. Poll for the reply (or subscribe to /event for streaming)
+# 4. Or poll for the reply
 sleep 10
-curl -s "http://localhost:4096/session/$SID/message" | jq '[.[] | {role:.info.role, text:(.parts[]|select(.type=="text").text)}]'
+curl -s "http://localhost:4096/session/$SID/message" \
+  | jq '[.[] | {role:.info.role, text:(.parts[]|select(.type=="text").text)}]'
 ```
 
 ---
 
 ## Harness comparison
 
-| | opencode | claude-code |
+| | `opencode` | `claude-code` |
 |---|---|---|
-| Backend | `opencode serve` child process | `@anthropic-ai/claude-code` SDK in-process |
-| Session state | Persisted in opencode's DB | In-memory (lost on restart) |
-| Tool use | opencode tool set | Claude Code tool set |
-| Working dir | `$REPO_DIR` (opencode harness dir) | `$CC_REPO_DIR` or `$HOME` |
-| `harness` value | `"opencode"` | `"claude-code"` |
+| **Backend** | `opencode serve` child process | `@anthropic-ai/claude-code` SDK in-process |
+| **Session persistence** | opencode's SQLite DB (survives restart) | In-memory (lost on restart) |
+| **Tool set** | opencode tools | Claude Code tools |
+| **Working dir** | `$REPO_DIR` | `$CC_REPO_DIR` or `$HOME` |
+| **opencode spec coverage** | Full | Sessions + messages + events only |
 
-Both harnesses emit the same SSE event shapes and respond to the same HTTP endpoints.
+Both emit identical SSE event shapes and accept the same HTTP request bodies.
+
+---
+
+## Not yet implemented
+
+The following opencode spec endpoints are not exposed by lite-harness (proxied to the opencode child for `opencode` sessions only, not available for `claude-code` sessions):
+
+`/global/health`, `/project`, `/config`, `/provider`, `/find`, `/file`, `/lsp`, `/mcp`, `/agent`, `/tui/*`
