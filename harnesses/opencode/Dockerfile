@@ -8,8 +8,8 @@
 # It inlines harnesses/base/Dockerfile as the `base` stage, then layers the
 # opencode runtime on top — kept byte-for-byte in step with those two files.
 #
-# Build from repo root:
-#   docker build -f Dockerfile.inline -t opencode-inline .
+# Build from harness dir:
+#   docker build -f harnesses/opencode/Dockerfile -t opencode-inline harnesses/opencode
 
 # ================================================================= base stage
 # (inlined from harnesses/base/Dockerfile)
