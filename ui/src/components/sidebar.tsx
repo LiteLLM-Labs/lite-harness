@@ -30,7 +30,14 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   const [sessions, setSessions] = useState<OpencodeSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [harness, setHarness] = useState<"opencode" | "claude-code">("opencode");
+  const [harness, setHarnessState] = useState<"opencode" | "claude-code">(() => {
+    if (typeof window === "undefined") return "opencode";
+    return (localStorage.getItem("harness") as "opencode" | "claude-code") ?? "opencode";
+  });
+  const setHarness = (v: "opencode" | "claude-code") => {
+    localStorage.setItem("harness", v);
+    setHarnessState(v);
+  };
 
   const load = async () => {
     try {
