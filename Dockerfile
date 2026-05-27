@@ -1,0 +1,108 @@
+# syntax=docker/dockerfile:1.7
+#
+# opencode inline harness — built from BerriAI/lite-harness.
+# Adapted from harnesses/opencode/Dockerfile.inline (no vault CA, paths adjusted).
+
+# ================================================================= base stage
+FROM node:20-bookworm-slim AS base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates bash curl jq \
+      python3 python3-venv python3-dev \
+      make g++ \
+      tmux ripgrep \
+      libglib2.0-0 libnss3 libnspr4 libdbus-1-3 libatk1.0-0 \
+      libatk-bridge2.0-0 libcups2 libdrm2 libxcb1 libxkbcommon0 \
+      libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+      libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+      fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG GH_VERSION=2.92.0
+ARG GH_SHA256_AMD64=8f8212b1a9cec261a8839e0893168f50d3fc70f095da257feef4229234cefdf8
+ARG GH_SHA256_ARM64=34d620b7c884774ed86236541535170889fda0b99aafbdab8b69c7d458b5ca6b
+ARG TARGETARCH
+
+RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64) GH_ARCH=amd64; GH_SHA256="${GH_SHA256_AMD64}" ;; \
+      arm64) GH_ARCH=arm64; GH_SHA256="${GH_SHA256_ARM64}" ;; \
+      *) echo "Unsupported arch" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/gh.deb \
+         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.deb" \
+    && echo "${GH_SHA256}  /tmp/gh.deb" | sha256sum -c - \
+    && dpkg -i /tmp/gh.deb \
+    && rm /tmp/gh.deb
+
+ARG UV_VERSION=0.5.13
+RUN UNAME_M=$(uname -m); \
+    case "$UNAME_M" in \
+      x86_64)  UV_TARGET="x86_64-unknown-linux-gnu" ;; \
+      aarch64) UV_TARGET="aarch64-unknown-linux-gnu" ;; \
+      *) echo "Unsupported arch: $UNAME_M" >&2; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && curl -fsSL -o uv.tar.gz \
+         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
+    && curl -fsSL -o uv.tar.gz.sha256 \
+         "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz.sha256" \
+    && EXPECTED=$(awk '{print $1}' uv.tar.gz.sha256) \
+    && ACTUAL=$(sha256sum uv.tar.gz | awk '{print $1}') \
+    && if [ "$EXPECTED" != "$ACTUAL" ]; then echo "uv checksum mismatch" >&2; exit 1; fi \
+    && tar -xzf uv.tar.gz \
+    && install -m 0755 "uv-${UV_TARGET}/uv"  /usr/local/bin/uv \
+    && install -m 0755 "uv-${UV_TARGET}/uvx" /usr/local/bin/uvx \
+    && rm -rf uv.tar.gz uv.tar.gz.sha256 "uv-${UV_TARGET}" \
+    && uv --version
+
+RUN useradd -m -u 1001 -s /bin/bash sandbox \
+    && mkdir -p /work \
+    && chown sandbox:sandbox /work
+
+# ============================================================ opencode installer
+FROM debian:bookworm-slim AS installer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates unzip \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version 1.14.41
+RUN find /root/.opencode -maxdepth 2 -type d -name 'cache' -exec rm -rf {} + 2>/dev/null || true \
+ && find /root/.opencode -maxdepth 2 -name '*.zip' -delete 2>/dev/null || true \
+ && find /root/.opencode -maxdepth 2 -name '*.tar*' -delete 2>/dev/null || true
+
+# ============================================================== sandbox-mcp deps
+FROM node:20-bookworm-slim AS mcp-deps
+WORKDIR /mcp
+COPY opencode/package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund
+
+# ==================================================================== runtime
+FROM base
+
+COPY --from=installer --chown=sandbox:sandbox /root/.opencode /home/sandbox/.opencode
+ENV PATH="/home/sandbox/.opencode/bin:${PATH}"
+
+WORKDIR /work
+
+COPY entrypoint-common.sh /opt/lap/common.sh
+RUN chmod +x /opt/lap/common.sh
+
+COPY --chown=sandbox:sandbox opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
+COPY --chown=sandbox:sandbox opencode/memory-mcp.mjs /opt/lap/opencode-sandbox-mcp/memory-mcp.mjs
+COPY --chown=sandbox:sandbox opencode/report-issue-mcp.mjs /opt/lap/opencode-sandbox-mcp/report-issue-mcp.mjs
+COPY --chown=sandbox:sandbox opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
+COPY --chown=sandbox:sandbox opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
+COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
+
+COPY --chown=sandbox:sandbox opencode/inline-adapter.mjs /opt/lap/inline-adapter.mjs
+
+COPY --chown=sandbox:sandbox opencode/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+    && mkdir -p /home/sandbox/.local/state \
+    && chown -R sandbox:sandbox /home/sandbox/.local
+
+USER sandbox
+
+ENV OPENCODE_SHARED_INLINE=1
+
+EXPOSE 10000
+ENTRYPOINT ["/entrypoint.sh"]
