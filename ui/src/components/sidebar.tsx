@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SettingsDialog } from "@/components/settings-dialog";
 import { readHarness } from "@/lib/use-harness";
 import { createSession, deleteSession, listSessions } from "@/lib/api";
 import type { OpencodeSession } from "@/lib/types";
@@ -62,12 +63,15 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
 
   return (
     <aside className="w-64 shrink-0 border-r border-border bg-background flex flex-col h-screen">
-      <div
-        className="flex items-center gap-2 px-4 h-12 border-b border-border cursor-pointer"
-        onClick={() => router.push("/sessions/")}
-      >
-        <span className="text-xl leading-none">🚄</span>
-        <span className="font-semibold text-sm">LiteLLM</span>
+      <div className="flex items-center justify-between px-4 h-12 border-b border-border">
+        <div
+          className="flex items-center gap-2 cursor-pointer min-w-0"
+          onClick={() => router.push("/sessions/")}
+        >
+          <span className="text-xl leading-none">🚄</span>
+          <span className="font-semibold text-sm">LiteLLM</span>
+        </div>
+        <SettingsDialog />
       </div>
 
       <div className="px-3 py-3 border-b border-border">

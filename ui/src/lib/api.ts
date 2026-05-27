@@ -101,6 +101,20 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
+export interface LiteLLMHealth {
+  ok: boolean;
+  modelCount?: number;
+  status?: number;
+  error?: string;
+  base?: string;
+  modelsUrl?: string;
+}
+
+export async function testLiteLLMConnection(): Promise<LiteLLMHealth> {
+  const res = await req("/_litellm/health");
+  return jsonOrThrow<LiteLLMHealth>(res);
+}
+
 export async function getSession(id: string): Promise<OpencodeSession> {
   const res = await req(`/session/${encodeURIComponent(id)}`);
   return jsonOrThrow<OpencodeSession>(res);

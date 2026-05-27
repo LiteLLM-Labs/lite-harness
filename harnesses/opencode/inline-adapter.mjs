@@ -413,6 +413,46 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Gateway health probe used by the Settings dialog's "Test connection"
+  // button. Pings ${LITELLM_API_BASE}/v1/models with LITELLM_API_KEY and
+  // reports whether the gateway is reachable and how many models it serves.
+  if (p === "/_litellm/health" && req.method === "GET") {
+    const base = (process.env.LITELLM_API_BASE || "").replace(/\/+$/, "");
+    const key = process.env.LITELLM_API_KEY || "";
+    if (!base) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "LITELLM_API_BASE not set" }));
+      return;
+    }
+    const modelsUrl = base.endsWith("/v1") ? `${base}/models` : `${base}/v1/models`;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(modelsUrl, {
+        headers: key ? { authorization: `Bearer ${key}` } : {},
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      const body = await r.text();
+      if (!r.ok) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, status: r.status, error: body.slice(0, 500), base, modelsUrl }));
+        return;
+      }
+      let modelCount = 0;
+      try {
+        const j = JSON.parse(body);
+        if (Array.isArray(j?.data)) modelCount = j.data.length;
+      } catch {}
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, modelCount, base, modelsUrl }));
+    } catch (e) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(e?.message || e), base, modelsUrl }));
+    }
+    return;
+  }
+
   // Reject NEW session creates while draining; all other in-flight paths continue.
   if (draining && p === "/session" && req.method === "POST") {
     res.writeHead(503, { "content-type": "application/json" });

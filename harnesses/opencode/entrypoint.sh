@@ -54,9 +54,12 @@ fi
 # harness host. question is denied too — this agent runs autonomously and must
 # not block waiting on a human to answer.
 #
-# Register every Claude model the gateway serves, not just the boot default, so
+# Register every model the gateway serves, not just the boot default, so
 # the per-agent model the LAP selects "just works" — opencode rejects any model
 # absent from this map (that's the haiku-works / opus-4-7-fails bug).
+# Non-Claude models (GPT, Gemini, Bedrock, ...) appear here too; they'll only
+# work end-to-end if your LiteLLM gateway routes them as Anthropic Messages
+# (the @ai-sdk/anthropic adapter POSTs to {base}/messages).
 #
 # The whole map is built in ONE jq pass (no shell loop) so it's robust across
 # shells, and per-model thinking opts are computed in jq:
@@ -72,7 +75,7 @@ opts_for='
     else {} end;'
 MODELS_JSON=$(
   curl -fsS --max-time 10 -H "Authorization: Bearer ${LITELLM_API_KEY}" "${BASE}/models" 2>/dev/null \
-    | jq -c "${opts_for} [ .data[].id | select(test(\"claude|opus|sonnet|haiku\")) ] | unique | map({ (.): opts(.) }) | add // {}" 2>/dev/null \
+    | jq -c "${opts_for} [ .data[].id ] | unique | map({ (.): opts(.) }) | add // {}" 2>/dev/null \
     || printf '%s' '{}'
 )
 # Guarantee the boot default is present even if discovery returned nothing.
