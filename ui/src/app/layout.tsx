@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { TopNav } from "@/components/top-nav";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,7 +34,10 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <div className="flex h-screen flex-col">
+            <TopNav />
+            <div className="flex-1 min-h-0">{children}</div>
+          </div>
           <Toaster />
         </ThemeProvider>
       </body>

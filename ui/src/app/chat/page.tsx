@@ -10,9 +10,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs } from "@/components/ui/tabs";
 import { MessageBlock } from "@/components/message-block";
 import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { SessionsSidebar } from "@/components/sessions-sidebar";
+import { InspectPanel } from "@/components/inspect-panel";
 import { getMessages, subscribeEvents } from "@/lib/api";
 import type { HarnessMessage } from "@/lib/types";
 
@@ -22,12 +25,15 @@ const MODELS = [
   "anthropic/claude-haiku-4-5",
 ];
 
+type TabValue = "chat" | "inspect";
+
 function ChatInner() {
   const sp = useSearchParams();
   const sid = sp.get("id");
   const [messages, setMessages] = useState<HarnessMessage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState(MODELS[0]);
+  const [tab, setTab] = useState<TabValue>("chat");
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
 
@@ -77,7 +83,7 @@ function ChatInner() {
 
   if (!sid) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-muted-foreground text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         Missing <code className="font-mono mx-1">?id=</code> parameter.
       </div>
     );
@@ -86,65 +92,84 @@ function ChatInner() {
   const shortSid = sid.length > 12 ? sid.slice(0, 12) + "…" : sid;
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
-      <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur">
-        <div className="max-w-3xl mx-auto px-4 h-12 flex items-center justify-between">
-          <a
-            href="/sessions/"
-            className="text-xs font-mono text-muted-foreground hover:text-foreground"
-          >
-            ← {shortSid}
-          </a>
-          <div className="flex items-center gap-2">
-            <Select
-              value={model}
-              onValueChange={(v) => v && setModel(v)}
-            >
-              <SelectTrigger className="h-8 text-xs w-[220px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MODELS.map((m) => (
-                  <SelectItem key={m} value={m} className="text-xs font-mono">
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <ThemeToggle />
-          </div>
-        </div>
-      </header>
-
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="flex-1 overflow-y-auto"
-      >
-        <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col gap-4">
-          {!messages && !error && (
-            <div className="text-muted-foreground text-sm">Loading…</div>
-          )}
-          {error && (
-            <Card className="border-destructive p-4">
-              <p className="text-sm text-destructive">{error}</p>
-            </Card>
-          )}
-          {messages && messages.length === 0 && (
-            <div className="text-muted-foreground text-sm text-center py-12">
-              No messages yet. Say hi.
+    <div className="flex h-full bg-background text-foreground">
+      <SessionsSidebar activeSid={sid} />
+      <main className="flex flex-col flex-1 min-w-0">
+        <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur">
+          <div className="max-w-3xl mx-auto px-4 h-12 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs font-mono text-muted-foreground truncate">
+                {shortSid}
+              </span>
+              <Tabs<TabValue>
+                value={tab}
+                onValueChange={setTab}
+                items={[
+                  { value: "chat", label: "Chat" },
+                  { value: "inspect", label: "Inspect" },
+                ]}
+              />
             </div>
-          )}
-          {messages?.map((m, i) => (
-            <MessageBlock
-              key={(m.info.id as string | undefined) ?? i}
-              msg={m}
-            />
-          ))}
-        </div>
-      </div>
+            <div className="flex items-center gap-2">
+              <Select
+                value={model}
+                onValueChange={(v) => v && setModel(v)}
+              >
+                <SelectTrigger className="h-8 text-xs w-[220px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODELS.map((m) => (
+                    <SelectItem
+                      key={m}
+                      value={m}
+                      className="text-xs font-mono"
+                    >
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <ThemeToggle />
+            </div>
+          </div>
+        </header>
 
-      <Composer sessionId={sid} model={model} onSent={refetch} />
+        {tab === "chat" ? (
+          <>
+            <div
+              ref={scrollRef}
+              onScroll={onScroll}
+              className="flex-1 overflow-y-auto"
+            >
+              <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col gap-4">
+                {!messages && !error && (
+                  <div className="text-muted-foreground text-sm">Loading…</div>
+                )}
+                {error && (
+                  <Card className="border-destructive p-4">
+                    <p className="text-sm text-destructive">{error}</p>
+                  </Card>
+                )}
+                {messages && messages.length === 0 && (
+                  <div className="text-muted-foreground text-sm text-center py-12">
+                    No messages yet. Say hi.
+                  </div>
+                )}
+                {messages?.map((m, i) => (
+                  <MessageBlock
+                    key={(m.info.id as string | undefined) ?? i}
+                    msg={m}
+                  />
+                ))}
+              </div>
+            </div>
+            <Composer sessionId={sid} model={model} onSent={refetch} />
+          </>
+        ) : (
+          <InspectPanel sessionId={sid} />
+        )}
+      </main>
     </div>
   );
 }
@@ -153,7 +178,7 @@ export default function ChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center text-muted-foreground text-sm">
+        <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
           Loading…
         </div>
       }
