@@ -18,6 +18,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
 import { getMessages, subscribeEvents } from "@/lib/api";
+import { applyOpencodeEvent, seedFromHistory } from "@/lib/agent-stream";
 import type { HarnessMessage } from "@/lib/types";
 
 const MODELS = [
@@ -40,7 +41,7 @@ function ChatInner() {
     if (!sid) return;
     try {
       const list = await getMessages(sid);
-      setMessages(list);
+      setMessages(seedFromHistory(list));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -51,20 +52,13 @@ function ChatInner() {
     refetch();
     const unsub = subscribeEvents({
       sessionId: sid,
-      onEvent: () => refetch(),
+      onEvent: (ev) =>
+        setMessages((prev) =>
+          applyOpencodeEvent(prev ?? [], ev as { type: string }),
+        ),
     });
     return unsub;
   }, [sid, refetch]);
-
-  useEffect(() => {
-    if (!sid || !messages) return;
-    const last = messages[messages.length - 1];
-    const inFlight =
-      last?.info.role === "assistant" && last.info.finish !== "stop";
-    if (!inFlight) return;
-    const t = setInterval(refetch, 2000);
-    return () => clearInterval(t);
-  }, [sid, messages, refetch]);
 
   const onScroll = () => {
     const el = scrollRef.current;
