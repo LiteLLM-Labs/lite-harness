@@ -30,6 +30,23 @@ const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
 const UP = `http://127.0.0.1:${CHILD_PORT}`;
 const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "skills");
 
+// Bearer-token gate for all HTTP routes. When MASTER_KEY is set, every
+// request must carry `Authorization: Bearer <MASTER_KEY>`; when unset, the
+// adapter runs open (local dev). The whoami probe is the only exception so
+// the login page can validate a key without first being authorized.
+const MASTER_KEY = process.env.MASTER_KEY || "";
+function authOk(req, urlObj) {
+  if (!MASTER_KEY) return true;
+  const h = req.headers["authorization"] || req.headers["Authorization"];
+  if (typeof h === "string") {
+    const m = h.match(/^Bearer\s+(.+)$/);
+    if (m && m[1] === MASTER_KEY) return true;
+  }
+  // EventSource can't set headers; allow `?key=` query param for /event.
+  if (urlObj && urlObj.searchParams.get("key") === MASTER_KEY) return true;
+  return false;
+}
+
 // Per-session harness tag. opencode sessions exist in the child's DB;
 // cc sessions live entirely in-process.
 const sessionHarness = new Map(); // id → "opencode" | "cc"
@@ -372,6 +389,29 @@ const server = http.createServer(async (req, res) => {
   // to a real file under UI_DIST. The harness API routes (POST /session,
   // GET /event, ...) never resolve to a file on disk, so they fall through.
   if (req.method === "GET" && UI_DIST_EXISTS && serveStatic(p, res)) return;
+
+  // Whoami: cheap auth probe used by the login page. Returns 200 iff the
+  // Authorization header matches MASTER_KEY (or no MASTER_KEY is set).
+  if (p === "/whoami" && req.method === "GET") {
+    if (!authOk(req, url)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, auth: MASTER_KEY ? "required" : "open" }));
+    return;
+  }
+
+  // Everything past this point is the harness API — gate it on MASTER_KEY.
+  if (!authOk(req, url)) {
+    res.writeHead(401, {
+      "content-type": "application/json",
+      "www-authenticate": "Bearer",
+    });
+    res.end(JSON.stringify({ error: "unauthorized" }));
+    return;
+  }
 
   // Reject NEW session creates while draining; all other in-flight paths continue.
   if (draining && p === "/session" && req.method === "POST") {
