@@ -86,8 +86,8 @@ and redirects to the new session URL. No partial state is left behind.
 
 | | opencode | claude-code |
 |---|---|---|
-| **Where state lives** | `opencode serve` process (SQLite on disk) | In-memory Map inside the adapter |
-| **Survives restart** | Yes | No — cc sessions are lost on adapter restart |
+| **Where state lives** | `opencode serve` process (in-memory) | In-memory Map inside the adapter |
+| **Survives restart** | No | No |
 | **Multi-turn context** | Managed by opencode via `resume` | SDK `session_id` passed back as `resume` option each turn |
 
 ---
