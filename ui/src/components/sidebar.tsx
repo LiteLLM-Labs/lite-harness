@@ -23,6 +23,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   const [sessions, setSessions] = useState<OpencodeSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [harness, setHarness] = useState<"opencode" | "claude-code">("opencode");
 
   const load = async () => {
     try {
@@ -43,7 +44,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   const onNew = async () => {
     setCreating(true);
     try {
-      const s = await createSession();
+      const s = await createSession(undefined, harness);
       router.push(`/chat/?id=${encodeURIComponent(s.id)}`);
       load();
     } catch (e) {
@@ -70,7 +71,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         <span className="font-semibold text-sm">LiteLLM</span>
       </div>
 
-      <div className="px-3 py-3 border-b border-border">
+      <div className="px-3 py-3 border-b border-border flex flex-col gap-2">
         <Button
           onClick={onNew}
           disabled={creating}
@@ -80,6 +81,20 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
           <Plus className="size-4" />
           New session
         </Button>
+        <div className="flex rounded-md border border-border overflow-hidden text-[11px] font-medium">
+          <button
+            onClick={() => setHarness("opencode")}
+            className={`flex-1 py-1 transition-colors ${harness === "opencode" ? "bg-primary text-primary-foreground" : "hover:bg-accent/50 text-muted-foreground"}`}
+          >
+            opencode
+          </button>
+          <button
+            onClick={() => setHarness("claude-code")}
+            className={`flex-1 py-1 transition-colors border-l border-border ${harness === "claude-code" ? "bg-primary text-primary-foreground" : "hover:bg-accent/50 text-muted-foreground"}`}
+          >
+            claude code
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2">
@@ -111,7 +126,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{title}</div>
                 <div className="font-mono text-[10px] text-muted-foreground truncate">
-                  {short} · {timeAgo(s.time?.created)}
+                  {s.harness === "claude-code" ? "cc" : "oc"} · {short} · {timeAgo(s.time?.created)}
                 </div>
               </div>
               <button

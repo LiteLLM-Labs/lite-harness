@@ -32,11 +32,11 @@ export async function listSessions(): Promise<OpencodeSession[]> {
   );
 }
 
-export async function createSession(title?: string): Promise<OpencodeSession> {
+export async function createSession(title?: string, harness?: "opencode" | "claude-code"): Promise<OpencodeSession> {
   const res = await req("/session", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, ...(harness ? { harness } : {}) }),
   });
   return jsonOrThrow<OpencodeSession>(res);
 }

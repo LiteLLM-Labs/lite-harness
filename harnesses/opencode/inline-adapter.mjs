@@ -22,11 +22,172 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
 const UP = `http://127.0.0.1:${CHILD_PORT}`;
 const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "skills");
+
+// Per-session harness tag. opencode sessions exist in the child's DB;
+// cc sessions live entirely in-process.
+const sessionHarness = new Map(); // id → "opencode" | "cc"
+
+const log = (...a) => console.log("[inline-adapter]", ...a);
+
+// Load the claude-code SDK from its own node_modules (sibling harness dir).
+const _require = createRequire(import.meta.url);
+let ccQuery;
+try {
+  const sdkPath = _require.resolve(
+    "../claude-code/node_modules/@anthropic-ai/claude-code/sdk.mjs",
+  );
+  const mod = await import(sdkPath);
+  ccQuery = mod.query;
+  log("claude-code SDK loaded");
+} catch (e) {
+  log(`claude-code SDK not available: ${e.message}`);
+}
+
+// In-process state for claude-code sessions.
+const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
+const ccGlobalBus = new Set(); // SSE response writers for cc events
+
+function ccEmit(sessionId, type, props) {
+  const ev = { id: `evt_${randomUUID().replace(/-/g,"").slice(0,20)}`, type, properties: { ...props, sessionID: sessionId } };
+  const line = `data: ${JSON.stringify(ev)}\n\n`;
+  const s = ccSessions.get(sessionId);
+  if (s) for (const cb of s.busSubscribers) { try { cb(line); } catch {} }
+  for (const cb of ccGlobalBus) { try { cb(line); } catch {} }
+}
+
+function ccHandleSdkEvent(sessionId, m, parts, msgId, turn, sink) {
+  const ev = m;
+  if (ev.type === "system" && ev.subtype === "init" && ev.session_id) {
+    sink({ sdk_session_id: ev.session_id });
+  } else if (ev.type === "assistant" && ev.message) {
+    const content = ev.message.content ?? [];
+    const sdkMsgId = ev.message.id;
+    const seenBlocks = turn.asstBlockCount.get(sdkMsgId ?? "") ?? 0;
+    content.forEach((block, idx) => {
+      const blockIdx = seenBlocks + idx;
+      const partId = `${sdkMsgId ?? msgId}_b${blockIdx}`;
+      if (block.type === "text") {
+        const part = { id: partId, messageID: msgId, type: "text", text: block.text ?? "" };
+        parts.push(part);
+        ccEmit(sessionId, "message.part.updated", { messageID: msgId, part });
+      } else if (block.type === "thinking") {
+        const thinkingKey = `${sdkMsgId}:${blockIdx}`;
+        const streamAccum = turn.thinkingAccum.get(thinkingKey) ?? "";
+        const part = { id: partId, messageID: msgId, type: "reasoning", text: block.thinking || streamAccum };
+        parts.push(part);
+        ccEmit(sessionId, "message.part.updated", { messageID: msgId, part });
+      } else if (block.type === "tool_use") {
+        const part = { id: partId, messageID: msgId, type: "tool", tool: block.name, callID: block.id, state: { input: block.input, status: "running" } };
+        parts.push(part);
+        ccEmit(sessionId, "message.part.updated", { messageID: msgId, part });
+      }
+    });
+    turn.asstBlockCount.set(sdkMsgId ?? "", seenBlocks + content.length);
+  } else if (ev.type === "user" && ev.message) {
+    for (const block of (ev.message.content ?? [])) {
+      if (block.type !== "tool_result") continue;
+      const matching = parts.filter(p => p.type === "tool").find(p => p.callID === block.tool_use_id);
+      if (!matching) continue;
+      const out = Array.isArray(block.content) ? block.content.map(c => c.type === "text" ? (c.text ?? "") : "").join("") : typeof block.content === "string" ? block.content : "";
+      matching.state.status = block.is_error ? "error" : "completed";
+      matching.state.output = out;
+      ccEmit(sessionId, "message.part.updated", { messageID: msgId, part: matching });
+    }
+  } else if (ev.type === "result") {
+    sink({ cost: ev.total_cost_usd, usage: { input: ev.usage?.input_tokens, output: ev.usage?.output_tokens, cache: { read: ev.usage?.cache_read_input_tokens, write: ev.usage?.cache_creation_input_tokens } } });
+    if (ev.is_error) sink({ error: { name: "ResultError", data: { message: String(ev.result ?? "agent error") } } });
+  } else if (ev.type === "stream_event") {
+    const inner = ev.event;
+    if (inner?.type === "message_start" && inner.message?.id) {
+      turn.currentSdkMsgId = inner.message.id;
+      turn.blockIdxsBySdkMsgId.set(inner.message.id, []);
+    } else if (inner?.type === "content_block_start" && typeof inner.index === "number" && turn.currentSdkMsgId) {
+      const arr = turn.blockIdxsBySdkMsgId.get(turn.currentSdkMsgId) ?? [];
+      arr[inner.index] = turn.nextGlobalIdx++;
+      turn.blockIdxsBySdkMsgId.set(turn.currentSdkMsgId, arr);
+    } else if (inner?.type === "content_block_delta" && typeof inner.index === "number" && turn.currentSdkMsgId) {
+      const partID = `${turn.currentSdkMsgId}_b${inner.index}`;
+      if (inner.delta?.type === "text_delta" && typeof inner.delta.text === "string") {
+        ccEmit(sessionId, "message.part.delta", { messageID: msgId, partID, field: "text", delta: inner.delta.text });
+      } else if (inner.delta?.type === "thinking_delta" && typeof inner.delta.thinking === "string") {
+        const key = `${turn.currentSdkMsgId}:${inner.index}`;
+        turn.thinkingAccum.set(key, (turn.thinkingAccum.get(key) ?? "") + inner.delta.thinking);
+        ccEmit(sessionId, "message.part.delta", { messageID: msgId, partID, field: "reasoning", delta: inner.delta.thinking });
+      }
+    }
+  }
+}
+
+async function ccRunTurn(s, userText, modelId) {
+  if (!ccQuery) throw new Error("claude-code SDK not loaded");
+  const startedAt = Date.now();
+  const ac = new AbortController();
+  s.abortController = ac;
+
+  const userMsgId = `msg_${randomUUID().replace(/-/g,"").slice(0,20)}`;
+  const userPart = { id: `${userMsgId}_p0`, messageID: userMsgId, type: "text", text: userText };
+  const userMsg = { info: { id: userMsgId, role: "user", time: { created: startedAt, completed: startedAt } }, parts: [userPart] };
+  s.history.push(userMsg);
+  ccEmit(s.id, "message.updated", { info: userMsg.info });
+  ccEmit(s.id, "message.part.updated", { messageID: userMsgId, part: userPart });
+
+  const asstMsgId = `msg_${randomUUID().replace(/-/g,"").slice(0,20)}`;
+  const parts = [];
+  let lastError, totalCost, usage;
+  const turn = { nextGlobalIdx: 0, currentSdkMsgId: null, blockIdxsBySdkMsgId: new Map(), thinkingAccum: new Map(), asstBlockCount: new Map() };
+
+  ccEmit(s.id, "message.updated", { info: { id: asstMsgId, role: "assistant", time: { created: startedAt } } });
+
+  try {
+    const stream = ccQuery({ prompt: userText, options: {
+      model: modelId,
+      cwd: process.env.REPO_DIR ?? process.cwd(),
+      permissionMode: "bypassPermissions",
+      includePartialMessages: true,
+      abortController: ac,
+      disallowedTools: ["AskUserQuestion"],
+      ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
+    }});
+    for await (const m of stream) {
+      if (m.type === "system" && m.subtype === "init" && m.session_id && !s.sdkSessionId) s.sdkSessionId = m.session_id;
+      ccHandleSdkEvent(s.id, m, parts, asstMsgId, turn, (e) => {
+        if (e.error) lastError = e.error;
+        if (e.cost !== undefined) totalCost = e.cost;
+        if (e.usage) usage = e.usage;
+        if (e.sdk_session_id && !s.sdkSessionId) s.sdkSessionId = e.sdk_session_id;
+      });
+    }
+  } catch (err) {
+    if (ac.signal.aborted) {
+      lastError = { name: "AbortError", data: { message: "aborted" } };
+    } else {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (s.sdkSessionId && msg.includes("Blocked")) {
+        log(`cc stale session retry id=${s.id}`);
+        s.sdkSessionId = null;
+        s.history.pop();
+        s.abortController = null;
+        return ccRunTurn(s, userText, modelId);
+      }
+      lastError = { name: "SDKError", data: { message: msg.slice(0, 500) } };
+    }
+  } finally { s.abortController = null; }
+
+  const completedAt = Date.now();
+  const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, tokens: usage, cost: totalCost, ...(lastError ? { error: lastError } : { finish: "stop" }) };
+  s.history.push({ info: fullInfo, parts });
+  s.time.updated = completedAt;
+  ccEmit(s.id, "message.updated", { info: fullInfo });
+  ccEmit(s.id, "session.idle", {});
+  log(`cc turn done id=${s.id} parts=${parts.length}`);
+}
 
 // Static UI bundle (Next.js export). Built via `cd ui && npm run build`.
 // Served at any GET path that resolves to a real file on disk under UI_DIST,
@@ -88,8 +249,6 @@ const DRAIN_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
 const HEALTH_INTERVAL_MS = 30_000;
 const MSG_TAIL_CHARS = 200; // how many chars of message content to log
-
-const log = (...a) => console.log("[inline-adapter]", ...a);
 
 // Lifecycle state
 let draining = false;       // true once SIGTERM received
@@ -226,12 +385,72 @@ const server = http.createServer(async (req, res) => {
     const raw = await readBody(req);
     let body = {};
     try { body = JSON.parse(raw || "{}"); } catch {}
+
+    const harness = body.harness === "claude-code" ? "cc" : "opencode";
+
+    if (harness === "cc") {
+      if (!ccQuery) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "claude-code SDK not available" }));
+        return;
+      }
+      const id = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const now = Date.now();
+      const s = { id, title: body.title || "New session", time: { created: now }, harness: "claude-code", sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set() };
+      ccSessions.set(id, s);
+      sessionHarness.set(id, "cc");
+      log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "claude-code" }));
+      return;
+    }
+
+    // opencode session
     const n = materializeSkills(body.files);
-    // Drop skill files from the forwarded body — opencode would otherwise
-    // re-write them (to the same path) after create, which is just wasted work.
     if (Array.isArray(body.files)) body.files = body.files.filter((f) => !skillSlug(f.sandbox_path));
     log(`session create: materialized ${n} skill(s) title=${JSON.stringify(body.title || "")}`);
-    forward("POST", "/session", "", Buffer.from(JSON.stringify(body)), res, "session-create");
+    // Strip harness field before forwarding to opencode child
+    const { harness: _h, ...forwardBody } = body;
+    // Capture the response to record the session id in our registry
+    const upReq = http.request(UP + "/session", { method: "POST", headers: { "content-type": "application/json" } }, (upRes) => {
+      let respData = "";
+      upRes.on("data", c => respData += c);
+      upRes.on("end", () => {
+        try {
+          const parsed = JSON.parse(respData);
+          if (parsed.id) sessionHarness.set(parsed.id, "opencode");
+        } catch {}
+        res.writeHead(upRes.statusCode || 200, upRes.headers);
+        res.end(respData);
+      });
+    });
+    upReq.on("error", (e) => { if (!res.headersSent) { res.writeHead(502); res.end(JSON.stringify({ error: String(e) })); } });
+    upReq.end(JSON.stringify(forwardBody));
+    return;
+  }
+
+  // GET /session — merge opencode sessions + in-process cc sessions
+  if (p === "/session" && req.method === "GET") {
+    const ocFetch = () => new Promise((resolve) => {
+      const rq = http.get(UP + "/session", (r) => {
+        let d = ""; r.on("data", c => d += c); r.on("end", () => {
+          try { resolve(JSON.parse(d)); } catch { resolve([]); }
+        });
+      });
+      rq.on("error", () => resolve([]));
+    });
+    const ocSessions = await ocFetch();
+    // Tag all opencode sessions and record in registry
+    const tagged = (Array.isArray(ocSessions) ? ocSessions : []).map(s => {
+      sessionHarness.set(s.id, "opencode");
+      return { ...s, harness: "opencode" };
+    });
+    const ccList = [...ccSessions.values()].map(s => ({
+      id: s.id, title: s.title, time: s.time, harness: "claude-code",
+    }));
+    const all = [...tagged, ...ccList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(all));
     return;
   }
 
@@ -241,15 +460,33 @@ const server = http.createServer(async (req, res) => {
 
   if (isMessagePath) {
     const raw = await readBody(req);
+    const sessionIdMatch = p.match(/^\/session\/([^/]+)\//);
+    const sid = sessionIdMatch?.[1];
 
-    // Log message content tail
-    const tail = extractMsgTail(raw);
-    if (tail !== null) {
-      log(`message tail for ${p}: ${JSON.stringify(tail)}`);
+    // Route cc sessions in-process
+    if (sid && sessionHarness.get(sid) === "cc") {
+      const cs = ccSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
+
+      if (p.endsWith("/prompt_async")) {
+        let body = {};
+        try { body = JSON.parse(raw || "{}"); } catch {}
+        const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
+        const modelId = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-5");
+        if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
+        log(`cc prompt_async id=${sid} model=${modelId}`);
+        res.writeHead(204); res.end();
+        ccRunTurn(cs, text, modelId).catch(e => log(`cc runTurn error id=${sid}:`, e.message));
+        return;
+      }
+      // prompt /message POST (sync) — not commonly used but handle it
+      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
     }
 
-    // Probe child before forwarding — surfaces ECONNREFUSED immediately
-    // instead of letting the request hang until the upstream times out.
+    // opencode session — existing proxy logic
+    const tail = extractMsgTail(raw);
+    if (tail !== null) log(`message tail for ${p}: ${JSON.stringify(tail)}`);
+
     const probe = await probeChild();
     if (!probe.ok) {
       log(`child unreachable BEFORE forward on ${p}: ${probe.err || "no response"}`);
@@ -258,19 +495,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Normalize model field.
-    //
-    // The OpenCode UI advertises models from its own built-in catalog
-    // (e.g. "Claude Sonnet 4.6"), but the LiteLLM gateway only exposes
-    // whatever the proxy config lists. When the UI sends a model the
-    // gateway doesn't know, the upstream call returns model-not-found
-    // and opencode hangs waiting on a stream that never starts.
-    //
-    // Hard-pin to the LITELLM_DEFAULT_MODEL the entrypoint discovered
-    // (which we know is valid because /v1/models returned it at boot).
-    // This makes "the UI should respond with any selected model" actually
-    // hold — the user can pick anything in the dropdown and we route to
-    // a working model. Override with FORCE_MODEL=0 to disable.
     const FORCE_MODEL = process.env.FORCE_MODEL !== "0";
     const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-5";
     let forwardBody = raw;
@@ -278,23 +502,15 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(raw);
       if (b && b.model && typeof b.model === "object") {
         if (FORCE_MODEL) {
-          // Match the local chat UI shape — providerID points at the gateway
-          // adapter configured in opencode.json, modelID is the gateway-known
-          // model id (with the "anthropic/" prefix kept verbatim).
           const before = `${b.model.providerID || ""}/${b.model.modelID || ""}`;
           b.model.providerID = "litellm";
           b.model.modelID = PINNED_MODEL;
           log(`model pin: rewrote ${before} -> litellm/${PINNED_MODEL}`);
         } else if (typeof b.model.modelID === "string") {
-          // Legacy behaviour when FORCE_MODEL=0: split bare "anthropic/foo"
-          // when caller didn't set providerID.
           const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
           if (!hasProvider) {
             const slash = b.model.modelID.indexOf("/");
-            if (slash > 0) {
-              b.model.providerID = b.model.modelID.slice(0, slash);
-              b.model.modelID = b.model.modelID.slice(slash + 1);
-            }
+            if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
           }
         }
         forwardBody = JSON.stringify(b);
@@ -302,6 +518,48 @@ const server = http.createServer(async (req, res) => {
     } catch {}
 
     forward(req.method, p, url.search, Buffer.from(forwardBody), res, p);
+    return;
+  }
+
+  // GET /session/:id/message — route cc sessions to in-process history
+  const getMsgMatch = p.match(/^\/session\/([^/]+)\/message$/);
+  if (req.method === "GET" && getMsgMatch) {
+    const sid = getMsgMatch[1];
+    if (sessionHarness.get(sid) === "cc") {
+      const cs = ccSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(cs.history));
+      return;
+    }
+    // opencode sessions fall through to the transparent passthrough below
+  }
+
+  // GET /event — intercept to merge cc bus events with the opencode SSE stream.
+  // We open a persistent connection to the opencode child's /event and pipe its
+  // lines to the client, while also registering in ccGlobalBus for cc events.
+  if (req.method === "GET" && p === "/event") {
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+
+    // Register cc bus subscriber
+    const ccPush = (line) => { try { res.write(line); } catch {} };
+    ccGlobalBus.add(ccPush);
+
+    // Proxy the opencode child's /event stream
+    const ocReq = http.get(UP + "/event", (ocRes) => {
+      ocRes.on("data", (chunk) => { try { res.write(chunk); } catch {} });
+      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); try { res.end(); } catch {} });
+    });
+    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); try { res.end(); } catch {} });
+
+    req.on("close", () => {
+      ccGlobalBus.delete(ccPush);
+      ocReq.destroy();
+    });
     return;
   }
 

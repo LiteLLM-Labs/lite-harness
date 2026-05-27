@@ -106,25 +106,18 @@ function ChatInner() {
           });
         } else if (ev.type === "session.idle") {
           refetch();
+        } else if (ev.type === "session.error") {
+          const errObj = ev.properties?.error as Record<string, unknown> | undefined;
+          const msg = (errObj as {data?: {message?: string}} | undefined)?.data?.message ?? (errObj as {message?: string} | undefined)?.message ?? JSON.stringify(errObj ?? ev.properties);
+          setError(`Error: ${msg}`);
+          refetch();
         }
       },
     });
     return unsub;
   }, [sid, refetch]);
 
-<<<<<<< HEAD
-=======
-  useEffect(() => {
-    if (!sid || !messages) return;
-    const last = messages[messages.length - 1];
-    const inFlight =
-      last?.info.role === "assistant" && last.info.finish !== "stop";
-    if (!inFlight) return;
-    const t = setInterval(refetch, 2000);
-    return () => clearInterval(t);
-  }, [sid, messages, refetch]);
 
->>>>>>> aab3a951de0ddd1e92ff79d75e2e87e0f64c31c8
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
