@@ -586,7 +586,8 @@ const server = http.createServer(async (req, res) => {
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
-        const modelId = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6");
+        const modelId = body.model?.modelID;
+        if (!modelId) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "model.modelID required" })); return; }
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`cc prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
@@ -609,23 +610,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const FORCE_MODEL = process.env.FORCE_MODEL !== "0";
-    const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
+    // Client picks the model. If they pass "anthropic/claude-x" as modelID,
+    // split it into providerID + modelID so opencode looks it up correctly.
     let forwardBody = raw;
     try {
       const b = JSON.parse(raw);
-      if (b && b.model && typeof b.model === "object") {
-        if (FORCE_MODEL) {
-          const before = `${b.model.providerID || ""}/${b.model.modelID || ""}`;
-          b.model.providerID = "litellm";
-          b.model.modelID = PINNED_MODEL;
-          log(`model pin: rewrote ${before} -> litellm/${PINNED_MODEL}`);
-        } else if (typeof b.model.modelID === "string") {
-          const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
-          if (!hasProvider) {
-            const slash = b.model.modelID.indexOf("/");
-            if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
-          }
+      if (b && b.model && typeof b.model === "object" && typeof b.model.modelID === "string") {
+        const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
+        if (!hasProvider) {
+          const slash = b.model.modelID.indexOf("/");
+          if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
         }
         forwardBody = JSON.stringify(b);
       }
