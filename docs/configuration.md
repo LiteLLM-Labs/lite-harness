@@ -8,7 +8,8 @@ Everything is configured via environment variables. Set them on `docker run` (or
 |-------------------------|-------------------------------------------------------------------------------------------------------|
 | `LITELLM_API_BASE`      | URL of your LiteLLM gateway. Either bare (`https://gw.acme.com`) or with `/v1` suffix. Both work.     |
 | `LITELLM_API_KEY`       | Virtual key the harness uses to call the gateway. Sent as `Authorization: Bearer <key>`.              |
-| `LITELLM_DEFAULT_MODEL` | Boot model. Provider-prefixed form, e.g. `anthropic/claude-sonnet-4-6` or `openai/gpt-4o`.            |
+
+The harness queries `${LITELLM_API_BASE}/v1/models` at boot and registers every model the gateway returns. Clients pick a `modelID` per request. If the gateway returns no models, boot fails fast with a clear error.
 
 ## Auth on lite-harness itself
 
@@ -29,7 +30,6 @@ When `MASTER_KEY` is set, `EventSource` clients can pass it as `?key=<MASTER_KEY
 
 | Var                | Default | What it does                                                                                                 |
 |--------------------|---------|--------------------------------------------------------------------------------------------------------------|
-| `FORCE_MODEL`      | `1`     | When `1`, every `/prompt_async` ignores the client's `modelID` and uses `LITELLM_DEFAULT_MODEL`. Set to `0` to let clients pick. |
 | `ANTHROPIC_API_KEY`| unset   | Escape hatch: when set, opencode bypasses LiteLLM and calls `api.anthropic.com` directly. Useful for tests, not for prod. |
 
 ## UI
@@ -50,7 +50,6 @@ When `MASTER_KEY` is set, `EventSource` clients can pass it as `?key=<MASTER_KEY
 docker run -p 4096:4096 \
   -e LITELLM_API_BASE=https://litellm.internal.acme.com \
   -e LITELLM_API_KEY=sk-litellm-... \
-  -e LITELLM_DEFAULT_MODEL=anthropic/claude-sonnet-4-6 \
   -e MASTER_KEY=$(openssl rand -hex 32) \
   ghcr.io/berriai/lite-harness:latest
 ```
