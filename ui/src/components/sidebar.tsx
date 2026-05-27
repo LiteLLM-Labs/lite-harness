@@ -4,6 +4,13 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { createSession, deleteSession, listSessions } from "@/lib/api";
 import type { OpencodeSession } from "@/lib/types";
 
@@ -81,20 +88,15 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
           <Plus className="size-4" />
           New session
         </Button>
-        <div className="flex rounded-md border border-border overflow-hidden text-[11px] font-medium">
-          <button
-            onClick={() => setHarness("opencode")}
-            className={`flex-1 py-1 transition-colors ${harness === "opencode" ? "bg-primary text-primary-foreground" : "hover:bg-accent/50 text-muted-foreground"}`}
-          >
-            opencode
-          </button>
-          <button
-            onClick={() => setHarness("claude-code")}
-            className={`flex-1 py-1 transition-colors border-l border-border ${harness === "claude-code" ? "bg-primary text-primary-foreground" : "hover:bg-accent/50 text-muted-foreground"}`}
-          >
-            claude code
-          </button>
-        </div>
+        <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
+          <SelectTrigger className="h-8 text-xs w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
+            <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2">

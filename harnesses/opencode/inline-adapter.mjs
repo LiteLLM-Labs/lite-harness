@@ -112,6 +112,17 @@ function ccHandleSdkEvent(sessionId, m, parts, msgId, turn, sink) {
       const arr = turn.blockIdxsBySdkMsgId.get(turn.currentSdkMsgId) ?? [];
       arr[inner.index] = turn.nextGlobalIdx++;
       turn.blockIdxsBySdkMsgId.set(turn.currentSdkMsgId, arr);
+      // Emit initial empty part so UI creates the slot before deltas arrive.
+      // Without this, delta events arrive before the part exists in UI state
+      // and are silently dropped by the findIndex(-1) guard.
+      const blockType = inner.content_block?.type;
+      if (blockType === "text" || blockType === "thinking") {
+        const partID = `${turn.currentSdkMsgId}_b${inner.index}`;
+        ccEmit(sessionId, "message.part.updated", {
+          messageID: msgId,
+          part: { id: partID, messageID: msgId, type: blockType === "thinking" ? "reasoning" : "text", text: "" },
+        });
+      }
     } else if (inner?.type === "content_block_delta" && typeof inner.index === "number" && turn.currentSdkMsgId) {
       const partID = `${turn.currentSdkMsgId}_b${inner.index}`;
       if (inner.delta?.type === "text_delta" && typeof inner.delta.text === "string") {
