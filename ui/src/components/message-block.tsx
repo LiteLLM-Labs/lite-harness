@@ -23,6 +23,9 @@ interface LocalMessage {
   status?: "queued" | "in_progress" | "completed" | "failed";
   error?: string;
   latency_ms?: number;
+  model?: string;
+  tokens?: { input: number; output: number; total: number; cache?: { read: number; write: number } };
+  cost?: number;
 }
 
 function toLocal(m: HarnessMessage): LocalMessage {
@@ -49,6 +52,12 @@ function toLocal(m: HarnessMessage): LocalMessage {
       latency_ms = completed - created;
     }
   }
+  const providerID = (m.info as Record<string, unknown>).providerID as string | undefined;
+  const modelID = (m.info as Record<string, unknown>).modelID as string | undefined;
+  const model = providerID && modelID ? `${providerID}/${modelID}` : modelID;
+  const tokens = (m.info as Record<string, unknown>).tokens as LocalMessage["tokens"] | undefined;
+  const cost = (m.info as Record<string, unknown>).cost as number | undefined;
+
   return {
     id: (m.info.id as string | undefined) ?? "",
     role,
@@ -56,6 +65,9 @@ function toLocal(m: HarnessMessage): LocalMessage {
     parts,
     status,
     latency_ms,
+    model,
+    tokens,
+    cost,
   };
 }
 
@@ -164,9 +176,21 @@ function AssistantBlock({
         <div className="mono text-[11px] text-red-700">{msg.error}</div>
       )}
 
-      {!inProgress && !failed && typeof msg.latency_ms === "number" && (
-        <div className="mono text-[11px] text-muted-foreground">
-          {formatLatency(msg.latency_ms)}
+      {!inProgress && !failed && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mono text-[11px] text-muted-foreground">
+          {msg.model && <span>{msg.model}</span>}
+          {typeof msg.latency_ms === "number" && <span>{formatLatency(msg.latency_ms)}</span>}
+          {msg.tokens && (
+            <span>
+              ↑{msg.tokens.input.toLocaleString()} ↓{msg.tokens.output.toLocaleString()}
+              {msg.tokens.cache && msg.tokens.cache.read > 0 && (
+                <span className="text-sky-500"> cache:{msg.tokens.cache.read.toLocaleString()}</span>
+              )}
+            </span>
+          )}
+          {typeof msg.cost === "number" && msg.cost > 0 && (
+            <span className="text-amber-500">${msg.cost.toFixed(4)}</span>
+          )}
         </div>
       )}
     </div>
