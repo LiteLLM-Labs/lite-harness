@@ -1,15 +1,13 @@
 # syntax=docker/dockerfile:1.7
 #
-# Self-contained opencode harness — single Dockerfile that builds the opencode
-# inline harness with NO prebuilt `harnesses/base:dev` and NO ECR. Use this when
-# a host (e.g. Render) builds the image natively from the repo via a single
-# Dockerfile and can't run the two-step `base then opencode` buildx flow.
+# Self-contained opencode harness. Single Dockerfile, no prebuilt base image,
+# no ECR — buildable directly by hosts like Render.
 #
-# It inlines harnesses/base/Dockerfile as the `base` stage, then layers the
-# opencode runtime on top — kept byte-for-byte in step with those two files.
+# Layout: a `base` stage (system deps + gh + uv + node toolchain) followed by
+# the opencode runtime stage on top.
 #
-# Build from harness dir:
-#   docker build -f harnesses/opencode/Dockerfile -t opencode-inline harnesses/opencode
+# Build from repo root:
+#   docker build -f harnesses/opencode/Dockerfile -t opencode-inline .
 
 # ================================================================= base stage
 # (inlined from harnesses/base/Dockerfile)
@@ -112,7 +110,7 @@ ENV PATH="/home/sandbox/.opencode/bin:${PATH}"
 
 WORKDIR /work
 
-COPY harnesses/opencode/entrypoint-common.sh /opt/lap/common.sh
+COPY harnesses/_shared/entrypoint-common.sh /opt/lap/common.sh
 RUN chmod +x /opt/lap/common.sh
 
 COPY --chown=sandbox:sandbox harnesses/opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs

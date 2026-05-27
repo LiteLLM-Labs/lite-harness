@@ -79,7 +79,7 @@ if (memBase && memAgent && memAccess) {
   // token if present, else MASTER_KEY (which the inline harness always has).
   out["lap-memory"] = {
     type: "local",
-    command: ["node", "/opt/lap/opencode-sandbox-mcp/memory-mcp.mjs"],
+    command: ["node", `${MCP_DIR}/memory-mcp.mjs`],
     enabled: true,
     environment: {
       LAP_BASE_URL: memBase,

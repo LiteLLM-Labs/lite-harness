@@ -1,2 +1,7 @@
 node_modules/
 .claude/worktrees/
+
+# Generated at boot by harnesses/opencode/{entrypoint.sh,start-local.sh}.
+# Contains live LiteLLM + E2B credentials — never commit.
+harnesses/opencode/opencode.json
+
