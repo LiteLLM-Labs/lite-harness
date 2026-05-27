@@ -8,10 +8,10 @@
 set -euo pipefail
 
 # --- Source LAP .env for LiteLLM + DB creds ---
-LAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LAP_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Fall back to original litellm-agent-platform location if no .env here
-if [ ! -f "$LAP_ROOT/.env" ] && [ -f "$(dirname "$0")/../../litellm-agent-platform/.env" ]; then
-  LAP_ROOT="$(cd "$(dirname "$0")/../../litellm-agent-platform" && pwd)"
+if [ ! -f "$LAP_ROOT/.env" ] && [ -f "$(dirname "$0")/../../../litellm-agent-platform/.env" ]; then
+  LAP_ROOT="$(cd "$(dirname "$0")/../../../litellm-agent-platform" && pwd)"
 fi
 if [ -f "$LAP_ROOT/.env" ]; then
   set -a
