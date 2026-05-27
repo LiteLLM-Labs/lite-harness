@@ -6,6 +6,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { ThemeToggle } from "@/components/theme-toggle";
 import {
   createSession,
   deleteSession,
@@ -67,10 +68,13 @@ export default function SessionsPage() {
       <div className="max-w-3xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-semibold">Sessions</h1>
-          <Button onClick={onNew} disabled={creating}>
-            <Plus className="size-4" />
-            New session
-          </Button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Button onClick={onNew} disabled={creating}>
+              <Plus className="size-4" />
+              New session
+            </Button>
+          </div>
         </div>
         <Separator className="mb-6" />
 

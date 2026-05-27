@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { MessageBlock } from "@/components/message-block";
 import { Composer } from "@/components/composer";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { getMessages, subscribeEvents } from "@/lib/api";
 import type { HarnessMessage } from "@/lib/types";
 
@@ -94,21 +95,24 @@ function ChatInner() {
           >
             ← {shortSid}
           </a>
-          <Select
-            value={model}
-            onValueChange={(v) => v && setModel(v)}
-          >
-            <SelectTrigger className="h-8 text-xs w-[220px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MODELS.map((m) => (
-                <SelectItem key={m} value={m} className="text-xs font-mono">
-                  {m}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select
+              value={model}
+              onValueChange={(v) => v && setModel(v)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODELS.map((m) => (
+                  <SelectItem key={m} value={m} className="text-xs font-mono">
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
