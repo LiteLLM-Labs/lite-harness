@@ -27,7 +27,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/berriai/lite-harness
+          images: ghcr.io/litellm-labs/lite-harness
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -36,7 +36,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: harnesses/opencode
+          context: .
           file: harnesses/opencode/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
