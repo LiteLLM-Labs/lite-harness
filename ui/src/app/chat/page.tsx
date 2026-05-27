@@ -174,8 +174,10 @@ function ChatInner() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">harness</span>
+              <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
               <SelectTrigger className="h-8 text-xs w-[140px]">
                 <SelectValue />
               </SelectTrigger>
@@ -184,7 +186,10 @@ function ChatInner() {
                 <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={model} onValueChange={(v) => v && setModel(v)}>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">model</span>
+              <Select value={model} onValueChange={(v) => v && setModel(v)}>
               <SelectTrigger className="h-8 text-xs w-[220px]">
                 <SelectValue />
               </SelectTrigger>
@@ -196,6 +201,7 @@ function ChatInner() {
                 ))}
               </SelectContent>
             </Select>
+            </div>
             <Button
               variant={inspectorOpen ? "default" : "outline"}
               size="sm"
