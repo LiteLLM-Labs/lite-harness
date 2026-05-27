@@ -89,7 +89,6 @@ You need a LiteLLM gateway URL and a virtual key. If you don't have one, run [Be
 docker run -p 4096:4096 \
   -e LITELLM_API_BASE=https://your-litellm-gateway \
   -e LITELLM_API_KEY=sk-... \
-  -e LITELLM_DEFAULT_MODEL=anthropic/claude-sonnet-4-6 \
   -e MASTER_KEY=$(openssl rand -hex 32) \
   ghcr.io/berriai/lite-harness:latest
 ```
