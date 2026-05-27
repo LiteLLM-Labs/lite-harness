@@ -91,7 +91,7 @@ docker run -p 4096:4096 \
   -e LITELLM_API_KEY=sk-... \
   -e LITELLM_DEFAULT_MODEL=anthropic/claude-sonnet-4-6 \
   -e MASTER_KEY=$(openssl rand -hex 32) \
-  ghcr.io/berriai/lite-harness:latest
+  ghcr.io/litellm-labs/lite-harness:latest
 ```
 
 Open [localhost:4096](http://localhost:4096), paste the `MASTER_KEY` on the login page, then click the gear icon in the sidebar and hit **Test connection** to confirm the gateway is reachable.
