@@ -159,7 +159,7 @@ async function ccRunTurn(s, userText, modelId) {
   try {
     const stream = ccQuery({ prompt: userText, options: {
       model: modelId,
-      cwd: process.env.REPO_DIR ?? process.cwd(),
+      cwd: process.env.CC_REPO_DIR ?? process.env.HOME ?? "/tmp",
       permissionMode: "bypassPermissions",
       includePartialMessages: true,
       abortController: ac,
