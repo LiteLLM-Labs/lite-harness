@@ -49,6 +49,11 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
+export async function getSession(id: string): Promise<OpencodeSession> {
+  const res = await req(`/session/${encodeURIComponent(id)}`);
+  return jsonOrThrow<OpencodeSession>(res);
+}
+
 export async function getMessages(sid: string): Promise<HarnessMessage[]> {
   const res = await req(`/session/${encodeURIComponent(sid)}/message`);
   return jsonOrThrow<HarnessMessage[]>(res);

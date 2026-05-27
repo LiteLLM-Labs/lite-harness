@@ -465,6 +465,29 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // GET /session/:id — single session lookup (cc in-process, opencode proxied)
+  const getOneMatch = p.match(/^\/session\/([^/]+)$/) && req.method === "GET";
+  if (getOneMatch) {
+    const sid = p.match(/^\/session\/([^/]+)$/)[1];
+    if (sessionHarness.get(sid) === "cc") {
+      const cs = ccSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "claude-code" }));
+      return;
+    }
+    // opencode: proxy and inject harness field
+    const ocReq = http.request(UP + p, { method: "GET" }, (ocRes) => {
+      let d = ""; ocRes.on("data", c => d += c); ocRes.on("end", () => {
+        try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, harness: "opencode" })); }
+        catch { res.writeHead(ocRes.statusCode || 502); res.end(d); }
+      });
+    });
+    ocReq.on("error", () => { res.writeHead(502); res.end("{}"); });
+    ocReq.end();
+    return;
+  }
+
   // For message/prompt_async paths: log content tail + probe child before forwarding.
   const isMessagePath = req.method === "POST" &&
     /\/session\/[^/]+\/(message|prompt_async)$/.test(p);

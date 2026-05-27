@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Activity, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -17,8 +17,7 @@ import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
-import { getMessages, subscribeEvents } from "@/lib/api";
-import { useHarness } from "@/lib/use-harness";
+import { getMessages, getSession, createSession, deleteSession, subscribeEvents } from "@/lib/api";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 
 const MODELS = [
@@ -36,7 +35,7 @@ function ChatInner() {
   const [model, setModel] = useState(MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [harness, setHarness] = useHarness();
+  const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code">("opencode");
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
 
@@ -49,6 +48,24 @@ function ChatInner() {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [sid]);
+
+  const router = useRouter();
+
+  // Fetch session metadata to get the locked harness
+  useEffect(() => {
+    if (!sid) return;
+    getSession(sid).then(s => {
+      if (s.harness === "claude-code" || s.harness === "opencode") setSessionHarness(s.harness);
+    }).catch(() => {});
+  }, [sid]);
+
+  // On harness change before first message: delete current empty session, create new, redirect
+  const onHarnessChange = useCallback(async (next: "opencode" | "claude-code") => {
+    if (!sid || next === sessionHarness) return;
+    await deleteSession(sid);
+    const s = await createSession(undefined, next);
+    router.replace(`/chat/?id=${encodeURIComponent(s.id)}`);
+  }, [sid, sessionHarness, router]);
 
   useEffect(() => {
     if (!sid) return;
@@ -177,15 +194,19 @@ function ChatInner() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] text-muted-foreground">harness</span>
-              <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
-              <SelectTrigger className="h-8 text-xs w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
-                <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
-              </SelectContent>
-            </Select>
+              {messages && messages.length > 0 ? (
+                <span className="h-8 px-3 flex items-center text-xs font-mono border border-border rounded-md bg-muted text-muted-foreground">{sessionHarness}</span>
+              ) : (
+                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v as "opencode" | "claude-code")}>
+                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
+                    <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] text-muted-foreground">model</span>
