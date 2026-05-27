@@ -27,6 +27,63 @@ const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
 const UP = `http://127.0.0.1:${CHILD_PORT}`;
 const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "skills");
+
+// Static UI bundle (Next.js export). Built via `cd ui && npm run build`.
+// Served at any GET path that resolves to a real file on disk under UI_DIST,
+// so the browser hits the same port as the harness API (single deployment).
+const UI_DIST = path.resolve(
+  process.env.UI_DIST ||
+    path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "ui", "out"),
+);
+const UI_DIST_EXISTS = fs.existsSync(UI_DIST);
+const MIME_BY_EXT = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/**
+ * Serve a static asset from UI_DIST. Returns true if a file was served (so
+ * the caller stops), false if no file matched — letting the caller fall
+ * through to the harness-API handlers below.
+ */
+function serveStatic(urlPath, res) {
+  let rel = decodeURIComponent(urlPath).replace(/^\/+/, "");
+  if (rel === "") rel = "index.html";
+  const candidates = [rel];
+  if (!path.extname(rel)) {
+    candidates.push(path.join(rel, "index.html"));
+    candidates.push(rel + ".html");
+  }
+  for (const candidate of candidates) {
+    const abs = path.resolve(UI_DIST, candidate);
+    if (!abs.startsWith(UI_DIST + path.sep) && abs !== UI_DIST) continue;
+    let stat;
+    try { stat = fs.statSync(abs); } catch { continue; }
+    if (!stat.isFile()) continue;
+    const ext = path.extname(abs).toLowerCase();
+    const ctype = MIME_BY_EXT[ext] || "application/octet-stream";
+    res.writeHead(200, {
+      "content-type": ctype,
+      "content-length": stat.size,
+      "cache-control": rel.startsWith("_next/") ? "public, max-age=31536000, immutable" : "no-cache",
+    });
+    fs.createReadStream(abs).pipe(res);
+    return true;
+  }
+  return false;
+}
 const DRAIN_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
 const HEALTH_INTERVAL_MS = 30_000;
@@ -133,11 +190,18 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
-  if (p === "/" || p === "/health") {
+  // JSON status probe (used by LAP/k8s readiness). Must come BEFORE the
+  // static handler so a stray `health.html` could never shadow it.
+  if (p === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ harness: "opencode-brain-inline", ok: true, draining, inFlight, restartCount }));
+    res.end(JSON.stringify({ harness: "opencode-brain-inline", ok: true, draining, inFlight, restartCount, ui: UI_DIST_EXISTS }));
     return;
   }
+
+  // Same-origin UI bundle: serve the static export at GET paths that resolve
+  // to a real file under UI_DIST. The harness API routes (POST /session,
+  // GET /event, ...) never resolve to a file on disk, so they fall through.
+  if (req.method === "GET" && UI_DIST_EXISTS && serveStatic(p, res)) return;
 
   // Reject NEW session creates while draining; all other in-flight paths continue.
   if (draining && p === "/session" && req.method === "POST") {
@@ -194,18 +258,44 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Normalize model field: split "anthropic/claude-opus-4-7" into
-    // providerID="anthropic" + modelID="claude-opus-4-7" so opencode's
-    // built-in provider lookup succeeds. Bare names (no slash) keep providerID
-    // unchanged so the litellm gateway path still works.
+    // Normalize model field.
+    //
+    // The OpenCode UI advertises models from its own built-in catalog
+    // (e.g. "Claude Sonnet 4.6"), but the LiteLLM gateway only exposes
+    // whatever the proxy config lists. When the UI sends a model the
+    // gateway doesn't know, the upstream call returns model-not-found
+    // and opencode hangs waiting on a stream that never starts.
+    //
+    // Hard-pin to the LITELLM_DEFAULT_MODEL the entrypoint discovered
+    // (which we know is valid because /v1/models returned it at boot).
+    // This makes "the UI should respond with any selected model" actually
+    // hold — the user can pick anything in the dropdown and we route to
+    // a working model. Override with FORCE_MODEL=0 to disable.
+    const FORCE_MODEL = process.env.FORCE_MODEL !== "0";
+    const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-5";
     let forwardBody = raw;
     try {
       const b = JSON.parse(raw);
-      if (b && b.model && typeof b.model.modelID === "string") {
-        const slash = b.model.modelID.indexOf("/");
-        if (slash > 0) {
-          b.model.providerID = b.model.modelID.slice(0, slash);
-          b.model.modelID = b.model.modelID.slice(slash + 1);
+      if (b && b.model && typeof b.model === "object") {
+        if (FORCE_MODEL) {
+          // Match the local chat UI shape — providerID points at the gateway
+          // adapter configured in opencode.json, modelID is the gateway-known
+          // model id (with the "anthropic/" prefix kept verbatim).
+          const before = `${b.model.providerID || ""}/${b.model.modelID || ""}`;
+          b.model.providerID = "litellm";
+          b.model.modelID = PINNED_MODEL;
+          log(`model pin: rewrote ${before} -> litellm/${PINNED_MODEL}`);
+        } else if (typeof b.model.modelID === "string") {
+          // Legacy behaviour when FORCE_MODEL=0: split bare "anthropic/foo"
+          // when caller didn't set providerID.
+          const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
+          if (!hasProvider) {
+            const slash = b.model.modelID.indexOf("/");
+            if (slash > 0) {
+              b.model.providerID = b.model.modelID.slice(0, slash);
+              b.model.modelID = b.model.modelID.slice(slash + 1);
+            }
+          }
         }
         forwardBody = JSON.stringify(b);
       }
