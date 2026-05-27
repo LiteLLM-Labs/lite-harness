@@ -192,7 +192,7 @@ curl -s "http://localhost:4096/session/$SID/message" \
 | | `opencode` | `claude-code` |
 |---|---|---|
 | **Backend** | `opencode serve` child process | `@anthropic-ai/claude-code` SDK in-process |
-| **Session persistence** | opencode's SQLite DB (survives restart) | In-memory (lost on restart) |
+| **Session persistence** | In-memory (lost on restart) | In-memory (lost on restart) |
 | **Tool set** | opencode tools | Claude Code tools |
 | **Working dir** | `$REPO_DIR` | `$CC_REPO_DIR` or `$HOME` |
 | **opencode spec coverage** | Full | Sessions + messages + events only |
