@@ -259,22 +259,42 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Normalize model field.
-    //   - If the caller already set a providerID (e.g. "litellm" from the
-    //     local chat UI), respect their wiring — keep providerID + modelID
-    //     untouched so opencode looks up the configured adapter.
-    //   - If providerID is missing/empty, split "anthropic/claude-opus-4-7"
-    //     into providerID="anthropic" + modelID="claude-opus-4-7" so
-    //     opencode's built-in provider lookup succeeds.
+    //
+    // The OpenCode UI advertises models from its own built-in catalog
+    // (e.g. "Claude Sonnet 4.6"), but the LiteLLM gateway only exposes
+    // whatever the proxy config lists. When the UI sends a model the
+    // gateway doesn't know, the upstream call returns model-not-found
+    // and opencode hangs waiting on a stream that never starts.
+    //
+    // Hard-pin to the LITELLM_DEFAULT_MODEL the entrypoint discovered
+    // (which we know is valid because /v1/models returned it at boot).
+    // This makes "the UI should respond with any selected model" actually
+    // hold — the user can pick anything in the dropdown and we route to
+    // a working model. Override with FORCE_MODEL=0 to disable.
+    const FORCE_MODEL = process.env.FORCE_MODEL !== "0";
+    const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-5";
     let forwardBody = raw;
     try {
       const b = JSON.parse(raw);
-      if (b && b.model && typeof b.model.modelID === "string") {
-        const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
-        if (!hasProvider) {
-          const slash = b.model.modelID.indexOf("/");
-          if (slash > 0) {
-            b.model.providerID = b.model.modelID.slice(0, slash);
-            b.model.modelID = b.model.modelID.slice(slash + 1);
+      if (b && b.model && typeof b.model === "object") {
+        if (FORCE_MODEL) {
+          // Match the local chat UI shape — providerID points at the gateway
+          // adapter configured in opencode.json, modelID is the gateway-known
+          // model id (with the "anthropic/" prefix kept verbatim).
+          const before = `${b.model.providerID || ""}/${b.model.modelID || ""}`;
+          b.model.providerID = "litellm";
+          b.model.modelID = PINNED_MODEL;
+          log(`model pin: rewrote ${before} -> litellm/${PINNED_MODEL}`);
+        } else if (typeof b.model.modelID === "string") {
+          // Legacy behaviour when FORCE_MODEL=0: split bare "anthropic/foo"
+          // when caller didn't set providerID.
+          const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
+          if (!hasProvider) {
+            const slash = b.model.modelID.indexOf("/");
+            if (slash > 0) {
+              b.model.providerID = b.model.modelID.slice(0, slash);
+              b.model.modelID = b.model.modelID.slice(slash + 1);
+            }
           }
         }
         forwardBody = JSON.stringify(b);
