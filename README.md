@@ -12,6 +12,9 @@
 
 ---
 
+<img width="1200" height="800" alt="litellm_hero_v6" src="https://github.com/user-attachments/assets/74664c56-23fa-4bf7-8264-09e26643cd96" />
+
+
 ## What is lite-harness
 
 lite-harness is a single HTTP server that fronts any coding-agent harness (opencode, claude-code, claude-agent-sdk, openai-agents) behind one API. Same 3 endpoints, every harness. Point it at a LiteLLM gateway and every harness can use any model.
