@@ -17,22 +17,31 @@ export interface MessageInfo {
   [k: string]: unknown;
 }
 
-export type HarnessMessagePart =
-  | { type: "text"; text: string }
-  | { type: "reasoning"; text: string; time?: { start?: number; end?: number } }
-  | { type: "thinking"; text: string; time?: { start?: number; end?: number } }
-  | {
-      type: "tool";
-      tool: string;
-      state: {
-        status: string;
-        input?: unknown;
-        output?: unknown;
-        error?: unknown;
-        [k: string]: unknown;
-      };
-    }
-  | { type: "step-start" };
+interface PartBase {
+  id?: string;
+  messageID?: string;
+  sessionID?: string;
+}
+
+export type HarnessMessagePart = PartBase &
+  (
+    | { type: "text"; text: string }
+    | { type: "reasoning"; text: string; time?: { start?: number; end?: number } }
+    | { type: "thinking"; text: string; time?: { start?: number; end?: number } }
+    | {
+        type: "tool";
+        tool: string;
+        state: {
+          status: string;
+          input?: unknown;
+          output?: unknown;
+          error?: unknown;
+          [k: string]: unknown;
+        };
+      }
+    | { type: "step-start" }
+    | { type: "step-finish"; [k: string]: unknown }
+  );
 
 export interface HarnessMessage {
   info: MessageInfo;
