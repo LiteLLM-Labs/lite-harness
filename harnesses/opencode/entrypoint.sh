@@ -6,8 +6,6 @@ set -euo pipefail
 
 . /opt/lap/common.sh
 
-: "${LITELLM_DEFAULT_MODEL:?LITELLM_DEFAULT_MODEL required}"
-
 # Normalize base URL: strip trailing slash, ensure /v1 suffix.
 BASE="${LITELLM_API_BASE%/}"
 case "$BASE" in
@@ -31,7 +29,7 @@ if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   INFERENCE_KEY="${ANTHROPIC_API_KEY}"
   PROVIDER_NAME="anthropic"
   BASE="$INFERENCE_BASE"
-  echo "[entrypoint] using direct Anthropic API (model=${LITELLM_DEFAULT_MODEL})"
+  echo "[entrypoint] using direct Anthropic API"
 else
   INFERENCE_BASE="$BASE"
   INFERENCE_KEY="${LITELLM_API_KEY}"
@@ -54,20 +52,16 @@ fi
 # harness host. question is denied too — this agent runs autonomously and must
 # not block waiting on a human to answer.
 #
-# Register every model the gateway serves, not just the boot default, so
-# the per-agent model the LAP selects "just works" — opencode rejects any model
-# absent from this map (that's the haiku-works / opus-4-7-fails bug).
-# Non-Claude models (GPT, Gemini, Bedrock, ...) appear here too; they'll only
-# work end-to-end if your LiteLLM gateway routes them as Anthropic Messages
-# (the @ai-sdk/anthropic adapter POSTs to {base}/messages).
+# Register every model the gateway serves so the client can pick any of them
+# at /prompt_async time. opencode rejects any modelID absent from this map.
+# Non-Claude models (GPT, Gemini, Bedrock, ...) work end-to-end as long as your
+# LiteLLM gateway routes them through its Anthropic Messages passthrough
+# (@ai-sdk/anthropic POSTs to {base}/messages).
 #
-# The whole map is built in ONE jq pass (no shell loop) so it's robust across
-# shells, and per-model thinking opts are computed in jq:
+# Per-model thinking opts are computed in jq:
 #   opus-4-7 -> adaptive thinking (the ONLY format opus-4-7 accepts)
 #   other sonnet/opus -> legacy enabled+budget thinking
 #   haiku / everything else -> no thinking
-# Discovery (GET ${BASE}/models) is best-effort; on any failure we fall back to
-# just the boot default so the harness still comes up.
 opts_for='
   def opts(id):
     if (id|test("opus-4-7")) then {options:{thinking:{type:"adaptive",display:"summarized"},effort:"high"}}
@@ -78,13 +72,14 @@ MODELS_JSON=$(
     | jq -c "${opts_for} [ .data[].id ] | unique | map({ (.): opts(.) }) | add // {}" 2>/dev/null \
     || printf '%s' '{}'
 )
-# Guarantee the boot default is present even if discovery returned nothing.
-# Strip provider prefix (e.g. "anthropic/claude-opus-4-7" -> "claude-opus-4-7")
-# because opencode looks up modelID (no prefix) inside the provider's models map.
 [ -n "$MODELS_JSON" ] || MODELS_JSON='{}'
-MODEL_KEY="${LITELLM_DEFAULT_MODEL#*/}"
-MODELS_JSON=$(printf '%s' "$MODELS_JSON" \
-  | jq -c "${opts_for} if has(\"${MODEL_KEY}\") then . else . + {\"${MODEL_KEY}\": opts(\"${MODEL_KEY}\")} end")
+# opencode's config requires a boot model. Pick the first one the gateway
+# returned; it's only the placeholder until the client sends a modelID.
+BOOT_MODEL=$(printf '%s' "$MODELS_JSON" | jq -r 'keys[0] // ""')
+if [ -z "$BOOT_MODEL" ]; then
+  echo "[entrypoint] FATAL: gateway returned no models at ${BASE}/models — check LITELLM_API_BASE/KEY" >&2
+  exit 1
+fi
 echo "[entrypoint] registered models: $(printf '%s' "$MODELS_JSON" | jq -r 'keys | join(", ")')"
 # Sandbox tools: when E2B is configured, mount the bundled stdio MCP that
 # exposes provision/execute (same tool surface as the claude-agent-sdk harness).
@@ -117,7 +112,7 @@ ${MCP_BLOCK}
       "models": ${MODELS_JSON}
     }
   },
-  "model": "${PROVIDER_NAME}/${LITELLM_DEFAULT_MODEL#*/}",
+  "model": "${PROVIDER_NAME}/${BOOT_MODEL}",
   "permission": {
     "edit": "deny",
     "bash": "deny",
@@ -196,7 +191,7 @@ if [ -n "${SKILLS_JSON:-}" ]; then
   ' || echo "[entrypoint] WARNING: skill hydration failed; continuing"
 fi
 
-echo "[entrypoint] base=${BASE} model=${LITELLM_DEFAULT_MODEL} repo=${REPO_DIR}"
+echo "[entrypoint] base=${BASE} boot_model=${BOOT_MODEL} repo=${REPO_DIR}"
 
 # Inline (shared-server) mode: one opencode serve fronted by the inline adapter,
 # which gives each agent its own working directory of skills so per-agent skills
