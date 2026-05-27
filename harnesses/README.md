@@ -5,9 +5,7 @@ Each subfolder is one supported agent harness. The lite-harness server fronts al
 | Folder | Status |
 |---|---|
 | `opencode/` | shipped |
-| `claude-code/` | in dev (inline adapter + local runner only — no Dockerfile yet) |
-| `claude-agent-sdk/` | planned |
-| `openai-agents/` | planned |
+| `claude-code/` | in dev (inline adapter + local runner only, no Dockerfile yet) |
 
 Code shared by all harnesses lives in `_shared/` (e.g. `_shared/entrypoint-common.sh`, sourced as `/opt/lap/common.sh` in each harness image).
 
@@ -24,5 +22,5 @@ Code shared by all harnesses lives in `_shared/` (e.g. `_shared/entrypoint-commo
 The contract every harness must satisfy:
 
 - Speak HTTP on `$PORT` for session create / message / event endpoints.
-- Pull credentials and model config from env (`LITELLM_API_BASE`, `LITELLM_API_KEY`, `LITELLM_DEFAULT_MODEL`).
-- Persist session state so a restart resumes mid-conversation.
+- Pull credentials from env (`LITELLM_API_BASE`, `LITELLM_API_KEY`).
+- Discover available models by calling `${LITELLM_API_BASE}/v1/models` at boot.
