@@ -51,7 +51,7 @@ docker run -p 4096:4096 \
   -e LITELLM_API_BASE=https://litellm.internal.acme.com \
   -e LITELLM_API_KEY=sk-litellm-... \
   -e MASTER_KEY=$(openssl rand -hex 32) \
-  ghcr.io/berriai/lite-harness:latest
+  ghcr.io/litellm-labs/lite-harness:latest
 ```
 
 Open `http://localhost:4096`, paste the `MASTER_KEY` on the login page, and you're in.
