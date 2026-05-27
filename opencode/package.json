@@ -1,0 +1,12 @@
+{
+  "name": "opencode-sandbox-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "stdio MCP server giving the opencode harness E2B provision/execute tools",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "e2b": "^1.13.2",
+    "undici": "^7.0.0"
+  }
+}
