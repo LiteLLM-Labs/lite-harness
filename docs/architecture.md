@@ -92,6 +92,44 @@ and redirects to the new session URL. No partial state is left behind.
 
 ---
 
+## Setup
+
+Only two env vars are required:
+
+```bash
+export LITELLM_API_BASE="https://your-gateway/"   # trailing slash optional
+export LITELLM_API_KEY="sk-..."
+
+cd harnesses/opencode
+./start-local.sh
+# → server on http://localhost:4096
+```
+
+Optional vars:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LITELLM_DEFAULT_MODEL` | `anthropic/claude-sonnet-4-6` | Model used when client doesn't specify one |
+| `PORT` | `4096` | Port the unified adapter listens on |
+| `REPO_DIR` | adapter directory | Working directory for **opencode** sessions |
+| `CC_REPO_DIR` | `$HOME` | Working directory for **claude-code** sessions |
+| `LAP_BASE_URL` | `http://localhost:3000` | Only needed for LAP MCP tools (memory, issue reporter) |
+| `FORCE_MODEL` | `1` | Set `0` to let clients freely choose model for opencode sessions |
+
+---
+
+## REPO_DIR vs CC_REPO_DIR
+
+They're separate because each harness reads its working directory for context, and giving both the same directory would break claude-code identity.
+
+`REPO_DIR` points at `harnesses/opencode/` — opencode runs from there and uses local config files (`opencode.json`, `CLAUDE.md`) to configure itself. This is intentional.
+
+If claude-code sessions used the same directory, the model would read `harnesses/opencode/CLAUDE.md` and surrounding context and self-identify as the opencode harness. Early in development this produced responses like *"I'm running in the opencode harness (working directory: lite-harness/harnesses/opencode)"* from a claude-code session.
+
+`CC_REPO_DIR` defaults to `$HOME` — a neutral directory with no harness-specific context. Set it to whatever workspace you want the claude-code agent to operate in.
+
+---
+
 ## Environment wiring
 
 The adapter sets Anthropic-SDK env vars at boot from the LiteLLM gateway vars,

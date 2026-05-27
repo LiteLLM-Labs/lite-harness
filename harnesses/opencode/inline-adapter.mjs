@@ -506,7 +506,7 @@ const server = http.createServer(async (req, res) => {
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
-        const modelId = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-5");
+        const modelId = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6");
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`cc prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
@@ -530,7 +530,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const FORCE_MODEL = process.env.FORCE_MODEL !== "0";
-    const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-5";
+    const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
     let forwardBody = raw;
     try {
       const b = JSON.parse(raw);

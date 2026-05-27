@@ -22,7 +22,7 @@ fi
 
 : "${LITELLM_API_BASE:?set LITELLM_API_BASE in .env}"
 : "${LITELLM_API_KEY:?set LITELLM_API_KEY in .env}"
-: "${LITELLM_DEFAULT_MODEL:=anthropic/claude-sonnet-4-5}"
+: "${LITELLM_DEFAULT_MODEL:=anthropic/claude-sonnet-4-6}"
 
 # Normalize base URL (strip trailing slash, ensure /v1 suffix)
 BASE="${LITELLM_API_BASE%/}"
