@@ -102,6 +102,15 @@ WORKDIR /mcp
 COPY harnesses/opencode/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund
 
+# ============================================================== claude-code SDK
+# The unified adapter loads the SDK from ../claude-code/node_modules/ relative
+# to its own path (/opt/lap/). Mirror the local-dev layout so the same path
+# works in both environments.
+FROM node:20-bookworm-slim AS cc-deps
+WORKDIR /cc
+COPY harnesses/claude-code/package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund
+
 # ==================================================================== runtime
 FROM base
 
@@ -119,6 +128,7 @@ COPY --chown=sandbox:sandbox harnesses/opencode/report-issue-mcp.mjs /opt/lap/op
 COPY --chown=sandbox:sandbox harnesses/opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
 COPY --chown=sandbox:sandbox harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
+COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/claude-code/node_modules
 
 COPY --chown=sandbox:sandbox harnesses/opencode/inline-adapter.mjs /opt/lap/inline-adapter.mjs
 
