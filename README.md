@@ -14,3 +14,16 @@ DESIGN.md     design system for the UI
 ```
 
 See [VISION.md](VISION.md) for the pitch and [harnesses/README.md](harnesses/README.md) for adding a new harness.
+
+
+## Multiple Instances (Single Endpoint) 
+
+Spin up a web worker for providing your team a single endpoint to make api calls through, across multiple opencode/claude code instances
+
+
+HPA Setup
+
+| Web Worker                                 | ->   | Opencode Server | 
+- Single endpoint for API                           
+- Runs Cron Jobs
+- UI across multiple opencode instances
