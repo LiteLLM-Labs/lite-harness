@@ -101,7 +101,7 @@ RUN find /root/.opencode -maxdepth 2 -type d -name 'cache' -exec rm -rf {} + 2>/
 # ============================================================== sandbox-mcp deps
 FROM node:20-bookworm-slim AS mcp-deps
 WORKDIR /mcp
-COPY package.json ./package.json
+COPY harnesses/opencode/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund
 
 # ==================================================================== runtime
@@ -112,19 +112,22 @@ ENV PATH="/home/sandbox/.opencode/bin:${PATH}"
 
 WORKDIR /work
 
-COPY entrypoint-common.sh /opt/lap/common.sh
+COPY harnesses/opencode/entrypoint-common.sh /opt/lap/common.sh
 RUN chmod +x /opt/lap/common.sh
 
-COPY --chown=sandbox:sandbox sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
-COPY --chown=sandbox:sandbox memory-mcp.mjs /opt/lap/opencode-sandbox-mcp/memory-mcp.mjs
-COPY --chown=sandbox:sandbox report-issue-mcp.mjs /opt/lap/opencode-sandbox-mcp/report-issue-mcp.mjs
-COPY --chown=sandbox:sandbox gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
-COPY --chown=sandbox:sandbox package.json /opt/lap/opencode-sandbox-mcp/package.json
+COPY --chown=sandbox:sandbox harnesses/opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
+COPY --chown=sandbox:sandbox harnesses/opencode/memory-mcp.mjs /opt/lap/opencode-sandbox-mcp/memory-mcp.mjs
+COPY --chown=sandbox:sandbox harnesses/opencode/report-issue-mcp.mjs /opt/lap/opencode-sandbox-mcp/report-issue-mcp.mjs
+COPY --chown=sandbox:sandbox harnesses/opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
+COPY --chown=sandbox:sandbox harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
 
-COPY --chown=sandbox:sandbox inline-adapter.mjs /opt/lap/inline-adapter.mjs
+COPY --chown=sandbox:sandbox harnesses/opencode/inline-adapter.mjs /opt/lap/inline-adapter.mjs
 
-COPY --chown=sandbox:sandbox entrypoint.sh /entrypoint.sh
+COPY --chown=sandbox:sandbox ui/out /opt/lap/ui/out
+ENV UI_DIST=/opt/lap/ui/out
+
+COPY --chown=sandbox:sandbox harnesses/opencode/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && mkdir -p /home/sandbox/.local/state \
     && chown -R sandbox:sandbox /home/sandbox/.local
