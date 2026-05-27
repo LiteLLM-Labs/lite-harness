@@ -18,10 +18,21 @@ export interface MessageInfo {
 }
 
 export type HarnessMessagePart =
-  | { type: "text"; text: string }
-  | { type: "reasoning"; text: string; time?: { start?: number; end?: number } }
-  | { type: "thinking"; text: string; time?: { start?: number; end?: number } }
+  | { id?: string; type: "text"; text: string }
   | {
+      id?: string;
+      type: "reasoning";
+      text: string;
+      time?: { start?: number; end?: number };
+    }
+  | {
+      id?: string;
+      type: "thinking";
+      text: string;
+      time?: { start?: number; end?: number };
+    }
+  | {
+      id?: string;
       type: "tool";
       tool: string;
       state: {
@@ -32,7 +43,7 @@ export type HarnessMessagePart =
         [k: string]: unknown;
       };
     }
-  | { type: "step-start" };
+  | { id?: string; type: "step-start" };
 
 export interface HarnessMessage {
   info: MessageInfo;
