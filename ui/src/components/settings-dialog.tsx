@@ -9,7 +9,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { testLiteLLMConnection, type LiteLLMHealth } from "@/lib/api";
 
@@ -32,18 +31,18 @@ export function SettingsDialog() {
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Settings"
-          className="size-7"
-        >
-          <SettingsIcon className="size-4" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-[480px]">
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Settings"
+        className="size-7"
+        onClick={() => setOpen(true)}
+      >
+        <SettingsIcon className="size-4" />
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -117,7 +116,8 @@ export function SettingsDialog() {
             .
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
