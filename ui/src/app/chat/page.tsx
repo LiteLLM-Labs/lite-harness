@@ -14,7 +14,7 @@ import { MessageBlock } from "@/components/message-block";
 import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { getMessages, subscribeEvents } from "@/lib/api";
-import type { HarnessMessage } from "@/lib/types";
+import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 
 const MODELS = [
   "anthropic/claude-sonnet-4-5",
@@ -46,21 +46,66 @@ function ChatInner() {
     refetch();
     const unsub = subscribeEvents({
       sessionId: sid,
-      onEvent: () => refetch(),
+      onEvent: (raw) => {
+        const ev = raw as { type: string; properties: Record<string, unknown> };
+
+        if (ev.type === "message.updated") {
+          const info = ev.properties.info as MessageInfo;
+          if (!info?.id) return;
+          setMessages((prev) => {
+            if (!prev) return prev;
+            const idx = prev.findIndex((m) => m.info.id === info.id);
+            if (idx === -1) return [...prev, { info, parts: [] }];
+            const next = [...prev];
+            next[idx] = { ...next[idx], info: { ...next[idx].info, ...info } };
+            return next;
+          });
+        } else if (ev.type === "message.part.updated") {
+          const part = ev.properties.part as HarnessMessagePart;
+          const msgId = part.messageID;
+          if (!msgId || !part.id || part.type === "step-start" || part.type === "step-finish") return;
+          setMessages((prev) => {
+            if (!prev) return prev;
+            const idx = prev.findIndex((m) => m.info.id === msgId);
+            if (idx === -1) return prev;
+            const msg = prev[idx];
+            const pIdx = msg.parts.findIndex((p) => p.id === part.id);
+            const newParts = [...msg.parts];
+            if (pIdx === -1) newParts.push(part);
+            else newParts[pIdx] = part;
+            const next = [...prev];
+            next[idx] = { ...msg, parts: newParts };
+            return next;
+          });
+        } else if (ev.type === "message.part.delta") {
+          const { messageID, partID, field, delta } = ev.properties as {
+            messageID: string;
+            partID: string;
+            field: string;
+            delta: string;
+          };
+          if (field !== "text") return;
+          setMessages((prev) => {
+            if (!prev) return prev;
+            const idx = prev.findIndex((m) => m.info.id === messageID);
+            if (idx === -1) return prev;
+            const msg = prev[idx];
+            const pIdx = msg.parts.findIndex((p) => p.id === partID);
+            if (pIdx === -1) return prev;
+            const part = msg.parts[pIdx] as HarnessMessagePart & { text: string };
+            const newParts = [...msg.parts];
+            newParts[pIdx] = { ...part, text: (part.text ?? "") + delta } as HarnessMessagePart;
+            const next = [...prev];
+            next[idx] = { ...msg, parts: newParts };
+            return next;
+          });
+        } else if (ev.type === "session.idle") {
+          refetch();
+        }
+      },
     });
     return unsub;
   }, [sid, refetch]);
-
-  // Fallback poll while a turn is in flight.
-  useEffect(() => {
-    if (!sid || !messages) return;
-    const last = messages[messages.length - 1];
-    const inFlight =
-      last?.info.role === "assistant" && last.info.finish !== "stop";
-    if (!inFlight) return;
-    const t = setInterval(refetch, 2000);
-    return () => clearInterval(t);
-  }, [sid, messages, refetch]);
 
   const onScroll = () => {
     const el = scrollRef.current;

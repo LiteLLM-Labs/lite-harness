@@ -13,7 +13,7 @@ LAP_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ ! -f "$LAP_ROOT/.env" ] && [ -f "$(dirname "$0")/../../../litellm-agent-platform/.env" ]; then
   LAP_ROOT="$(cd "$(dirname "$0")/../../../litellm-agent-platform" && pwd)"
 fi
-if [ -f "$LAP_ROOT/.env" ]; then
+if [ -z "${LITELLM_API_KEY:-}" ] && [ -f "$LAP_ROOT/.env" ]; then
   set -a
   # shellcheck disable=SC1090
   . "$LAP_ROOT/.env"
