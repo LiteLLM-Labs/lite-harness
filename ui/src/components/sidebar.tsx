@@ -4,13 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { readHarness } from "@/lib/use-harness";
 import { createSession, deleteSession, listSessions } from "@/lib/api";
 import type { OpencodeSession } from "@/lib/types";
 
@@ -30,15 +24,6 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   const [sessions, setSessions] = useState<OpencodeSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [harness, setHarnessState] = useState<"opencode" | "claude-code">(() => {
-    if (typeof window === "undefined") return "opencode";
-    return (localStorage.getItem("harness") as "opencode" | "claude-code") ?? "opencode";
-  });
-  const setHarness = (v: "opencode" | "claude-code") => {
-    localStorage.setItem("harness", v);
-    setHarnessState(v);
-  };
-
   const load = async () => {
     try {
       const list = await listSessions();
@@ -58,7 +43,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   const onNew = async () => {
     setCreating(true);
     try {
-      const s = await createSession(undefined, harness);
+      const s = await createSession(undefined, readHarness());
       router.push(`/chat/?id=${encodeURIComponent(s.id)}`);
       load();
     } catch (e) {
@@ -85,7 +70,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         <span className="font-semibold text-sm">LiteLLM</span>
       </div>
 
-      <div className="px-3 py-3 border-b border-border flex flex-col gap-2">
+      <div className="px-3 py-3 border-b border-border">
         <Button
           onClick={onNew}
           disabled={creating}
@@ -95,15 +80,6 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
           <Plus className="size-4" />
           New session
         </Button>
-        <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
-          <SelectTrigger className="h-8 text-xs w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
-            <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2">

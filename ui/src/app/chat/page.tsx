@@ -18,6 +18,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
 import { getMessages, subscribeEvents } from "@/lib/api";
+import { useHarness } from "@/lib/use-harness";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 
 const MODELS = [
@@ -35,6 +36,7 @@ function ChatInner() {
   const [model, setModel] = useState(MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [harness, setHarness] = useHarness();
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
 
@@ -173,6 +175,15 @@ function ChatInner() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            <Select value={harness} onValueChange={(v) => v && setHarness(v as "opencode" | "claude-code")}>
+              <SelectTrigger className="h-8 text-xs w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
+                <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={model} onValueChange={(v) => v && setModel(v)}>
               <SelectTrigger className="h-8 text-xs w-[220px]">
                 <SelectValue />
