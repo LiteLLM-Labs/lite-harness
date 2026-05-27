@@ -1,9 +1,18 @@
 # syntax=docker/dockerfile:1.7
 #
-# opencode inline harness — built from BerriAI/lite-harness.
-# Adapted from harnesses/opencode/Dockerfile.inline (no vault CA, paths adjusted).
+# Self-contained opencode harness — single Dockerfile that builds the opencode
+# inline harness with NO prebuilt `harnesses/base:dev` and NO ECR. Use this when
+# a host (e.g. Render) builds the image natively from the repo via a single
+# Dockerfile and can't run the two-step `base then opencode` buildx flow.
+#
+# It inlines harnesses/base/Dockerfile as the `base` stage, then layers the
+# opencode runtime on top — kept byte-for-byte in step with those two files.
+#
+# Build from repo root:
+#   docker build -f Dockerfile.inline -t opencode-inline .
 
 # ================================================================= base stage
+# (inlined from harnesses/base/Dockerfile)
 FROM node:20-bookworm-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -55,6 +64,26 @@ RUN UNAME_M=$(uname -m); \
     && rm -rf uv.tar.gz uv.tar.gz.sha256 "uv-${UV_TARGET}" \
     && uv --version
 
+ARG JAEGER_VERSION=1.62.0
+RUN UNAME_M=$(uname -m); \
+    case "$UNAME_M" in \
+      x86_64)  ARCH=amd64 ;; \
+      aarch64) ARCH=arm64 ;; \
+      *) echo "Unsupported arch: $UNAME_M" >&2; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && JAEGER_DIR="jaeger-${JAEGER_VERSION}-linux-${ARCH}" \
+    && TARBALL="${JAEGER_DIR}.tar.gz" \
+    && SIDECAR="${JAEGER_DIR}.sha256sum.txt" \
+    && curl -fsSL -o "${TARBALL}" \
+         "https://github.com/jaegertracing/jaeger/releases/download/v${JAEGER_VERSION}/${TARBALL}" \
+    && curl -fsSL -o "${SIDECAR}" \
+         "https://github.com/jaegertracing/jaeger/releases/download/v${JAEGER_VERSION}/${SIDECAR}" \
+    && tar -xzf "${TARBALL}" \
+    && grep " \*${JAEGER_DIR}/jaeger-all-in-one$" "${SIDECAR}" | sha256sum -c - \
+    && install -m 0755 "${JAEGER_DIR}/jaeger-all-in-one" /usr/local/bin/jaeger-all-in-one \
+    && rm -rf "${TARBALL}" "${SIDECAR}" "${JAEGER_DIR}"
+
 RUN useradd -m -u 1001 -s /bin/bash sandbox \
     && mkdir -p /work \
     && chown sandbox:sandbox /work
@@ -72,7 +101,7 @@ RUN find /root/.opencode -maxdepth 2 -type d -name 'cache' -exec rm -rf {} + 2>/
 # ============================================================== sandbox-mcp deps
 FROM node:20-bookworm-slim AS mcp-deps
 WORKDIR /mcp
-COPY opencode/package.json ./package.json
+COPY package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund
 
 # ==================================================================== runtime
@@ -86,22 +115,24 @@ WORKDIR /work
 COPY entrypoint-common.sh /opt/lap/common.sh
 RUN chmod +x /opt/lap/common.sh
 
-COPY --chown=sandbox:sandbox opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
-COPY --chown=sandbox:sandbox opencode/memory-mcp.mjs /opt/lap/opencode-sandbox-mcp/memory-mcp.mjs
-COPY --chown=sandbox:sandbox opencode/report-issue-mcp.mjs /opt/lap/opencode-sandbox-mcp/report-issue-mcp.mjs
-COPY --chown=sandbox:sandbox opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
-COPY --chown=sandbox:sandbox opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
+COPY --chown=sandbox:sandbox sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
+COPY --chown=sandbox:sandbox memory-mcp.mjs /opt/lap/opencode-sandbox-mcp/memory-mcp.mjs
+COPY --chown=sandbox:sandbox report-issue-mcp.mjs /opt/lap/opencode-sandbox-mcp/report-issue-mcp.mjs
+COPY --chown=sandbox:sandbox gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
+COPY --chown=sandbox:sandbox package.json /opt/lap/opencode-sandbox-mcp/package.json
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
 
-COPY --chown=sandbox:sandbox opencode/inline-adapter.mjs /opt/lap/inline-adapter.mjs
+COPY --chown=sandbox:sandbox inline-adapter.mjs /opt/lap/inline-adapter.mjs
 
-COPY --chown=sandbox:sandbox opencode/entrypoint.sh /entrypoint.sh
+COPY --chown=sandbox:sandbox entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && mkdir -p /home/sandbox/.local/state \
     && chown -R sandbox:sandbox /home/sandbox/.local
 
 USER sandbox
 
+# Shared-server mode: the entrypoint runs the inline adapter (which fronts a
+# single opencode serve and scopes skills per agent) instead of opencode serve.
 ENV OPENCODE_SHARED_INLINE=1
 
 EXPOSE 10000
