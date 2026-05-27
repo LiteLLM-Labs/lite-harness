@@ -3,7 +3,6 @@
 <p align="center">Unified API in front of opencode, claude-code, claude-agent-sdk, and openai-agents. Durable sessions, streamed events, built-in UI.</p>
 
 <h4 align="center">
-  <a href="docs/scope.md">What lite-harness is (and isn't)</a> ·
   <a href="docs/api.md">API reference</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="harnesses/README.md">Add a harness</a>
@@ -14,8 +13,6 @@
 ## What is lite-harness
 
 lite-harness is a single HTTP server that fronts any coding-agent harness (opencode, claude-code, claude-agent-sdk, openai-agents) behind one API. Same 3 endpoints, every harness. Point it at a LiteLLM gateway and every harness can use any model.
-
-Read the full [scope doc](docs/scope.md) for what's in and out.
 
 ---
 
