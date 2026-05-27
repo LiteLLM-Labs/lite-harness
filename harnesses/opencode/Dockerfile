@@ -112,7 +112,7 @@ ENV PATH="/home/sandbox/.opencode/bin:${PATH}"
 
 WORKDIR /work
 
-COPY harnesses/opencode/entrypoint-common.sh /opt/lap/common.sh
+COPY harnesses/_shared/entrypoint-common.sh /opt/lap/common.sh
 RUN chmod +x /opt/lap/common.sh
 
 COPY --chown=sandbox:sandbox harnesses/opencode/sandbox-mcp.mjs /opt/lap/opencode-sandbox-mcp/sandbox-mcp.mjs
