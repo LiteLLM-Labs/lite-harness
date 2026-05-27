@@ -5,8 +5,11 @@ Each subfolder is one supported agent harness. The lite-harness server fronts al
 | Folder | Status |
 |---|---|
 | `opencode/` | shipped |
+| `claude-code/` | in dev (inline adapter + local runner only — no Dockerfile yet) |
 | `claude-agent-sdk/` | planned |
 | `openai-agents/` | planned |
+
+Code shared by all harnesses lives in `_shared/` (e.g. `_shared/entrypoint-common.sh`, sourced as `/opt/lap/common.sh` in each harness image).
 
 ## Adding a new harness
 
