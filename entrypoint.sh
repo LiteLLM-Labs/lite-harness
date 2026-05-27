@@ -131,13 +131,21 @@ if [ -n "${MCP_NAMES:-}" ]; then
   MCP_NOTE=$'\n\nMCP servers available in this session: '"${MCP_NAMES}"$'. Call their tools with the <server>_<tool> prefix (e.g. slack_bot_post_message).'
 fi
 
-if [ -n "${AGENT_PROMPT:-}" ] || [ -n "$MCP_NOTE" ]; then
+API_NOTE=""
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  API_NOTE="${API_NOTE}"$'\n\nGitHub API: use webfetch to call https://api.github.com with header "Authorization: Bearer '"${GITHUB_TOKEN}"$'". You can create issues, PRs, and comments.'
+fi
+if [ -n "${LINEAR_API_KEY:-}" ]; then
+  API_NOTE="${API_NOTE}"$'\n\nLinear API: use webfetch to POST https://api.linear.app/graphql with header "Authorization: '"${LINEAR_API_KEY}"$'" and Content-Type application/json. Use GraphQL mutations to create/update issues.'
+fi
+
+if [ -n "${AGENT_PROMPT:-}" ] || [ -n "$MCP_NOTE" ] || [ -n "$API_NOTE" ]; then
   mkdir -p .opencode/agent
   cat > .opencode/agent/default.md <<EOF2
 ---
 description: sandbox agent
 ---
-${AGENT_PROMPT:-}${MCP_NOTE}
+${AGENT_PROMPT:-}${MCP_NOTE}${API_NOTE}
 EOF2
 fi
 
