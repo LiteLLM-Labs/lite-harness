@@ -26,12 +26,6 @@ When `MASTER_KEY` is set, `EventSource` clients can pass it as `?key=<MASTER_KEY
 | `PORT`               | `4096`  | Where the unified API + UI listen.                        |
 | `OPENCODE_CHILD_PORT`| `PORT+1`| Internal opencode child server. Don't expose this.        |
 
-## Model behavior
-
-| Var                | Default | What it does                                                                                                 |
-|--------------------|---------|--------------------------------------------------------------------------------------------------------------|
-| `ANTHROPIC_API_KEY`| unset   | Escape hatch: when set, opencode bypasses LiteLLM and calls `api.anthropic.com` directly. Useful for tests, not for prod. |
-
 ## UI
 
 | Var       | What it is                                                              |

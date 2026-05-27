@@ -109,12 +109,12 @@ Optional vars:
 
 | Var | Default | Purpose |
 |---|---|---|
-| `LITELLM_DEFAULT_MODEL` | `anthropic/claude-sonnet-4-6` | Model used when client doesn't specify one |
 | `PORT` | `4096` | Port the unified adapter listens on |
 | `REPO_DIR` | adapter directory | Working directory for **opencode** sessions |
 | `CC_REPO_DIR` | `$HOME` | Working directory for **claude-code** sessions |
 | `LAP_BASE_URL` | `http://localhost:3000` | Only needed for LAP MCP tools (memory, issue reporter) |
-| `FORCE_MODEL` | `1` | Set `0` to let clients freely choose model for opencode sessions |
+
+See [docs/configuration.md](configuration.md) for the full env-var reference (`MASTER_KEY`, etc.).
 
 ---
 
@@ -136,8 +136,8 @@ The adapter sets Anthropic-SDK env vars at boot from the LiteLLM gateway vars,
 so both harnesses talk to the same gateway:
 
 ```
-LITELLM_API_BASE  →  ANTHROPIC_BASE_URL  (used by claude-code SDK)
-LITELLM_API_KEY   →  ANTHROPIC_API_KEY + ANTHROPIC_AUTH_TOKEN
+LITELLM_API_BASE  ->  ANTHROPIC_BASE_URL  (used by claude-code SDK)
+LITELLM_API_KEY   ->  ANTHROPIC_AUTH_TOKEN
 ```
 
 The `opencode serve` child picks up the same env and routes through the

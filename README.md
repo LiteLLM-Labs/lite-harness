@@ -24,7 +24,6 @@ lite-harness is a single HTTP server that fronts any coding-agent harness (openc
 - **Swap harnesses with one field.** `"harness": "opencode"` to `"harness": "claude-code"`. Nothing else changes.
 - **Any model via LiteLLM.** Every harness routes through your gateway. Claude, GPT, Gemini, Bedrock all work when the gateway routes them.
 - **Master-key auth out of the box.** Set `MASTER_KEY` and every API route requires `Authorization: Bearer <key>`. UI ships with a login page.
-- **Built for scale.** Designed for 10K RPS.
 
 ---
 
@@ -103,8 +102,6 @@ Full env-var reference: [docs/configuration.md](docs/configuration.md).
 |--------------------|----------|
 | `opencode`         | shipped  |
 | `claude-code`      | shipped  |
-| `claude-agent-sdk` | planned  |
-| `openai-agents`    | planned  |
 
 ## License
 
