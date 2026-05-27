@@ -76,9 +76,12 @@ MODELS_JSON=$(
     || printf '%s' '{}'
 )
 # Guarantee the boot default is present even if discovery returned nothing.
+# Strip provider prefix (e.g. "anthropic/claude-opus-4-7" -> "claude-opus-4-7")
+# because opencode looks up modelID (no prefix) inside the provider's models map.
 [ -n "$MODELS_JSON" ] || MODELS_JSON='{}'
+MODEL_KEY="${LITELLM_DEFAULT_MODEL#*/}"
 MODELS_JSON=$(printf '%s' "$MODELS_JSON" \
-  | jq -c "${opts_for} if has(\"${LITELLM_DEFAULT_MODEL}\") then . else . + {\"${LITELLM_DEFAULT_MODEL}\": opts(\"${LITELLM_DEFAULT_MODEL}\")} end")
+  | jq -c "${opts_for} if has(\"${MODEL_KEY}\") then . else . + {\"${MODEL_KEY}\": opts(\"${MODEL_KEY}\")} end")
 echo "[entrypoint] registered models: $(printf '%s' "$MODELS_JSON" | jq -r 'keys | join(", ")')"
 # Sandbox tools: when E2B is configured, mount the bundled stdio MCP that
 # exposes provision/execute (same tool surface as the claude-agent-sdk harness).
