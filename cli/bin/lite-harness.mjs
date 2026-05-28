@@ -197,10 +197,11 @@ async function chat(harnessName, flags) {
 
   function handleEvent(ev) {
     if (ev.type === "message.part.delta") {
-      const { field, delta } = ev.properties ?? {};
+      const { field, delta, partID } = ev.properties ?? {};
       if (field === "text" && delta) {
         if (!streamStarted) { process.stdout.write("\n"); streamStarted = true; }
         process.stdout.write(delta);
+        partWritten.set(partID, (partWritten.get(partID) ?? 0) + delta.length);
       }
     } else if (ev.type === "message.part.updated") {
       // Fallback for harnesses that don't emit deltas (e.g. opencode)
@@ -320,7 +321,7 @@ function printHelp() {
     `  ${BOLD}lite-harness list${R}                   list available harnesses`,
     `  ${BOLD}lite-harness models${R}                 list models from server`,
     `  ${BOLD}lite-harness <harness>${R}               start a chat session`,
-    `    --model <id>                  override model`,
+    `    --model <id>                  override model (default: first from server)`,
   ].join("\n"));
 }
 
