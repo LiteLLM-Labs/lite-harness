@@ -186,6 +186,7 @@ async function chat(harnessName, flags) {
 
   let idleResolve = null;
   const partWritten = new Map();
+  const assistantMsgIds = new Set(); // only render parts for assistant messages
   const renderer = makeRenderer();
   let responseActive = false;
 
@@ -218,16 +219,19 @@ async function chat(harnessName, flags) {
   }
 
   function handleEvent(ev) {
-    if (ev.type === "message.part.delta") {
-      const { field, delta, partID } = ev.properties ?? {};
-      if (field === "text" && delta) {
+    if (ev.type === "message.updated") {
+      const info = ev.properties?.info;
+      if (info?.id && info?.role === "assistant") assistantMsgIds.add(info.id);
+    } else if (ev.type === "message.part.delta") {
+      const { field, delta, partID, messageID } = ev.properties ?? {};
+      if (field === "text" && delta && assistantMsgIds.has(messageID)) {
         responseActive = true;
         renderer.writeChunk(delta);
         partWritten.set(partID, (partWritten.get(partID) ?? 0) + delta.length);
       }
     } else if (ev.type === "message.part.updated") {
       const part = ev.properties?.part;
-      if (part?.type === "text" && part?.id && part?.text) {
+      if (part?.type === "text" && part?.id && part?.text && assistantMsgIds.has(part.messageID)) {
         const written = partWritten.get(part.id) ?? 0;
         const tail = part.text.slice(written);
         if (tail) {
@@ -239,6 +243,7 @@ async function chat(harnessName, flags) {
     } else if (ev.type === "session.idle") {
       renderer.finish();
       partWritten.clear();
+      assistantMsgIds.clear();
       responseActive = false;
       idleResolve?.();
       idleResolve = null;
@@ -269,6 +274,7 @@ async function chat(harnessName, flags) {
     const s = await r.json();
     currentSid = s.id;
     partWritten.clear();
+    assistantMsgIds.clear();
     responseActive = false;
     idleResolve = null;
     process.stdout.write(`  ${GREEN}✓ Session cleared${R}  ${GRAY}${currentSid.slice(0, 12)}${R}\n\n`);
