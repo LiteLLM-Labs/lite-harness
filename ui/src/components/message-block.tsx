@@ -24,6 +24,7 @@ interface LocalMessage {
   error?: string;
   latency_ms?: number;
   model?: string;
+  harness?: string;
   tokens?: { input: number; output: number; total: number; cache?: { read: number; write: number } };
   cost?: number;
 }
@@ -55,6 +56,7 @@ function toLocal(m: HarnessMessage): LocalMessage {
   const providerID = (m.info as Record<string, unknown>).providerID as string | undefined;
   const modelID = (m.info as Record<string, unknown>).modelID as string | undefined;
   const model = providerID && modelID ? `${providerID}/${modelID}` : modelID;
+  const harness = (m.info as Record<string, unknown>).harness as string | undefined;
   const tokens = (m.info as Record<string, unknown>).tokens as LocalMessage["tokens"] | undefined;
   const cost = (m.info as Record<string, unknown>).cost as number | undefined;
 
@@ -66,6 +68,7 @@ function toLocal(m: HarnessMessage): LocalMessage {
     status,
     latency_ms,
     model,
+    harness,
     tokens,
     cost,
   };
@@ -178,6 +181,17 @@ function AssistantBlock({
 
       {!inProgress && !failed && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mono text-[11px] text-muted-foreground">
+          {msg.harness && (
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium ${
+              msg.harness === "github-copilot"
+                ? "bg-sky-500/15 text-sky-600 dark:text-sky-400"
+                : msg.harness === "claude-code"
+                  ? "bg-orange-500/15 text-orange-600 dark:text-orange-400"
+                  : "bg-muted text-muted-foreground"
+            }`}>
+              {msg.harness}
+            </span>
+          )}
           {msg.model && <span>{msg.model}</span>}
           {typeof msg.latency_ms === "number" && <span>{formatLatency(msg.latency_ms)}</span>}
           {msg.tokens && (

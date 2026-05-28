@@ -129,6 +129,7 @@ COPY --chown=sandbox:sandbox harnesses/opencode/gen-mcp-config.mjs /opt/lap/open
 COPY --chown=sandbox:sandbox harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
 COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/lap/claude-code/node_modules
+# github-copilot harness uses native fetch — no separate node_modules stage needed
 
 COPY --chown=sandbox:sandbox harnesses/inline-adapter.mjs /opt/lap/inline-adapter.mjs
 

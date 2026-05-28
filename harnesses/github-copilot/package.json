@@ -1,0 +1,7 @@
+{
+  "name": "github-copilot-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Copilot / LiteLLM BYOK harness — uses Node.js native fetch, no npm dependencies.",
+  "dependencies": {}
+}
