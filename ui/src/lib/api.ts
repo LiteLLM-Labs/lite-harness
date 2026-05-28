@@ -148,6 +148,14 @@ export async function sendMessage(opts: {
   }
 }
 
+export async function listModels(): Promise<string[]> {
+  const res = await req("/v1/models");
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  const items: Array<{ id: string }> = data?.data ?? [];
+  return items.map((m) => m.id).filter(Boolean);
+}
+
 export function subscribeEvents(opts: {
   sessionId: string;
   onEvent: (ev: unknown) => void;
