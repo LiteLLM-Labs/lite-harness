@@ -27,6 +27,7 @@ lite-harness is a single HTTP server that fronts any coding-agent harness (openc
 - **Swap harnesses with one field.** `"harness": "opencode"` to `"harness": "claude-code"`. Nothing else changes.
 - **Any model via LiteLLM.** Every harness routes through your gateway. Claude, GPT, Gemini, Bedrock all work when the gateway routes them.
 - **Master-key auth out of the box.** Set `MASTER_KEY` and every API route requires `Authorization: Bearer <key>`. UI ships with a login page.
+- **Sandboxing via E2B or Daytona.** Set `E2B_API_KEY` or `DAYTONA_API_KEY` to give agents an isolated Linux sandbox with `provision`, `execute`, `read_file`, and `upload_artifact` tools. No other config needed.
 
 ---
 
@@ -109,6 +110,51 @@ Full env-var reference: [docs/configuration.md](docs/configuration.md).
 |--------------------|----------|
 | `opencode`         | shipped  |
 | `claude-code`      | shipped  |
+| `github-copilot`   | shipped  |
+| `codex`            | shipped  |
+
+## Sandboxing
+
+Agents can provision and use ephemeral Linux sandboxes via the `sandbox` MCP tool.
+
+| Provider | Env var | Auto-selected when |
+|---|---|---|
+| **E2B** | `E2B_API_KEY` | `E2B_API_KEY` is set |
+| **Daytona** | `DAYTONA_API_KEY` | `DAYTONA_API_KEY` is set |
+
+Force a specific provider with `SANDBOX_PROVIDER=e2b` or `SANDBOX_PROVIDER=daytona`.
+
+```bash
+# E2B
+docker run -p 4096:4096 \
+  -e LITELLM_API_BASE=... -e LITELLM_API_KEY=... \
+  -e E2B_API_KEY=e2b-... \
+  ghcr.io/litellm-labs/lite-harness:latest
+
+# Daytona
+docker run -p 4096:4096 \
+  -e LITELLM_API_BASE=... -e LITELLM_API_KEY=... \
+  -e DAYTONA_API_KEY=dtn-... \
+  ghcr.io/litellm-labs/lite-harness:latest
+```
+
+Full sandbox config reference: [docs/configuration.md](docs/configuration.md).
+
+## CLI
+
+A zero-dependency terminal chat client (Node 18+):
+
+```bash
+cd cli && npm install -g .
+
+lite-harness login          # save server URL + master key
+lite-harness list           # list harnesses
+lite-harness models         # list models from server
+lite-harness claude-code    # start a TUI chat session
+lite-harness claude-code --model anthropic/claude-opus-4-7
+```
+
+Inside chat: `/clear` resets history, `exit` quits.
 
 ## License
 
