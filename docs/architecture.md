@@ -109,6 +109,7 @@ Optional vars:
 
 | Var | Default | Purpose |
 |---|---|---|
+| `LITELLM_DEFAULT_MODEL` | `anthropic/claude-sonnet-4-6` | Default model written into `opencode.json`; used if the client sends no model |
 | `PORT` | `4096` | Port the unified adapter listens on |
 | `REPO_DIR` | adapter directory | Working directory for **opencode** sessions |
 | `CC_REPO_DIR` | `$HOME` | Working directory for **claude-code** sessions |
@@ -142,6 +143,36 @@ LITELLM_API_KEY   ->  ANTHROPIC_AUTH_TOKEN
 
 The `opencode serve` child picks up the same env and routes through the
 LiteLLM gateway via the provider config written to `opencode.json` at startup.
+
+---
+
+## Model selection
+
+Model is a **per-message property**, not per-session. Every `prompt_async` body carries:
+
+```json
+{ "model": { "providerID": "litellm", "modelID": "anthropic/claude-sonnet-4-6" }, ... }
+```
+
+The adapter forwards it unchanged to opencode, which routes it through the LiteLLM gateway. **Mid-session model switching is supported** — each turn can use a different model.
+
+### Dynamic model list (`GET /v1/models`)
+
+The adapter proxies `GET /v1/models` to `LITELLM_API_BASE/models`, returning the gateway's full model list in OpenAI format. The UI uses this to populate the model switcher dropdown on load; it falls back to a hardcoded list if the request fails.
+
+```
+UI (on mount)
+    │  GET /v1/models
+    ▼
+Adapter  →  LITELLM_API_BASE/models  →  {data: [{id: "..."}, ...]}
+    │
+    ▼  (deduped + sorted alphabetically)
+Model switcher dropdown
+```
+
+### opencode model config
+
+`start-local.sh` fetches the model list at startup and writes all available models into `opencode.json` under `provider.litellm.models`. opencode validates model IDs against this config — a model not listed there will produce `ProviderModelNotFoundError`. Re-run `start-local.sh` to pick up newly added gateway models.
 
 ---
 

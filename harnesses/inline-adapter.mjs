@@ -405,7 +405,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-<<<<<<< HEAD:harnesses/opencode/inline-adapter.mjs
   // Gateway health probe used by the Settings dialog's "Test connection"
   // button. Pings ${LITELLM_API_BASE}/v1/models with LITELLM_API_KEY and
   // reports whether the gateway is reachable and how many models it serves.
@@ -447,8 +446,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Reject NEW session creates while draining; all other in-flight paths continue.
-=======
->>>>>>> d39f882 (refactor(harness): unify inline adapter; route cc through LiteLLM):harnesses/inline-adapter.mjs
   if (draining && p === "/session" && req.method === "POST") {
     res.writeHead(503, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "server is draining — no new sessions accepted" }));
@@ -569,16 +566,11 @@ const server = http.createServer(async (req, res) => {
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
-<<<<<<< HEAD:harnesses/opencode/inline-adapter.mjs
-        const modelId = body.model?.modelID;
-        if (!modelId) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "model.modelID required" })); return; }
-=======
         // Strip provider prefix (e.g. "anthropic/claude-opus-4-7" → "claude-opus-4-7") —
         // the Anthropic API and LiteLLM's Anthropic-compatible endpoint both expect the
         // bare model name without a provider prefix.
         const rawModel = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "claude-sonnet-4-6");
         const modelId = rawModel.includes("/") ? rawModel.slice(rawModel.indexOf("/") + 1) : rawModel;
->>>>>>> d39f882 (refactor(harness): unify inline adapter; route cc through LiteLLM):harnesses/inline-adapter.mjs
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`cc prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
@@ -604,26 +596,11 @@ const server = http.createServer(async (req, res) => {
     let forwardBody = raw;
     try {
       const b = JSON.parse(raw);
-<<<<<<< HEAD:harnesses/opencode/inline-adapter.mjs
       if (b && b.model && typeof b.model === "object" && typeof b.model.modelID === "string") {
         const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
         if (!hasProvider) {
           const slash = b.model.modelID.indexOf("/");
           if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
-=======
-      if (b && b.model && typeof b.model === "object") {
-        if (FORCE_MODEL) {
-          const before = `${b.model.providerID || ""}/${b.model.modelID || ""}`;
-          b.model.providerID = process.env.PROVIDER_NAME || "litellm";
-          b.model.modelID = PINNED_MODEL;
-          log(`model pin: rewrote ${before} -> ${b.model.providerID}/${PINNED_MODEL}`);
-        } else if (typeof b.model.modelID === "string") {
-          const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
-          if (!hasProvider) {
-            const slash = b.model.modelID.indexOf("/");
-            if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
-          }
->>>>>>> d39f882 (refactor(harness): unify inline adapter; route cc through LiteLLM):harnesses/inline-adapter.mjs
         }
         forwardBody = JSON.stringify(b);
       }
@@ -668,6 +645,32 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // GET /v1/models — proxy to LiteLLM gateway so the UI model switcher can
+  // load available models dynamically.
+  if (req.method === "GET" && p === "/v1/models") {
+    const base = (process.env.LITELLM_API_BASE || "").replace(/\/$/, "");
+    const apiKey = process.env.LITELLM_API_KEY || "";
+    if (!base) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "LITELLM_API_BASE not configured" }));
+      return;
+    }
+    try {
+      const upstream = `${base}/models`;
+      const r = await fetch(upstream, {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      const body = await r.text();
+      res.writeHead(r.status, { "content-type": "application/json" });
+      res.end(body);
+    } catch (e) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: `upstream error: ${e.message}` }));
+    }
+    return;
+  }
+
+  // Everything else (/event, /session/:id/*, ...) — transparent passthrough.
   const raw = ["POST", "PUT", "PATCH"].includes(req.method) ? await readBody(req) : null;
   forward(req.method, p, url.search, raw ? Buffer.from(raw) : null, res, p);
 });
