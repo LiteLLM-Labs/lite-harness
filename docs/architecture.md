@@ -115,6 +115,8 @@ Optional vars:
 | `CC_REPO_DIR` | `$HOME` | Working directory for **claude-code** sessions |
 | `LAP_BASE_URL` | `http://localhost:3000` | Only needed for LAP MCP tools (memory, issue reporter) |
 
+See [docs/configuration.md](configuration.md) for the full env-var reference (`MASTER_KEY`, etc.).
+
 ---
 
 ## REPO_DIR vs CC_REPO_DIR
@@ -135,8 +137,8 @@ The adapter sets Anthropic-SDK env vars at boot from the LiteLLM gateway vars,
 so both harnesses talk to the same gateway:
 
 ```
-LITELLM_API_BASE  →  ANTHROPIC_BASE_URL  (used by claude-code SDK)
-LITELLM_API_KEY   →  ANTHROPIC_API_KEY + ANTHROPIC_AUTH_TOKEN
+LITELLM_API_BASE  ->  ANTHROPIC_BASE_URL  (used by claude-code SDK)
+LITELLM_API_KEY   ->  ANTHROPIC_AUTH_TOKEN
 ```
 
 The `opencode serve` child picks up the same env and routes through the

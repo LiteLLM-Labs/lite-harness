@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
- * opencode inline adapter — makes attached skills LOADABLE on the single shared
- * `opencode serve` (the opencode-brain-inline harness).
+ * Unified inline adapter — single HTTP server fronting both opencode and
+ * claude-code harnesses behind the same 3-endpoint API contract.
  *
  * Why an adapter at all: opencode discovers skills from disk at session-create
  * time, and the platform delivers an agent's skills as SandboxFileSpec entries
@@ -30,6 +30,21 @@ const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
 const UP = `http://127.0.0.1:${CHILD_PORT}`;
 const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "skills");
 
+// ---------------------------------------------------------------------------
+// LiteLLM → claude-code SDK wiring.
+// The cc SDK reads ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY from process.env.
+// Override them here so the cc harness routes via LiteLLM instead of hitting
+// api.anthropic.com directly. Safe for the opencode path — opencode reads its
+// provider config from opencode.json (explicit baseURL/apiKey), not env vars.
+// ---------------------------------------------------------------------------
+if (process.env.LITELLM_API_BASE) {
+  process.env.ANTHROPIC_BASE_URL = process.env.LITELLM_API_BASE.replace(/\/+$/, "");
+}
+if (process.env.LITELLM_API_KEY) {
+  process.env.ANTHROPIC_API_KEY = process.env.LITELLM_API_KEY;
+  process.env.ANTHROPIC_AUTH_TOKEN = process.env.LITELLM_API_KEY;
+}
+
 // Bearer-token gate for all HTTP routes. When MASTER_KEY is set, every
 // request must carry `Authorization: Bearer <MASTER_KEY>`; when unset, the
 // adapter runs open (local dev). The whoami probe is the only exception so
@@ -53,12 +68,15 @@ const sessionHarness = new Map(); // id → "opencode" | "cc"
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
-// Load the claude-code SDK from its own node_modules (sibling harness dir).
+// Load the claude-code SDK from ./claude-code/node_modules/ relative to this
+// file. In Docker the adapter lives at /opt/lap/inline-adapter.mjs and the SDK
+// is copied to /opt/lap/claude-code/node_modules/. Locally the same layout
+// mirrors: harnesses/inline-adapter.mjs → harnesses/claude-code/node_modules/.
 const _require = createRequire(import.meta.url);
 let ccQuery;
 try {
   const sdkPath = _require.resolve(
-    "../claude-code/node_modules/@anthropic-ai/claude-code/sdk.mjs",
+    "./claude-code/node_modules/@anthropic-ai/claude-code/sdk.mjs",
   );
   const mod = await import(sdkPath);
   ccQuery = mod.query;
@@ -129,9 +147,6 @@ function ccHandleSdkEvent(sessionId, m, parts, msgId, turn, sink) {
       const arr = turn.blockIdxsBySdkMsgId.get(turn.currentSdkMsgId) ?? [];
       arr[inner.index] = turn.nextGlobalIdx++;
       turn.blockIdxsBySdkMsgId.set(turn.currentSdkMsgId, arr);
-      // Emit initial empty part so UI creates the slot before deltas arrive.
-      // Without this, delta events arrive before the part exists in UI state
-      // and are silently dropped by the findIndex(-1) guard.
       const blockType = inner.content_block?.type;
       if (blockType === "text" || blockType === "thinking") {
         const partID = `${turn.currentSdkMsgId}_b${inner.index}`;
@@ -218,11 +233,9 @@ async function ccRunTurn(s, userText, modelId) {
 }
 
 // Static UI bundle (Next.js export). Built via `cd ui && npm run build`.
-// Served at any GET path that resolves to a real file on disk under UI_DIST,
-// so the browser hits the same port as the harness API (single deployment).
 const UI_DIST = path.resolve(
   process.env.UI_DIST ||
-    path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "ui", "out"),
+    path.join(path.dirname(new URL(import.meta.url).pathname), "..", "ui", "out"),
 );
 const UI_DIST_EXISTS = fs.existsSync(UI_DIST);
 const MIME_BY_EXT = {
@@ -242,11 +255,6 @@ const MIME_BY_EXT = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-/**
- * Serve a static asset from UI_DIST. Returns true if a file was served (so
- * the caller stops), false if no file matched — letting the caller fall
- * through to the harness-API handlers below.
- */
 function serveStatic(urlPath, res) {
   let rel = decodeURIComponent(urlPath).replace(/^\/+/, "");
   if (rel === "") rel = "index.html";
@@ -276,13 +284,12 @@ function serveStatic(urlPath, res) {
 const DRAIN_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
 const HEALTH_INTERVAL_MS = 30_000;
-const MSG_TAIL_CHARS = 200; // how many chars of message content to log
+const MSG_TAIL_CHARS = 200;
 
-// Lifecycle state
-let draining = false;       // true once SIGTERM received
-let inFlight = 0;           // count of requests currently being handled
-let restartCount = 0;       // how many times we've restarted the child
-let currentChild = null;    // reference to the active child process
+let draining = false;
+let inFlight = 0;
+let restartCount = 0;
+let currentChild = null;
 
 function checkDrainComplete() {
   if (draining && inFlight === 0) {
@@ -291,7 +298,6 @@ function checkDrainComplete() {
   }
 }
 
-// Probe the child and return true if it responds to any HTTP request.
 function probeChild() {
   return new Promise((resolve) => {
     const req = http.get(UP + "/", { timeout: 2000 }, (res) => {
@@ -302,17 +308,13 @@ function probeChild() {
     req.on("timeout", () => { req.destroy(); resolve({ ok: false, err: "timeout" }); });
   });
 }
-// A SandboxFileSpec is a skill file when its sandbox_path lands in a skills dir
-// and is a SKILL.md. Returns the slug (the directory under skills/), else null.
-// Leading-alnum anchor rejects "." / ".." so a crafted name can't escape the dir.
+
 function skillSlug(sandboxPath) {
   if (!sandboxPath) return null;
   const m = sandboxPath.replace(/\\/g, "/").match(/\/skills\/([^/]+)\/SKILL\.md$/);
   return m && /^[a-z0-9][a-z0-9._-]*$/i.test(m[1]) ? m[1] : null;
 }
 
-// Write a session's skill files to the shared global skills dir so opencode
-// discovers them when it creates the session. Returns how many were written.
 function materializeSkills(files) {
   let written = 0;
   for (const f of files || []) {
@@ -330,7 +332,6 @@ function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
 }
 
-// Extract the tail of the last text part from a message body for logging.
 function extractMsgTail(rawBody) {
   try {
     const body = JSON.parse(rawBody || "{}");
@@ -351,7 +352,6 @@ function forward(method, urlPath, search, bodyBuf, clientRes, label) {
     const elapsed = Date.now() - t0;
     log(`← ${upRes.statusCode} ${method} ${urlPath} (${elapsed}ms)`);
     if (upRes.statusCode >= 400) {
-      // Collect and log error body so we can see what opencode said
       let errBody = "";
       upRes.on("data", (c) => { errBody += c; });
       upRes.on("end", () => {
@@ -377,21 +377,14 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
-  // JSON status probe (used by LAP/k8s readiness). Must come BEFORE the
-  // static handler so a stray `health.html` could never shadow it.
   if (p === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ harness: "opencode-brain-inline", ok: true, draining, inFlight, restartCount, ui: UI_DIST_EXISTS }));
+    res.end(JSON.stringify({ harness: "inline", ok: true, draining, inFlight, restartCount, ui: UI_DIST_EXISTS }));
     return;
   }
 
-  // Same-origin UI bundle: serve the static export at GET paths that resolve
-  // to a real file under UI_DIST. The harness API routes (POST /session,
-  // GET /event, ...) never resolve to a file on disk, so they fall through.
   if (req.method === "GET" && UI_DIST_EXISTS && serveStatic(p, res)) return;
 
-  // Whoami: cheap auth probe used by the login page. Returns 200 iff the
-  // Authorization header matches MASTER_KEY (or no MASTER_KEY is set).
   if (p === "/whoami" && req.method === "GET") {
     if (!authOk(req, url)) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -403,13 +396,52 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Everything past this point is the harness API — gate it on MASTER_KEY.
   if (!authOk(req, url)) {
     res.writeHead(401, {
       "content-type": "application/json",
       "www-authenticate": "Bearer",
     });
     res.end(JSON.stringify({ error: "unauthorized" }));
+    return;
+  }
+
+  // Gateway health probe used by the Settings dialog's "Test connection"
+  // button. Pings ${LITELLM_API_BASE}/v1/models with LITELLM_API_KEY and
+  // reports whether the gateway is reachable and how many models it serves.
+  if (p === "/_litellm/health" && req.method === "GET") {
+    const base = (process.env.LITELLM_API_BASE || "").replace(/\/+$/, "");
+    const key = process.env.LITELLM_API_KEY || "";
+    if (!base) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "LITELLM_API_BASE not set" }));
+      return;
+    }
+    const modelsUrl = base.endsWith("/v1") ? `${base}/models` : `${base}/v1/models`;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(modelsUrl, {
+        headers: key ? { authorization: `Bearer ${key}` } : {},
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      const body = await r.text();
+      if (!r.ok) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, status: r.status, error: body.slice(0, 500), base, modelsUrl }));
+        return;
+      }
+      let modelCount = 0;
+      try {
+        const j = JSON.parse(body);
+        if (Array.isArray(j?.data)) modelCount = j.data.length;
+      } catch {}
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, modelCount, base, modelsUrl }));
+    } catch (e) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(e?.message || e), base, modelsUrl }));
+    }
     return;
   }
 
@@ -420,7 +452,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Log every incoming request with path + Content-Length
   const contentLength = req.headers["content-length"] || "?";
   log(`→ ${req.method} ${p} (${contentLength} bytes)`);
 
@@ -430,8 +461,6 @@ const server = http.createServer(async (req, res) => {
   res.on("finish", decrement);
   res.on("close", decrement);
 
-  // POST /session: materialize this agent's skills before opencode creates the
-  // session, then forward unchanged (no ?directory — keep the /event bus global).
   if (p === "/session" && req.method === "POST") {
     const raw = await readBody(req);
     let body = {};
@@ -456,13 +485,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // opencode session
     const n = materializeSkills(body.files);
     if (Array.isArray(body.files)) body.files = body.files.filter((f) => !skillSlug(f.sandbox_path));
     log(`session create: materialized ${n} skill(s) title=${JSON.stringify(body.title || "")}`);
-    // Strip harness field before forwarding to opencode child
     const { harness: _h, ...forwardBody } = body;
-    // Capture the response to record the session id in our registry
     const upReq = http.request(UP + "/session", { method: "POST", headers: { "content-type": "application/json" } }, (upRes) => {
       let respData = "";
       upRes.on("data", c => respData += c);
@@ -480,7 +506,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // GET /session — merge opencode sessions + in-process cc sessions
   if (p === "/session" && req.method === "GET") {
     const ocFetch = () => new Promise((resolve) => {
       const rq = http.get(UP + "/session", (r) => {
@@ -491,7 +516,6 @@ const server = http.createServer(async (req, res) => {
       rq.on("error", () => resolve([]));
     });
     const ocSessions = await ocFetch();
-    // Tag all opencode sessions and record in registry
     const tagged = (Array.isArray(ocSessions) ? ocSessions : []).map(s => {
       sessionHarness.set(s.id, "opencode");
       return { ...s, harness: "opencode" };
@@ -505,7 +529,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // GET /session/:id — single session lookup (cc in-process, opencode proxied)
   const getOneMatch = p.match(/^\/session\/([^/]+)$/) && req.method === "GET";
   if (getOneMatch) {
     const sid = p.match(/^\/session\/([^/]+)$/)[1];
@@ -516,7 +539,6 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "claude-code" }));
       return;
     }
-    // opencode: proxy and inject harness field
     const ocReq = http.request(UP + p, { method: "GET" }, (ocRes) => {
       let d = ""; ocRes.on("data", c => d += c); ocRes.on("end", () => {
         try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, harness: "opencode" })); }
@@ -528,7 +550,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // For message/prompt_async paths: log content tail + probe child before forwarding.
   const isMessagePath = req.method === "POST" &&
     /\/session\/[^/]+\/(message|prompt_async)$/.test(p);
 
@@ -537,7 +558,6 @@ const server = http.createServer(async (req, res) => {
     const sessionIdMatch = p.match(/^\/session\/([^/]+)\//);
     const sid = sessionIdMatch?.[1];
 
-    // Route cc sessions in-process
     if (sid && sessionHarness.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
@@ -546,18 +566,20 @@ const server = http.createServer(async (req, res) => {
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
-        const modelId = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6");
+        // Strip provider prefix (e.g. "anthropic/claude-opus-4-7" → "claude-opus-4-7") —
+        // the Anthropic API and LiteLLM's Anthropic-compatible endpoint both expect the
+        // bare model name without a provider prefix.
+        const rawModel = body.model?.modelID ?? (process.env.LITELLM_DEFAULT_MODEL || "claude-sonnet-4-6");
+        const modelId = rawModel.includes("/") ? rawModel.slice(rawModel.indexOf("/") + 1) : rawModel;
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`cc prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
         ccRunTurn(cs, text, modelId).catch(e => log(`cc runTurn error id=${sid}:`, e.message));
         return;
       }
-      // prompt /message POST (sync) — not commonly used but handle it
       res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
     }
 
-    // opencode session — existing proxy logic
     const tail = extractMsgTail(raw);
     if (tail !== null) log(`message tail for ${p}: ${JSON.stringify(tail)}`);
 
@@ -569,13 +591,25 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const forwardBody = raw;
+    // Client picks the model. If they pass "anthropic/claude-x" as modelID,
+    // split it into providerID + modelID so opencode looks it up correctly.
+    let forwardBody = raw;
+    try {
+      const b = JSON.parse(raw);
+      if (b && b.model && typeof b.model === "object" && typeof b.model.modelID === "string") {
+        const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
+        if (!hasProvider) {
+          const slash = b.model.modelID.indexOf("/");
+          if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
+        }
+        forwardBody = JSON.stringify(b);
+      }
+    } catch {}
 
     forward(req.method, p, url.search, Buffer.from(forwardBody), res, p);
     return;
   }
 
-  // GET /session/:id/message — route cc sessions to in-process history
   const getMsgMatch = p.match(/^\/session\/([^/]+)\/message$/);
   if (req.method === "GET" && getMsgMatch) {
     const sid = getMsgMatch[1];
@@ -586,12 +620,8 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(cs.history));
       return;
     }
-    // opencode sessions fall through to the transparent passthrough below
   }
 
-  // GET /event — intercept to merge cc bus events with the opencode SSE stream.
-  // We open a persistent connection to the opencode child's /event and pipe its
-  // lines to the client, while also registering in ccGlobalBus for cc events.
   if (req.method === "GET" && p === "/event") {
     res.writeHead(200, {
       "content-type": "text/event-stream",
@@ -599,11 +629,9 @@ const server = http.createServer(async (req, res) => {
       connection: "keep-alive",
     });
 
-    // Register cc bus subscriber
     const ccPush = (line) => { try { res.write(line); } catch {} };
     ccGlobalBus.add(ccPush);
 
-    // Proxy the opencode child's /event stream
     const ocReq = http.get(UP + "/event", (ocRes) => {
       ocRes.on("data", (chunk) => { try { res.write(chunk); } catch {} });
       ocRes.on("end", () => { ccGlobalBus.delete(ccPush); try { res.end(); } catch {} });
@@ -647,7 +675,6 @@ const server = http.createServer(async (req, res) => {
   forward(req.method, p, url.search, raw ? Buffer.from(raw) : null, res, p);
 });
 
-// Boot the shared opencode serve as a child, then start accepting traffic.
 function startChild() {
   log(`spawning: opencode serve on :${CHILD_PORT}`);
   const child = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(CHILD_PORT)], {
@@ -660,11 +687,6 @@ function startChild() {
 async function waitChild() {
   for (let i = 0; i < 120; i++) {
     const ok = await new Promise((r) => {
-      // Ready = the child answers HTTP at all. opencode is installed unpinned, and
-      // its `/` route's status code has drifted across versions (200 -> 404/redirect);
-      // requiring exactly 200 here silently wedged the deploy ("No open ports on
-      // 0.0.0.0") because the adapter never reached server.listen(). Any HTTP
-      // response means opencode is up and serving, which is all we need.
       const rq = http.get(UP + "/", (res) => { res.resume(); r((res.statusCode ?? 0) > 0); });
       rq.on("error", () => r(false));
     });
@@ -681,7 +703,6 @@ waitChild().then((ok) => {
   log(`listening :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
   server.listen(PORT, "0.0.0.0");
 
-  // Periodic child health heartbeat
   const healthTimer = setInterval(async () => {
     const probe = await probeChild();
     if (probe.ok) {

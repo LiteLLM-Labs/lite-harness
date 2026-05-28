@@ -128,9 +128,9 @@ COPY --chown=sandbox:sandbox harnesses/opencode/report-issue-mcp.mjs /opt/lap/op
 COPY --chown=sandbox:sandbox harnesses/opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
 COPY --chown=sandbox:sandbox harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
-COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/claude-code/node_modules
+COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/lap/claude-code/node_modules
 
-COPY --chown=sandbox:sandbox harnesses/opencode/inline-adapter.mjs /opt/lap/inline-adapter.mjs
+COPY --chown=sandbox:sandbox harnesses/inline-adapter.mjs /opt/lap/inline-adapter.mjs
 
 COPY --chown=sandbox:sandbox ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out
