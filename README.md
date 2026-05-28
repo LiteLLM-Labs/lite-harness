@@ -11,7 +11,8 @@
 
 ---
 
-<img width="1200" height="630" alt="litellm_hero_v10" src="https://github.com/user-attachments/assets/f786e4a1-afc2-494a-89bf-8301a25223d4" />
+<img width="1200" height="630" alt="litellm_hero_v11" src="https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6" />
+
 
 
 ## What is lite-harness
