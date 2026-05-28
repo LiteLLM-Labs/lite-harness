@@ -122,10 +122,10 @@ async function chat(harnessName, flags) {
   }
 
   const session = await createRes.json();
-  const sid = session.id;
+  let currentSid = session.id;
 
-  console.log(`${GRAY}${harnessName} · ${url} · ${sid.slice(0, 12)} · model: ${model}${R}`);
-  console.log(`${DIM}Ctrl+C or type "exit" to quit${R}\n`);
+  console.log(`${GRAY}${harnessName} · ${url} · ${currentSid.slice(0, 12)} · model: ${model}${R}`);
+  console.log(`${DIM}Ctrl+C, "exit", or "/clear" to clear history${R}\n`);
 
   // ── SSE subscriber ──────────────────────────────────────────────────────
   const sseUrl = `${url}/event${key ? `?key=${encodeURIComponent(key)}` : ""}`;
@@ -160,7 +160,7 @@ async function chat(harnessName, flags) {
             const evSid =
               ev?.properties?.sessionID ??
               ev?.properties?.info?.sessionID;
-            if (evSid !== sid) continue;
+            if (evSid !== currentSid) continue;
             handleEvent(ev);
           } catch {}
         }
@@ -171,6 +171,28 @@ async function chat(harnessName, flags) {
         setTimeout(sseLoop, 2000);
       }
     }
+  }
+
+  async function clearSession() {
+    // Delete current session
+    await fetch(`${url}/session/${encodeURIComponent(currentSid)}`, {
+      method: "DELETE",
+      headers: authHdr,
+    }).catch(() => {});
+
+    // Create fresh session
+    const r = await fetch(`${url}/session`, {
+      method: "POST",
+      headers: { ...authHdr, "content-type": "application/json" },
+      body: JSON.stringify({ title: "CLI session", harness: harnessName }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const s = await r.json();
+    currentSid = s.id;
+    partWritten.clear();
+    streamStarted = false;
+    idleResolve = null;
+    process.stdout.write(`${GRAY}Session cleared · ${currentSid.slice(0, 12)}${R}\n\n`);
   }
 
   function handleEvent(ev) {
@@ -229,7 +251,7 @@ async function chat(harnessName, flags) {
     const done = new Promise((resolve) => { idleResolve = resolve; });
 
     const r = await fetch(
-      `${url}/session/${encodeURIComponent(sid)}/prompt_async`,
+      `${url}/session/${encodeURIComponent(currentSid)}/prompt_async`,
       {
         method: "POST",
         headers: { ...authHdr, "content-type": "application/json" },
@@ -263,6 +285,14 @@ async function chat(harnessName, flags) {
       rl.close();
       break;
     }
+    if (text === "/clear") {
+      try {
+        await clearSession();
+      } catch (e) {
+        process.stdout.write(`${RED}clear error: ${e.message}${R}\n`);
+      }
+      continue;
+    }
 
     try {
       await sendAndWait(text);
@@ -288,6 +318,7 @@ function printHelp() {
     "",
     `  ${BOLD}lite-harness login${R}                  save server URL + master key`,
     `  ${BOLD}lite-harness list${R}                   list available harnesses`,
+    `  ${BOLD}lite-harness models${R}                 list models from server`,
     `  ${BOLD}lite-harness <harness>${R}               start a chat session`,
     `    --model <id>                  override model`,
   ].join("\n"));
@@ -308,6 +339,28 @@ if (cmd === "login") {
   }
   if (config) {
     console.log(`\n${GRAY}Server: ${config.url}${R}`);
+  }
+} else if (cmd === "models") {
+  const config = loadConfig();
+  if (!config) {
+    console.error(`${RED}Not logged in. Run: lite-harness login${R}`);
+    process.exit(1);
+  }
+  const { url, key } = config;
+  const r = await fetch(`${url}/v1/models`, {
+    headers: key ? { authorization: `Bearer ${key}` } : {},
+  });
+  if (!r.ok) {
+    console.error(`${RED}HTTP ${r.status}${R}`);
+    process.exit(1);
+  }
+  const data = await r.json();
+  const ids = (data?.data ?? []).map((m) => m.id).filter(Boolean);
+  if (!ids.length) {
+    console.log(`${GRAY}No models returned.${R}`);
+  } else {
+    console.log(`${BOLD}Models (${ids.length}):${R}`);
+    for (const id of ids) console.log(`  ${id}`);
   }
 } else {
   await chat(cmd, flags);
