@@ -27,15 +27,16 @@ function saveConfig(cfg) {
 }
 
 // ── ANSI ──────────────────────────────────────────────────────────────────────
-const R     = "\x1b[0m";
-const BOLD  = "\x1b[1m";
-const DIM   = "\x1b[2m";
-const CYAN  = "\x1b[36m";
-const GREEN = "\x1b[32m";
-const GRAY  = "\x1b[90m";
-const RED   = "\x1b[31m";
-const WHITE = "\x1b[97m";
-const ERASE = "\r\x1b[K"; // move to col 0, erase line
+const R      = "\x1b[0m";
+const BOLD   = "\x1b[1m";
+const DIM    = "\x1b[2m";
+const CYAN   = "\x1b[36m";
+const GREEN  = "\x1b[32m";
+const GRAY   = "\x1b[90m";
+const RED    = "\x1b[31m";
+const WHITE  = "\x1b[97m";
+const YELLOW = "\x1b[33m";
+const ERASE  = "\r\x1b[K"; // move to col 0, erase line
 
 const SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 const BORDER = `  ${GRAY}│${R} `;
@@ -132,7 +133,24 @@ function makeRenderer() {
     atLineStart = true;
   }
 
-  return { startSpinner, stopSpinner, writeChunk, finish, error };
+  function writeTool(toolName, state) {
+    stopSpinner();
+    if (!atLineStart) { process.stdout.write("\n"); atLineStart = true; }
+    const status = state?.status ?? "running";
+    const icon = status === "completed" ? `${GREEN}✓${R}` : status === "error" ? `${RED}✗${R}` : `${YELLOW}⚙${R}`;
+    const inputSnippet = state?.input ? ` ${GRAY}${JSON.stringify(state.input).slice(0, 80)}${R}` : "";
+    process.stdout.write(`  ${icon} ${BOLD}${toolName}${R}${inputSnippet}\n`);
+    if ((status === "completed" || status === "error") && (state?.output || state?.error)) {
+      const out = state.error ?? state.output;
+      const text = typeof out === "string" ? out : JSON.stringify(out);
+      const lines = text.split("\n").slice(0, 8);
+      for (const l of lines) process.stdout.write(`    ${GRAY}${l}${R}\n`);
+      if (text.split("\n").length > 8) process.stdout.write(`    ${GRAY}…${R}\n`);
+    }
+    firstChunk = true; // next text chunk starts fresh with border
+  }
+
+  return { startSpinner, stopSpinner, writeChunk, writeTool, finish, error };
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
@@ -231,7 +249,8 @@ async function chat(harnessName, flags) {
       }
     } else if (ev.type === "message.part.updated") {
       const part = ev.properties?.part;
-      if (part?.type === "text" && part?.id && part?.text && assistantMsgIds.has(part.messageID)) {
+      if (!part?.id || !assistantMsgIds.has(part.messageID)) return;
+      if (part.type === "text" && part.text) {
         const written = partWritten.get(part.id) ?? 0;
         const tail = part.text.slice(written);
         if (tail) {
@@ -239,6 +258,9 @@ async function chat(harnessName, flags) {
           renderer.writeChunk(tail);
           partWritten.set(part.id, part.text.length);
         }
+      } else if (part.type === "tool" && part.tool) {
+        renderer.writeTool(part.tool, part.state);
+        partWritten.set(part.id, 1); // mark rendered
       }
     } else if (ev.type === "session.idle") {
       renderer.finish();

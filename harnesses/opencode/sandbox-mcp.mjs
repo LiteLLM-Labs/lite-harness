@@ -257,14 +257,13 @@ const TOOLS = [
     name: "provision",
     description:
       "Provision a new sandbox environment. Returns a confirmation when ready. " +
-      "Call with just a name — session_id is optional and only needed when the server " +
-      "is in platform mode AND a <lap_session_id> tag is present in your context. " +
-      "If you don't see that tag, omit session_id entirely and provision will work in direct mode.",
+      "In platform mode (LAP_PLATFORM_MODE=1), pass session_id — find it in the " +
+      "<lap_session_id> tag in your context. In direct mode, session_id is ignored.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Label for the sandbox (use 'main' if unsure)." },
-        session_id: { type: "string", description: "Only pass if <lap_session_id> is present in your context." },
+        session_id: { type: "string", description: "LAP session ID — platform mode only." },
       },
       required: ["name"],
     },
