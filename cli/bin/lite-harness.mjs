@@ -302,8 +302,9 @@ async function chat(harnessName, flags) {
   }
 
   while (true) {
+    // \x01..\x02 marks zero-width sequences so readline calculates cursor position correctly
     const input = await new Promise((resolve) =>
-      rl.question(`${CYAN}❯${R} `, resolve)
+      rl.question(`\x01${CYAN}\x02❯\x01${R}\x02 `, resolve)
     );
     const text = input.trim();
     if (!text) continue;

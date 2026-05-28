@@ -143,8 +143,16 @@ class DaytonaProvider extends SandboxProvider {
 
   async _getClient() {
     if (!this._client) {
-      const { Daytona } = await import("@daytona/sdk");
-      this._client = new Daytona({
+      let mod;
+      try {
+        mod = await import("@daytona/sdk");
+      } catch {
+        throw new Error(
+          "@daytona/sdk not installed. Run: npm install @daytona/sdk\n" +
+          "Note: Daytona is an optional dependency not included in the Docker image.",
+        );
+      }
+      this._client = new mod.Daytona({
         apiKey: this._apiKey,
         ...(this._apiUrl ? { apiUrl: this._apiUrl } : {}),
       });
