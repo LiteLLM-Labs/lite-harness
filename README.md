@@ -1,5 +1,5 @@
 <h1 align="center">lite-harness</h1>
-<p align="center">A unified server for using Claude Code, OpenCode, OpenAI Agents SDK. Build harness agnostic agents </p>
+<p align="center">A unified API for coding-agent harnesses. Talk to Claude Code, OpenCode, GitHub Copilot, Codex through one server.</p>
 
 <h4 align="center">
   <a href="#get-started">Get started</a> ·
