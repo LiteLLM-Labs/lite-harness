@@ -480,6 +480,26 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // GET /v1/models — proxy to LiteLLM gateway for the UI model switcher.
+  if (method === "GET" && p === "/v1/models") {
+    const base = (process.env.LITELLM_API_BASE || "").replace(/\/$/, "");
+    const apiKey = process.env.LITELLM_API_KEY || "";
+    if (!base) {
+      return json(res, 503, { error: "LITELLM_API_BASE not configured" });
+    }
+    try {
+      const r = await fetch(`${base}/models`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      const body = await r.text();
+      res.writeHead(r.status, { "content-type": "application/json" });
+      res.end(body);
+    } catch (e) {
+      json(res, 502, { error: `upstream error: ${e.message}` });
+    }
+    return;
+  }
+
   json(res, 404, { error: "not found" });
 });
 

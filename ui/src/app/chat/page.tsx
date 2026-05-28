@@ -12,15 +12,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ModelSelect } from "@/components/model-select";
 import { MessageBlock } from "@/components/message-block";
 import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
-import { getMessages, getSession, createSession, deleteSession, subscribeEvents } from "@/lib/api";
+import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels } from "@/lib/api";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 
-const MODELS = [
+const FALLBACK_MODELS = [
   "anthropic/claude-opus-4-7",
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-opus-4-1",
@@ -32,7 +33,8 @@ function ChatInner() {
   const sid = sp.get("id");
   const [messages, setMessages] = useState<HarnessMessage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [model, setModel] = useState(MODELS[0]);
+  const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
+  const [model, setModel] = useState(FALLBACK_MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code">("opencode");
@@ -50,6 +52,15 @@ function ChatInner() {
   }, [sid]);
 
   const router = useRouter();
+
+  useEffect(() => {
+    listModels().then((fetched) => {
+      if (fetched.length > 0) {
+        setModels(fetched);
+        setModel((prev) => (fetched.includes(prev) ? prev : fetched[0]));
+      }
+    }).catch(() => {});
+  }, []);
 
   // Fetch session metadata to get the locked harness
   useEffect(() => {
@@ -210,18 +221,7 @@ function ChatInner() {
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] text-muted-foreground">model</span>
-              <Select value={model} onValueChange={(v) => v && setModel(v)}>
-              <SelectTrigger className="h-8 text-xs w-[220px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MODELS.map((m) => (
-                  <SelectItem key={m} value={m} className="text-xs font-mono">
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <ModelSelect value={model} models={models} onValueChange={setModel} />
             </div>
             <Button
               variant={inspectorOpen ? "default" : "outline"}

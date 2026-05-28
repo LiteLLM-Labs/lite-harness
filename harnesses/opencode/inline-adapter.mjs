@@ -569,27 +569,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const FORCE_MODEL = process.env.FORCE_MODEL !== "0";
-    const PINNED_MODEL = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
-    let forwardBody = raw;
-    try {
-      const b = JSON.parse(raw);
-      if (b && b.model && typeof b.model === "object") {
-        if (FORCE_MODEL) {
-          const before = `${b.model.providerID || ""}/${b.model.modelID || ""}`;
-          b.model.providerID = "litellm";
-          b.model.modelID = PINNED_MODEL;
-          log(`model pin: rewrote ${before} -> litellm/${PINNED_MODEL}`);
-        } else if (typeof b.model.modelID === "string") {
-          const hasProvider = typeof b.model.providerID === "string" && b.model.providerID.length > 0;
-          if (!hasProvider) {
-            const slash = b.model.modelID.indexOf("/");
-            if (slash > 0) { b.model.providerID = b.model.modelID.slice(0, slash); b.model.modelID = b.model.modelID.slice(slash + 1); }
-          }
-        }
-        forwardBody = JSON.stringify(b);
-      }
-    } catch {}
+    const forwardBody = raw;
 
     forward(req.method, p, url.search, Buffer.from(forwardBody), res, p);
     return;
@@ -634,6 +614,31 @@ const server = http.createServer(async (req, res) => {
       ccGlobalBus.delete(ccPush);
       ocReq.destroy();
     });
+    return;
+  }
+
+  // GET /v1/models — proxy to LiteLLM gateway so the UI model switcher can
+  // load available models dynamically.
+  if (req.method === "GET" && p === "/v1/models") {
+    const base = (process.env.LITELLM_API_BASE || "").replace(/\/$/, "");
+    const apiKey = process.env.LITELLM_API_KEY || "";
+    if (!base) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "LITELLM_API_BASE not configured" }));
+      return;
+    }
+    try {
+      const upstream = `${base}/models`;
+      const r = await fetch(upstream, {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      const body = await r.text();
+      res.writeHead(r.status, { "content-type": "application/json" });
+      res.end(body);
+    } catch (e) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: `upstream error: ${e.message}` }));
+    }
     return;
   }
 
