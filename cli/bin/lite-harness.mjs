@@ -311,7 +311,7 @@ async function chat(harnessName, flags) {
 const { flags, positional } = parseArgs(process.argv.slice(2));
 const [cmd] = positional;
 
-const HARNESSES = ["opencode", "claude-code", "github-copilot"];
+const HARNESSES = ["opencode", "claude-code", "github-copilot", "codex"];
 
 function printHelp() {
   console.log([
