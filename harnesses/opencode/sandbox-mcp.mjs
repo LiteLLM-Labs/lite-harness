@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 /**
- * Two modes:
- * 1. Platform delegation: SESSION_ID + LAP_BASE_URL set → calls platform API
- * 2. Direct E2B fallback: SESSION_ID missing (inline) → E2B direct + vault proxy
+ * Two modes, selected by LAP_PLATFORM_MODE env var:
+ * 1. Direct E2B (default, LAP_PLATFORM_MODE unset): provisions sandboxes via E2B directly.
+ *    Required: E2B_API_KEY
+ *    Optional: E2B_TEMPLATE, VAULT_URL, VAULT_PROXY_TOKEN
+ * 2. Platform (LAP_PLATFORM_MODE=1): delegates to the LAP platform API, which injects
+ *    agent-specific credentials into the sandbox automatically.
+ *    Required: LAP_BASE_URL, LAP_AUTH_TOKEN (or MASTER_KEY), SESSION_ID (or passed per-call)
  */
 
 import { Sandbox } from "e2b";
@@ -10,6 +14,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+const PLATFORM_MODE = !!process.env.LAP_PLATFORM_MODE;
 const BASE = process.env.LAP_BASE_URL;
 const ENV_SESSION_ID = process.env.SESSION_ID;
 const TOKEN = process.env.LAP_AUTH_TOKEN ?? process.env.MASTER_KEY;
@@ -28,7 +33,7 @@ const SANDBOX_TIMEOUT_MS = 1_800_000;
 // genuinely hung command running much longer.
 const EXECUTE_TIMEOUT_MS = 180_000;
 
-const USE_DIRECT = !ENV_SESSION_ID;
+const USE_DIRECT = !PLATFORM_MODE;
 const sandboxes = new Map();
 // Sandboxes provisioned via the platform path (session_id passed at provision time).
 // Keyed by sandbox name → platform session_id so execute/read_file can route correctly.
@@ -41,7 +46,7 @@ const server = new Server({ name: "opencode-sandbox", version: "1.0.0" }, { capa
 const TOOLS = [
   {
     name: "provision",
-    description: "Provision a new sandbox environment. Returns a confirmation message when the sandbox is ready. IMPORTANT: always pass session_id so the platform injects your agent's env vars (e.g. GITHUB_TOKEN) into the sandbox. Find the session_id as the UUID text content of the <lap_session_id> tag in your conversation context (e.g. if context contains '<lap_session_id>abc-123</lap_session_id>' then session_id is 'abc-123').",
+    description: "Provision a new sandbox environment. Returns a confirmation when ready. In platform mode (LAP_PLATFORM_MODE=1), pass session_id so the platform injects your agent's credentials — find it in the <lap_session_id> tag in your context. In direct E2B mode (default), session_id is ignored.",
     inputSchema: {
       type: "object",
       properties: {
@@ -119,11 +124,23 @@ function buildProxyUrl() {
 
 async function provision({ name, project_id, session_id: callSessionId }) {
   const effectiveSid = ENV_SESSION_ID || callSessionId;
-  // Use platform path when a session_id is available and LAP_BASE_URL is set.
-  // This routes through e2b.ts which injects agent env var stubs (e.g. GITHUB_TOKEN)
-  // so the vault proxy can swap them for real values on HTTPS egress.
-  if (USE_DIRECT && !(effectiveSid && BASE)) {
-    if (!E2B_API_KEY) return textResult("provision failed: E2B_API_KEY not set", true);
+
+  if (USE_DIRECT) {
+    // Direct E2B mode — credentials check
+    if (!E2B_API_KEY) {
+      return textResult(
+        "provision failed: direct E2B mode requires E2B_API_KEY.\n" +
+        "Set the following env vars and restart:\n" +
+        "  E2B_API_KEY    — your E2B API key (required)\n" +
+        "  E2B_TEMPLATE   — sandbox template name (optional, default: \"base\")\n" +
+        "  VAULT_URL      — vault proxy URL for credential injection (optional)\n" +
+        "Or switch to platform mode by setting LAP_PLATFORM_MODE=1 with:\n" +
+        "  LAP_BASE_URL   — platform base URL\n" +
+        "  LAP_AUTH_TOKEN — platform auth token\n" +
+        "  SESSION_ID     — your LAP session ID",
+        true,
+      );
+    }
     const existing = sandboxes.get(name);
     if (existing) { try { await existing.kill(); } catch {} }
     try {
@@ -139,6 +156,19 @@ async function provision({ name, project_id, session_id: callSessionId }) {
     } catch (e) {
       return textResult(`provision error: ${e instanceof Error ? e.message : String(e)}`, true);
     }
+  }
+  // Platform mode — credentials check
+  const missingPlatform = [];
+  if (!BASE)          missingPlatform.push("LAP_BASE_URL   — platform base URL");
+  if (!TOKEN)         missingPlatform.push("LAP_AUTH_TOKEN — platform auth token");
+  if (!effectiveSid)  missingPlatform.push("SESSION_ID     — your LAP session ID (or pass session_id to provision)");
+  if (missingPlatform.length) {
+    return textResult(
+      "provision failed: platform mode (LAP_PLATFORM_MODE=1) requires:\n" +
+      missingPlatform.map(s => `  ${s}`).join("\n") + "\n" +
+      "Or unset LAP_PLATFORM_MODE to use direct E2B mode (requires E2B_API_KEY).",
+      true,
+    );
   }
   try {
     const res = await fetch(`${BASE}/api/v1/managed_agents/sessions/${effectiveSid}/sandbox/provision`, {
