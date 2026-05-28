@@ -111,6 +111,17 @@ WORKDIR /cc
 COPY harnesses/claude-code/package.json ./package.json
 RUN npm install --omit=dev --no-audit --no-fund
 
+# ===================================================================== UI build
+# Next.js static export — produces ui/out/. Lockfile-first so the dep-install
+# layer caches; source-copy is a separate layer so edits to ui/src don't blow
+# the npm cache.
+FROM node:20-bookworm-slim AS ui-builder
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY ui/ ./
+RUN npm run build
+
 # ==================================================================== runtime
 FROM base
 
@@ -133,7 +144,7 @@ COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/lap/claude-c
 
 COPY --chown=sandbox:sandbox harnesses/inline-adapter.mjs /opt/lap/inline-adapter.mjs
 
-COPY --chown=sandbox:sandbox ui/out /opt/lap/ui/out
+COPY --from=ui-builder --chown=sandbox:sandbox /ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out
 
 COPY --chown=sandbox:sandbox harnesses/opencode/entrypoint.sh /entrypoint.sh
