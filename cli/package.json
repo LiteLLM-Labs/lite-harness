@@ -1,0 +1,12 @@
+{
+  "name": "lite-harness",
+  "version": "1.0.0",
+  "description": "CLI for lite-harness agent platform",
+  "type": "module",
+  "bin": {
+    "lite-harness": "./bin/lite-harness.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
