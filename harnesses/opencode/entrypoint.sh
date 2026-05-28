@@ -95,7 +95,8 @@ ${MCP_BLOCK}
       "npm": "@ai-sdk/anthropic",
       "options": {
         "baseURL": "${INFERENCE_BASE}",
-        "apiKey": "${INFERENCE_KEY}"
+        "apiKey": "${INFERENCE_KEY}",
+        "chunkTimeout": 60000
       },
       "models": ${MODELS_JSON}
     }
