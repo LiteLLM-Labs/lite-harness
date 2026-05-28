@@ -88,14 +88,18 @@ data: {"type":"message.completed","properties":{"sessionID":"ses_..."}}
 You need a LiteLLM gateway URL and a virtual key. If you don't have one, run [BerriAI/litellm](https://github.com/BerriAI/litellm) first.
 
 ```bash
+# Generate a master key so you can paste it on the login page
+export MASTER_KEY=$(openssl rand -hex 32)
+echo "MASTER_KEY: $MASTER_KEY"
+
 docker run -p 4096:4096 \
   -e LITELLM_API_BASE=https://your-litellm-gateway \
   -e LITELLM_API_KEY=sk-... \
-  -e MASTER_KEY=$(openssl rand -hex 32) \
+  -e MASTER_KEY="$MASTER_KEY" \
   ghcr.io/litellm-labs/lite-harness:latest
 ```
 
-Open [localhost:4096](http://localhost:4096), paste the `MASTER_KEY` on the login page, then click the gear icon in the sidebar and hit **Test connection** to confirm the gateway is reachable.
+Open [localhost:4096](http://localhost:4096), paste the `MASTER_KEY` (the echoed value above) on the login page, then click the gear icon in the sidebar and hit **Test connection** to confirm the gateway is reachable.
 
 Full env-var reference: [docs/configuration.md](docs/configuration.md).
 
