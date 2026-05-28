@@ -84,7 +84,7 @@ export async function listSessions(): Promise<OpencodeSession[]> {
   );
 }
 
-export async function createSession(title?: string, harness?: "opencode" | "claude-code"): Promise<OpencodeSession> {
+export async function createSession(title?: string, harness?: "opencode" | "claude-code" | "github-copilot"): Promise<OpencodeSession> {
   const res = await req("/session", {
     method: "POST",
     headers: { "content-type": "application/json" },

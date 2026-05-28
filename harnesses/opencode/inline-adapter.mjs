@@ -71,6 +71,142 @@ try {
 const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
 const ccGlobalBus = new Set(); // SSE response writers for cc events
 
+// In-process state for github-copilot sessions.
+const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers}
+const copilotGlobalBus = new Set(); // SSE response writers
+
+// Token cache for GitHub Copilot native mode (tokens expire ~30 min)
+let _copilotToken = null;
+let _copilotTokenExpiry = 0;
+
+const COPILOT_NATIVE_HEADERS = {
+  "Copilot-Integration-Id": "vscode-chat",
+  "Editor-Version": "vscode/1.85.0",
+  "Editor-Plugin-Version": "copilot-chat/0.12.0",
+  "Openai-Organization": "github-copilot",
+};
+
+function copilotEmit(sessionId, type, props) {
+  const ev = { id: `evt_${randomUUID().replace(/-/g,"").slice(0,20)}`, type, properties: { ...props, sessionID: sessionId } };
+  const line = `data: ${JSON.stringify(ev)}\n\n`;
+  const s = copilotSessions.get(sessionId);
+  if (s) for (const cb of s.busSubscribers) { try { cb(line); } catch {} }
+  for (const cb of copilotGlobalBus) { try { cb(line); } catch {} }
+}
+
+// Returns { url, key, extraHeaders } for the chat completions endpoint.
+// BYOK mode (LITELLM_API_BASE set): routes to LiteLLM proxy — no GitHub auth needed.
+// Native mode (GITHUB_TOKEN set): exchanges GitHub token for a short-lived Copilot token.
+async function getCopilotEndpoint() {
+  const byokBase = process.env.LITELLM_API_BASE;
+  if (byokBase) {
+    return {
+      url: byokBase.replace(/\/+$/, "") + "/chat/completions",
+      key: process.env.LITELLM_API_KEY || "",
+      extraHeaders: {},
+    };
+  }
+  // Native GitHub Copilot: exchange GitHub OAuth token for short-lived Copilot token
+  if (_copilotToken && Date.now() < _copilotTokenExpiry - 60_000) {
+    return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
+  }
+  const ghToken = process.env.GITHUB_TOKEN;
+  if (!ghToken) throw new Error("GITHUB_TOKEN not set and LITELLM_API_BASE not configured");
+  const resp = await fetch("https://api.github.com/copilot_internal/v2/token", {
+    headers: { "Authorization": `token ${ghToken}`, "Accept": "application/json", "User-Agent": "lite-harness/1.0" },
+  });
+  if (!resp.ok) throw new Error(`Copilot token exchange failed: ${resp.status} ${resp.statusText}`);
+  const data = await resp.json();
+  _copilotToken = data.token;
+  _copilotTokenExpiry = (data.expires_at || 0) * 1000;
+  log("github-copilot token refreshed");
+  return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
+}
+
+async function copilotRunTurn(s, userText, modelId) {
+  const startedAt = Date.now();
+
+  // Build OpenAI messages from session history before adding the new user turn
+  const messages = [];
+  for (const msg of s.history) {
+    const text = (msg.parts || []).filter(p => p.type === "text").map(p => p.text).join("\n");
+    if (text) messages.push({ role: msg.info.role === "assistant" ? "assistant" : "user", content: text });
+  }
+  messages.push({ role: "user", content: userText });
+
+  // Record user message in history
+  const userMsgId = `msg_${randomUUID().replace(/-/g,"").slice(0,20)}`;
+  const userPart = { id: `${userMsgId}_p0`, messageID: userMsgId, type: "text", text: userText };
+  const userMsg = { info: { id: userMsgId, role: "user", time: { created: startedAt, completed: startedAt } }, parts: [userPart] };
+  s.history.push(userMsg);
+  copilotEmit(s.id, "message.updated", { info: userMsg.info });
+  copilotEmit(s.id, "message.part.updated", { messageID: userMsgId, part: userPart });
+
+  const asstMsgId = `msg_${randomUUID().replace(/-/g,"").slice(0,20)}`;
+  const partID = `${asstMsgId}_b0`;
+  let totalText = "";
+  let lastError;
+
+  copilotEmit(s.id, "message.updated", { info: { id: asstMsgId, role: "assistant", time: { created: startedAt } } });
+  // Emit empty part BEFORE first delta so UI creates the slot
+  copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: { id: partID, messageID: asstMsgId, type: "text", text: "" } });
+
+  const model = modelId || process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
+  try {
+    const endpoint = await getCopilotEndpoint();
+    const resp = await fetch(endpoint.url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${endpoint.key}`,
+        "Content-Type": "application/json",
+        ...endpoint.extraHeaders,
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
+    }
+    // Parse SSE stream
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") break;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta?.content ?? "";
+          if (delta) {
+            totalText += delta;
+            copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta });
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastError = { name: "CopilotError", data: { message: msg.slice(0, 500) } };
+    log(`copilot turn error id=${s.id}: ${msg}`);
+  }
+
+  const completedAt = Date.now();
+  const textPart = { id: partID, messageID: asstMsgId, type: "text", text: totalText };
+  const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "github-copilot", modelID: model, ...(lastError ? { error: lastError } : { finish: "stop" }) };
+  s.history.push({ info: fullInfo, parts: [textPart] });
+  s.time.updated = completedAt;
+  copilotEmit(s.id, "message.updated", { info: fullInfo });
+  copilotEmit(s.id, "session.idle", {});
+  log(`copilot turn done id=${s.id} model=${modelId} chars=${totalText.length}`);
+}
+
 function ccEmit(sessionId, type, props) {
   const ev = { id: `evt_${randomUUID().replace(/-/g,"").slice(0,20)}`, type, properties: { ...props, sessionID: sessionId } };
   const line = `data: ${JSON.stringify(ev)}\n\n`;
@@ -209,7 +345,7 @@ async function ccRunTurn(s, userText, modelId) {
   } finally { s.abortController = null; }
 
   const completedAt = Date.now();
-  const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, tokens: usage, cost: totalCost, ...(lastError ? { error: lastError } : { finish: "stop" }) };
+  const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "claude-code", modelID: modelId, tokens: usage, cost: totalCost, ...(lastError ? { error: lastError } : { finish: "stop" }) };
   s.history.push({ info: fullInfo, parts });
   s.time.updated = completedAt;
   ccEmit(s.id, "message.updated", { info: fullInfo });
@@ -437,7 +573,24 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     try { body = JSON.parse(raw || "{}"); } catch {}
 
-    const harness = body.harness === "claude-code" ? "cc" : "opencode";
+    const harness = body.harness === "claude-code" ? "cc" : body.harness === "github-copilot" ? "github-copilot" : "opencode";
+
+    if (harness === "github-copilot") {
+      if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "github-copilot requires LITELLM_API_BASE (BYOK) or GITHUB_TOKEN (native Copilot)" }));
+        return;
+      }
+      const id = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const now = Date.now();
+      const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set() };
+      copilotSessions.set(id, s);
+      sessionHarness.set(id, "github-copilot");
+      log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "github-copilot" }));
+      return;
+    }
 
     if (harness === "cc") {
       if (!ccQuery) {
@@ -499,7 +652,10 @@ const server = http.createServer(async (req, res) => {
     const ccList = [...ccSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, harness: "claude-code",
     }));
-    const all = [...tagged, ...ccList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    const copilotList = [...copilotSessions.values()].map(s => ({
+      id: s.id, title: s.title, time: s.time, harness: "github-copilot",
+    }));
+    const all = [...tagged, ...ccList, ...copilotList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(all));
     return;
@@ -514,6 +670,13 @@ const server = http.createServer(async (req, res) => {
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "claude-code" }));
+      return;
+    }
+    if (sessionHarness.get(sid) === "github-copilot") {
+      const cs = copilotSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "github-copilot" }));
       return;
     }
     // opencode: proxy and inject harness field
@@ -554,6 +717,25 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       // prompt /message POST (sync) — not commonly used but handle it
+      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
+    }
+
+    // Route github-copilot sessions in-process
+    if (sid && sessionHarness.get(sid) === "github-copilot") {
+      const cs = copilotSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
+
+      if (p.endsWith("/prompt_async")) {
+        let body = {};
+        try { body = JSON.parse(raw || "{}"); } catch {}
+        const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
+        const modelId = body.model?.modelID ?? (process.env.GITHUB_COPILOT_MODEL || "gpt-4o");
+        if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
+        log(`copilot prompt_async id=${sid} model=${modelId}`);
+        res.writeHead(204); res.end();
+        copilotRunTurn(cs, text, modelId).catch(e => log(`copilot runTurn error id=${sid}:`, e.message));
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
     }
 
@@ -606,6 +788,13 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(cs.history));
       return;
     }
+    if (sessionHarness.get(sid) === "github-copilot") {
+      const cs = copilotSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(cs.history));
+      return;
+    }
     // opencode sessions fall through to the transparent passthrough below
   }
 
@@ -622,16 +811,19 @@ const server = http.createServer(async (req, res) => {
     // Register cc bus subscriber
     const ccPush = (line) => { try { res.write(line); } catch {} };
     ccGlobalBus.add(ccPush);
+    const copilotPush = (line) => { try { res.write(line); } catch {} };
+    copilotGlobalBus.add(copilotPush);
 
     // Proxy the opencode child's /event stream
     const ocReq = http.get(UP + "/event", (ocRes) => {
       ocRes.on("data", (chunk) => { try { res.write(chunk); } catch {} });
-      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); try { res.end(); } catch {} });
+      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); try { res.end(); } catch {} });
     });
-    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); try { res.end(); } catch {} });
+    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); try { res.end(); } catch {} });
 
     req.on("close", () => {
       ccGlobalBus.delete(ccPush);
+      copilotGlobalBus.delete(copilotPush);
       ocReq.destroy();
     });
     return;

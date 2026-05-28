@@ -170,9 +170,9 @@ git commit -m "feat(harness): add <name>"
 ## Checklist
 
 - [ ] `harnesses/<name>/package.json` exists
-- [ ] `harnesses/<name>/node_modules/` installed locally (`npm install`)
-- [ ] Dockerfile has a `<name>-deps` build stage
-- [ ] Dockerfile copies node_modules to `/opt/<name>/node_modules/` in runtime stage
+- [ ] `harnesses/<name>/node_modules/` installed locally (`npm install`) — skip if no deps
+- [ ] Dockerfile has a `<name>-deps` build stage — skip if no npm deps (use native fetch instead)
+- [ ] Dockerfile copies node_modules to `/opt/<name>/node_modules/` in runtime stage — skip if no deps
 - [ ] Adapter loads SDK with try/catch, logs failure gracefully
 - [ ] `POST /session {"harness":"<name>"}` returns `503` when SDK unavailable, `200` when available
 - [ ] `prompt_async` routes to your in-process handler
@@ -181,3 +181,60 @@ git commit -m "feat(harness): add <name>"
 - [ ] Your bus registered in the `/event` multiplexer
 - [ ] UI types updated, `SelectItem` added, UI rebuilt
 - [ ] Tested locally with `start-local.sh` before pushing
+
+---
+
+## BYOK / LiteLLM Proxy Support
+
+Harnesses that call an LLM API should support BYOK (Bring Your Own Key) so users can route
+traffic through a LiteLLM proxy instead of hitting the upstream provider directly.
+
+### Pattern
+
+Read two standard env vars before constructing your endpoint:
+
+```js
+const byokBase = process.env.LITELLM_API_BASE;  // e.g. http://localhost:4000/v1
+const byokKey  = process.env.LITELLM_API_KEY;   // your LiteLLM master or virtual key
+
+if (byokBase) {
+  // BYOK mode — route to LiteLLM, no provider auth needed
+  url = byokBase.replace(/\/+$/, "") + "/chat/completions";
+  key = byokKey || "";
+} else {
+  // Native mode — use provider-specific auth (token exchange, etc.)
+  url  = "https://api.provider.com/chat/completions";
+  key  = await getProviderToken();
+}
+```
+
+### Session guard
+
+Return `503` only when **neither** BYOK nor native credentials are present:
+
+```js
+if (!process.env.LITELLM_API_BASE && !process.env.PROVIDER_TOKEN) {
+  res.writeHead(503);
+  res.end(JSON.stringify({ error: "<name> requires LITELLM_API_BASE (BYOK) or PROVIDER_TOKEN (native)" }));
+  return;
+}
+```
+
+### Usage
+
+```bash
+# BYOK — point at a running LiteLLM proxy
+export LITELLM_API_BASE=http://localhost:4000/v1
+export LITELLM_API_KEY=sk-...
+# select the harness in the UI — no upstream provider credentials needed
+
+# Native — use the upstream provider directly
+export GITHUB_TOKEN=ghp_...     # (example for github-copilot harness)
+```
+
+### Why this matters
+
+- Teams running LiteLLM already have model routing, rate limits, and audit logs configured.
+- BYOK lets any harness benefit from that without code changes per provider.
+- `LITELLM_API_BASE` and `LITELLM_API_KEY` are already set in many deployments, so
+  harnesses that check them "just work" without additional configuration.

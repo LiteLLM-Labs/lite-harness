@@ -111,7 +111,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{title}</div>
                 <div className="font-mono text-[10px] text-muted-foreground truncate">
-                  {s.harness === "claude-code" ? "cc" : "oc"} · {short} · {timeAgo(s.time?.created)}
+                  {s.harness === "claude-code" ? "cc" : s.harness === "github-copilot" ? "gh" : "oc"} · {short} · {timeAgo(s.time?.created)}
                 </div>
               </div>
               <button

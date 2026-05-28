@@ -35,7 +35,7 @@ function ChatInner() {
   const [model, setModel] = useState(MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code">("opencode");
+  const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code" | "github-copilot">("opencode");
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
 
@@ -55,12 +55,12 @@ function ChatInner() {
   useEffect(() => {
     if (!sid) return;
     getSession(sid).then(s => {
-      if (s.harness === "claude-code" || s.harness === "opencode") setSessionHarness(s.harness);
+      if (s.harness === "claude-code" || s.harness === "opencode" || s.harness === "github-copilot") setSessionHarness(s.harness);
     }).catch(() => {});
   }, [sid]);
 
   // On harness change before first message: delete current empty session, create new, redirect
-  const onHarnessChange = useCallback(async (next: "opencode" | "claude-code") => {
+  const onHarnessChange = useCallback(async (next: "opencode" | "claude-code" | "github-copilot") => {
     if (!sid || next === sessionHarness) return;
     await deleteSession(sid);
     const s = await createSession(undefined, next);
@@ -197,13 +197,14 @@ function ChatInner() {
               {messages && messages.length > 0 ? (
                 <span className="h-8 px-3 flex items-center text-xs font-mono border border-border rounded-md bg-muted text-muted-foreground">{sessionHarness}</span>
               ) : (
-                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v as "opencode" | "claude-code")}>
+                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v as "opencode" | "claude-code" | "github-copilot")}>
                   <SelectTrigger className="h-8 text-xs w-[140px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
                     <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
+                    <SelectItem value="github-copilot" className="text-xs font-mono">github copilot</SelectItem>
                   </SelectContent>
                 </Select>
               )}

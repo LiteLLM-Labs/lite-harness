@@ -1,7 +1,7 @@
 export interface OpencodeSession {
   id: string;
   title?: string;
-  harness?: "opencode" | "claude-code";
+  harness?: "opencode" | "claude-code" | "github-copilot";
   time?: { created: number; updated?: number };
   [k: string]: unknown;
 }
