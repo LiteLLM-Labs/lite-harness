@@ -172,7 +172,16 @@ function AssistantBlock({
           </div>
         )
       ) : (
-        visibleParts.map((p, i) => <PartBlock key={i} part={p} />)
+        <>
+          {visibleParts.map((p, i) => <PartBlock key={i} part={p} />)}
+          {inProgress && (
+            <div className="flex items-center gap-1.5 pt-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:300ms]" />
+            </div>
+          )}
+        </>
       )}
 
       {failed && msg.error && (

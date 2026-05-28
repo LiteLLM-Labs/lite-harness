@@ -20,6 +20,7 @@ import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
 import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels } from "@/lib/api";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
+import type { Frame } from "@/components/inspector-panel";
 
 const FALLBACK_MODELS = [
   "anthropic/claude-opus-4-7",
@@ -37,6 +38,7 @@ function ChatInner() {
   const [model, setModel] = useState(FALLBACK_MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const eventBufferRef = useRef<Frame[]>([]);
   const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code" | "github-copilot">("opencode");
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
@@ -85,6 +87,11 @@ function ChatInner() {
       sessionId: sid,
       onEvent: (raw) => {
         const ev = raw as { type: string; properties: Record<string, unknown> };
+        // Buffer every event so inspector can replay history on open
+        eventBufferRef.current = [
+          ...eventBufferRef.current.slice(-499),
+          { ts: Date.now(), ev: ev as Frame["ev"] },
+        ];
 
         if (ev.type === "message.updated") {
           const info = ev.properties.info as MessageInfo;
@@ -121,7 +128,7 @@ function ChatInner() {
             field: string;
             delta: string;
           };
-          if (field !== "text") return;
+          if (field !== "text" && field !== "reasoning") return;
           setMessages((prev) => {
             if (!prev) return prev;
             const idx = prev.findIndex((m) => m.info.id === messageID);
@@ -272,6 +279,7 @@ function ChatInner() {
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         sessionId={sid}
+        initialFrames={eventBufferRef.current}
       />
     </div>
   );

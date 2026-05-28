@@ -8,7 +8,7 @@ interface OcEvent {
   properties?: Record<string, unknown>;
 }
 
-interface Frame {
+export interface Frame {
   ts: number;
   ev: OcEvent;
 }
@@ -119,10 +119,12 @@ export function InspectorPanel({
   open,
   onClose,
   sessionId,
+  initialFrames = [],
 }: {
   open: boolean;
   onClose: () => void;
   sessionId: string;
+  initialFrames?: Frame[];
 }) {
   const [frames, setFrames] = useState<Frame[]>([]);
   const [hideHeartbeat, setHideHeartbeat] = useState(true);
@@ -130,6 +132,8 @@ export function InspectorPanel({
 
   useEffect(() => {
     if (!open) return;
+    // Seed with buffered events from before the panel opened
+    setFrames(initialFrames.slice(-500));
     let es: EventSource | null = null;
     try {
       es = new EventSource("/event");
@@ -151,7 +155,8 @@ export function InspectorPanel({
         /* noop */
       }
     };
-  }, [open]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]); // intentionally omit initialFrames — snapshot on open only
 
   useEffect(() => {
     const el = scrollRef.current;
