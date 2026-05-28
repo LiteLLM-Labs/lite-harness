@@ -1,6 +1,5 @@
 <h1 align="center">lite-harness</h1>
-<p align="center">One server. Any coding agent. Any model.</p>
-<p align="center">Unified API in front of opencode and claude-code. Streamed events, built-in UI, master-key auth, LiteLLM gateway connection test in the UI.</p>
+<p align="center">A unified server for using Claude Code, OpenCode, OpenAI Agents SDK. Build harness agnostic agents </p>
 
 <h4 align="center">
   <a href="#get-started">Get started</a> ·
