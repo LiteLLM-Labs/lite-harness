@@ -11,9 +11,6 @@
 
 ---
 
-<img width="1141" height="928" alt="Gemini_Generated_Image_8e08ug8e08ug8e08" src="https://github.com/user-attachments/assets/ba3d0d68-c6ea-42aa-a6e6-31d84d971618" />
-
-
 
 ## What is lite-harness
 
