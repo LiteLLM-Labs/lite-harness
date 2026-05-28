@@ -99,4 +99,4 @@ EOF
 
 echo "[start-local] wrote opencode.json"
 echo "[start-local] starting inline adapter on :${PORT}"
-exec node "$HARNESS_DIR/inline-adapter.mjs"
+exec node "$HARNESS_DIR/../inline-adapter.mjs"
