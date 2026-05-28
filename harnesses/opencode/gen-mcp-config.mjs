@@ -6,7 +6,8 @@
  * ignores the per-session `mcp_servers` the platform sends. So this builds the
  * MCP config at boot from two sources:
  *
- *   1. The E2B sandbox MCP (local stdio) — when E2B_API_KEY is set.
+ *   1. The sandbox MCP (local stdio) — when E2B_API_KEY or DAYTONA_API_KEY is set,
+ *      or LAP_PLATFORM_MODE=1 is set for platform-delegated provisioning.
  *   2. The LAP memory MCP (local stdio) — when memory env is configured
  *      (LAP_BASE_URL + AGENT_ID + an access token). Exposes save_memory /
  *      search_memory, same tools the claude-agent-sdk harness gets.
@@ -25,21 +26,35 @@ const out = {};
 // In local dev: set LAP_MCP_DIR to the harness directory.
 const MCP_DIR = (process.env.LAP_MCP_DIR || "/opt/lap/opencode-sandbox-mcp").replace(/\/+$/, "");
 
-// --- E2B sandbox MCP (local) ---
-const e2bKey = process.env.E2B_API_KEY;
-if (e2bKey) {
+// --- Sandbox MCP (local) — E2B, Daytona, or platform-delegated ---
+const sandboxActive =
+  process.env.E2B_API_KEY ||
+  process.env.DAYTONA_API_KEY ||
+  process.env.LAP_PLATFORM_MODE;
+if (sandboxActive) {
   out.sandbox = {
     type: "local",
     command: ["node", `${MCP_DIR}/sandbox-mcp.mjs`],
     enabled: true,
     environment: {
-      E2B_API_KEY: e2bKey,
-      E2B_TEMPLATE: process.env.E2B_TEMPLATE || "base",
-      ...(process.env.LAP_BASE_URL && { LAP_BASE_URL: process.env.LAP_BASE_URL }),
-      ...(process.env.LAP_AUTH_TOKEN && { LAP_AUTH_TOKEN: process.env.LAP_AUTH_TOKEN }),
-      ...(process.env.MASTER_KEY && { MASTER_KEY: process.env.MASTER_KEY }),
-      ...(process.env.SESSION_ID && { SESSION_ID: process.env.SESSION_ID }),
-      ...(process.env.VAULT_URL && { VAULT_URL: process.env.VAULT_URL }),
+      // Mode
+      ...(process.env.LAP_PLATFORM_MODE && { LAP_PLATFORM_MODE: process.env.LAP_PLATFORM_MODE }),
+      ...(process.env.SANDBOX_PROVIDER  && { SANDBOX_PROVIDER:  process.env.SANDBOX_PROVIDER }),
+      // E2B
+      ...(process.env.E2B_API_KEY  && { E2B_API_KEY:  process.env.E2B_API_KEY }),
+      ...(process.env.E2B_TEMPLATE && { E2B_TEMPLATE: process.env.E2B_TEMPLATE }),
+      // Daytona
+      ...(process.env.DAYTONA_API_KEY  && { DAYTONA_API_KEY:  process.env.DAYTONA_API_KEY }),
+      ...(process.env.DAYTONA_API_URL  && { DAYTONA_API_URL:  process.env.DAYTONA_API_URL }),
+      ...(process.env.DAYTONA_SNAPSHOT && { DAYTONA_SNAPSHOT: process.env.DAYTONA_SNAPSHOT }),
+      ...(process.env.DAYTONA_IMAGE    && { DAYTONA_IMAGE:    process.env.DAYTONA_IMAGE }),
+      // Platform / auth
+      ...(process.env.LAP_BASE_URL    && { LAP_BASE_URL:    process.env.LAP_BASE_URL }),
+      ...(process.env.LAP_AUTH_TOKEN  && { LAP_AUTH_TOKEN:  process.env.LAP_AUTH_TOKEN }),
+      ...(process.env.MASTER_KEY      && { MASTER_KEY:      process.env.MASTER_KEY }),
+      ...(process.env.SESSION_ID      && { SESSION_ID:      process.env.SESSION_ID }),
+      // Vault
+      ...(process.env.VAULT_URL         && { VAULT_URL:         process.env.VAULT_URL }),
       ...(process.env.VAULT_PROXY_TOKEN && { VAULT_PROXY_TOKEN: process.env.VAULT_PROXY_TOKEN }),
     },
   };

@@ -32,6 +32,82 @@ When `MASTER_KEY` is set, `EventSource` clients can pass it as `?key=<MASTER_KEY
 |-----------|-------------------------------------------------------------------------|
 | `UI_DIST` | Path to a pre-built Next.js export. Defaults to `ui/out/` inside image. |
 
+## Sandbox (opencode MCP)
+
+The sandbox MCP is activated automatically when any of the following are set.
+
+### Direct mode (default)
+
+The MCP provisions sandboxes directly from the harness process. Two providers are supported.
+
+**E2B**
+
+| Var | Required | What it is |
+|---|---|---|
+| `E2B_API_KEY` | yes | E2B API key |
+| `E2B_TEMPLATE` | no | Sandbox template name (default: `base`) |
+
+**Daytona**
+
+| Var | Required | What it is |
+|---|---|---|
+| `DAYTONA_API_KEY` | yes | Daytona API key |
+| `DAYTONA_API_URL` | no | Daytona API base URL |
+| `DAYTONA_SNAPSHOT` | no | Snapshot to use when creating |
+| `DAYTONA_IMAGE` | no | Image to use instead of snapshot |
+
+**Provider selection**
+
+| Var | What it is |
+|---|---|
+| `SANDBOX_PROVIDER` | `e2b` or `daytona`. Auto-detects from whichever API key is present if unset. |
+
+**Vault proxy (both providers)**
+
+| Var | What it is |
+|---|---|
+| `VAULT_URL` | Proxy URL for credential injection into the sandbox |
+| `VAULT_PROXY_TOKEN` | Token embedded into the proxy URL as basic-auth password |
+
+### Platform mode (`LAP_PLATFORM_MODE=1`)
+
+Delegates sandbox provisioning to the LAP platform API, which injects agent-specific credentials automatically.
+
+| Var | Required | What it is |
+|---|---|---|
+| `LAP_PLATFORM_MODE` | yes | Set to `1` to enable platform mode |
+| `LAP_BASE_URL` | yes | LAP platform base URL |
+| `LAP_AUTH_TOKEN` | yes | Platform auth token (`MASTER_KEY` accepted as fallback) |
+| `SESSION_ID` | yes | LAP session ID (or pass `session_id` per `provision` call) |
+
+## CLI (`lite-harness`)
+
+A zero-dependency Node.js CLI (requires Node 18+). Install:
+
+```bash
+cd cli && npm install -g .
+```
+
+| Command | What it does |
+|---|---|
+| `lite-harness login` | Prompt for server URL + master key, validate, save to `~/.config/lite-harness/config.json` |
+| `lite-harness list` | List available harnesses |
+| `lite-harness models` | List models from the configured server |
+| `lite-harness <harness>` | Start a TUI chat session with the named harness |
+
+Chat session flags:
+
+| Flag | What it does |
+|---|---|
+| `--model <id>` | Override model (default: first model from `/v1/models`) |
+
+In-session commands:
+
+| Command | What it does |
+|---|---|
+| `/clear` | Delete the current session and start a fresh one |
+| `exit` / `quit` | Exit the chat |
+
 ## Repo / harness internals
 
 | Var          | What it is                                                                              |
