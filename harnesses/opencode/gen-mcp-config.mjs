@@ -36,6 +36,7 @@ if (sandboxActive) {
     type: "local",
     command: ["node", `${MCP_DIR}/sandbox-mcp.mjs`],
     enabled: true,
+    timeout: 120_000, // sandbox provision/execute can be slow
     environment: {
       // Mode
       ...(process.env.LAP_PLATFORM_MODE && { LAP_PLATFORM_MODE: process.env.LAP_PLATFORM_MODE }),
@@ -75,6 +76,7 @@ if (memBase && memAgent && memAccess) {
     type: "local",
     command: ["node", `${MCP_DIR}/memory-mcp.mjs`],
     enabled: true,
+    timeout: 30_000,
     environment: {
       LAP_BASE_URL: memBase,
       AGENT_ID: memAgent,
@@ -96,6 +98,7 @@ if (memBase && memAgent && memAccess) {
     type: "local",
     command: ["node", `${MCP_DIR}/memory-mcp.mjs`],
     enabled: true,
+    timeout: 30_000,
     environment: {
       LAP_BASE_URL: memBase,
       LAP_MEMORY_SESSION_SCOPED: "1",
@@ -117,6 +120,7 @@ if (issueBase && issueAccess) {
     type: "local",
     command: ["node", `${MCP_DIR}/report-issue-mcp.mjs`],
     enabled: true,
+    timeout: 30_000,
     environment: {
       LAP_BASE_URL: issueBase,
       LAP_ACCESS_TOKEN: issueAccess,
@@ -152,6 +156,7 @@ if (base && key) {
           url: `${base}/mcp/${encodeURIComponent(name)}`,
           enabled: true,
           headers: { Authorization: `Bearer ${key}` },
+          timeout: 30_000,
         };
       }
     } else {

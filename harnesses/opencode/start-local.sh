@@ -14,10 +14,20 @@ if [ ! -f "$LAP_ROOT/.env" ] && [ -f "$(dirname "$0")/../../../litellm-agent-pla
   LAP_ROOT="$(cd "$(dirname "$0")/../../../litellm-agent-platform" && pwd)"
 fi
 if [ -z "${LITELLM_API_KEY:-}" ] && [ -f "$LAP_ROOT/.env" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$LAP_ROOT/.env"
-  set +a
+  # Parse KEY=value lines safely — avoids sourcing malformed lines (raw cert values, etc.).
+  # Strips surrounding single/double quotes from values.
+  while IFS= read -r line; do
+    case "$line" in '#'*|'') continue ;; esac
+    key="${line%%=*}"
+    case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+    val="${line#*=}"
+    # Strip surrounding quotes
+    case "$val" in
+      '"'*'"') val="${val#\"}"; val="${val%\"}" ;;
+      "'"*"'") val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    export "$key=$val" 2>/dev/null || true
+  done < "$LAP_ROOT/.env"
 fi
 
 : "${LITELLM_API_BASE:?set LITELLM_API_BASE in .env}"
@@ -70,8 +80,11 @@ MCP_NAMES=$(printf '%s' "$MCP_OBJ" | node -e 'let s="";process.stdin.on("data",d
 echo "[start-local] MCP servers: ${MCP_NAMES:-none}"
 [ -s /tmp/gen-mcp-local.err ] && cat /tmp/gen-mcp-local.err
 
-# --- Write opencode.json into REPO_DIR ---
-cat > "$HARNESS_DIR/opencode.json" <<EOF
+# --- Write opencode.json into OPENCODE_INLINE_WORKDIR (matches container pattern) ---
+# opencode's project detection walks up from CWD to find config; writing to
+# OPENCODE_INLINE_WORKDIR and cd-ing there before exec mirrors what the
+# container entrypoint does (cd $REPO_DIR && cat > opencode.json).
+cat > "$OPENCODE_INLINE_WORKDIR/opencode.json" <<EOF
 {
   "\$schema": "https://opencode.ai/config.json",
 ${MCP_BLOCK}
@@ -80,7 +93,8 @@ ${MCP_BLOCK}
       "npm": "@ai-sdk/anthropic",
       "options": {
         "baseURL": "${BASE}",
-        "apiKey": "${LITELLM_API_KEY}"
+        "apiKey": "${LITELLM_API_KEY}",
+        "chunkTimeout": 60000
       },
       "models": ${MODELS_JSON}
     }
@@ -97,6 +111,7 @@ ${MCP_BLOCK}
 }
 EOF
 
-echo "[start-local] wrote opencode.json"
+echo "[start-local] wrote opencode.json to $OPENCODE_INLINE_WORKDIR"
 echo "[start-local] starting inline adapter on :${PORT}"
+cd "$OPENCODE_INLINE_WORKDIR"
 exec node "$HARNESS_DIR/../inline-adapter.mjs"

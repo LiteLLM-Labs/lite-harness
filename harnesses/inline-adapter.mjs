@@ -421,6 +421,10 @@ const DRAIN_TIMEOUT_MS = 30_000;
 const MAX_RESTARTS = 3;
 const HEALTH_INTERVAL_MS = 30_000;
 const MSG_TAIL_CHARS = 200;
+const STUCK_TIMEOUT_MS = Number(process.env.STUCK_TIMEOUT_MS || 120_000);
+
+// sid → startedAt (ms): tracks in-flight opencode turns for stuck-turn detection.
+const ocPendingTurns = new Map();
 
 let draining = false;
 let inFlight = 0;
@@ -466,6 +470,23 @@ function materializeSkills(files) {
 
 function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
+}
+
+// Parse SSE chunks from the opencode event stream, clearing pending turns when
+// session.idle fires so the stuck-turn watchdog doesn't false-positive.
+function tapOcSseChunk(chunk) {
+  const text = chunk.toString("utf8");
+  if (!text.includes("session.idle")) return;
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    try {
+      const ev = JSON.parse(line.slice(6));
+      if (ev.type === "session.idle") {
+        const sid = ev.properties?.sessionID;
+        if (sid) ocPendingTurns.delete(sid);
+      }
+    } catch {}
+  }
 }
 
 function extractMsgTail(rawBody) {
@@ -799,6 +820,7 @@ const server = http.createServer(async (req, res) => {
       }
     } catch {}
 
+    if (p.endsWith("/prompt_async") && sid) ocPendingTurns.set(sid, Date.now());
     forward(req.method, p, url.search, Buffer.from(forwardBody), res, p);
     return;
   }
@@ -836,7 +858,7 @@ const server = http.createServer(async (req, res) => {
     copilotGlobalBus.add(copilotPush);
 
     const ocReq = http.get(UP + "/event", (ocRes) => {
-      ocRes.on("data", (chunk) => { try { res.write(chunk); } catch {} });
+      ocRes.on("data", (chunk) => { tapOcSseChunk(chunk); try { res.write(chunk); } catch {} });
       ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); try { res.end(); } catch {} });
     });
     ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); try { res.end(); } catch {} });
@@ -871,6 +893,27 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(502, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: `upstream error: ${e.message}` }));
     }
+    return;
+  }
+
+  // POST /session/:id/abort — cancel an in-flight turn.
+  const abortMatch = p.match(/^\/session\/([^/]+)\/abort$/);
+  if (abortMatch && req.method === "POST") {
+    const sid = abortMatch[1];
+    const harness = sessionHarness.get(sid);
+    if (harness === "cc") {
+      const cs = ccSessions.get(sid);
+      if (cs?.abortController) { cs.abortController.abort(); log(`abort: cc sid=${sid}`); }
+      res.writeHead(204); res.end();
+      return;
+    }
+    if (harness === "github-copilot") {
+      res.writeHead(204); res.end();
+      return;
+    }
+    // opencode: clear pending tracking and forward to child
+    ocPendingTurns.delete(sid);
+    forward("POST", p, "", null, res, p);
     return;
   }
 
@@ -913,6 +956,20 @@ waitChild().then((ok) => {
       log(`child health OK (${UP}) | inFlight=${inFlight} restarts=${restartCount} draining=${draining}`);
     } else {
       log(`child health FAIL (${UP}): ${probe.err || "no response"} | restarts=${restartCount}`);
+    }
+    // Auto-abort opencode turns stuck longer than STUCK_TIMEOUT_MS.
+    const now = Date.now();
+    for (const [sid, startedAt] of ocPendingTurns) {
+      if (now - startedAt > STUCK_TIMEOUT_MS) {
+        log(`auto-abort stuck turn: sid=${sid} stuck=${Math.round((now - startedAt) / 1000)}s`);
+        ocPendingTurns.delete(sid);
+        const ar = http.request(`${UP}/session/${sid}/abort`, { method: "POST" }, (r) => {
+          r.resume();
+          log(`auto-abort response: sid=${sid} status=${r.statusCode}`);
+        });
+        ar.on("error", (e) => log(`auto-abort error: sid=${sid} ${e.message}`));
+        ar.end();
+      }
     }
   }, HEALTH_INTERVAL_MS);
   healthTimer.unref();
