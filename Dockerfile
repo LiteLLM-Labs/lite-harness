@@ -167,6 +167,7 @@ COPY --chown=sandbox:sandbox harnesses/vault-plugin.mjs /opt/lap/vault-plugin.mj
 COPY --chown=sandbox:sandbox harnesses/help-plugin.mjs /opt/lap/help-plugin.mjs
 COPY --chown=sandbox:sandbox harnesses/loop-store.mjs /opt/lap/loop-store.mjs
 COPY --chown=sandbox:sandbox harnesses/loop-plugin.mjs /opt/lap/loop-plugin.mjs
+COPY --chown=sandbox:sandbox harnesses/session-store.mjs /opt/lap/session-store.mjs
 
 COPY --from=ui-builder --chown=sandbox:sandbox /ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out
