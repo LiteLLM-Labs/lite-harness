@@ -1,0 +1,9 @@
+{
+  "name": "codex-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Codex harness — routes through LiteLLM via @openai/codex CLI",
+  "dependencies": {
+    "@openai/codex": "latest"
+  }
+}

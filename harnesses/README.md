@@ -7,7 +7,7 @@ Each subfolder is one supported agent harness. The lite-harness server fronts al
 | `opencode/` | shipped |
 | `claude-code/` | shipped (inline — shares the opencode Docker image) |
 | `github-copilot/` | shipped (inline) |
-| `codex/` | planned |
+| `codex/` | shipped (inline — spawns `@openai/codex` CLI per turn via LiteLLM) |
 
 Code shared by all harnesses lives in `_shared/` (e.g. `_shared/entrypoint-common.sh`, sourced as `/opt/lap/common.sh` in each harness image).
 
