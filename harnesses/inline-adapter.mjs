@@ -344,13 +344,15 @@ async function codexRunTurn(s, userText) {
     const litellmBase = process.env.LITELLM_API_BASE;
     if (!litellmBase) throw new Error("LITELLM_API_BASE not set — codex requires LiteLLM routing");
 
+    const model = process.env.CODEX_MODEL || "gpt-4o";
     const args = [
+      "exec",
       "-c", `model_providers.litellm.name=LiteLLM`,
       "-c", `model_providers.litellm.base_url=${litellmBase.replace(/\/+$/, "")}`,
       "-c", `model_providers.litellm.env_key=LITELLM_API_KEY`,
       "-c", `model_provider=litellm`,
-      "--approval-mode", "full-auto",
-      "--quiet",
+      "-m", model,
+      "--dangerously-bypass-approvals-and-sandbox",
       fullPrompt,
     ];
 
