@@ -3,7 +3,10 @@
 // the submitted string, or the EXIT sentinel on Ctrl+C / Ctrl+D-on-empty.
 
 import readline from "node:readline";
-import { R, GRAY, BLUE, cols, up, down } from "./ansi.mjs";
+import { R, GRAY, BLUE, CYAN, cols, up, down } from "./ansi.mjs";
+import { matchSlash } from "./slash-commands.mjs";
+
+const MENU_MAX = 6; // most command rows shown under the box at once
 
 export const EXIT = Symbol("exit");
 
@@ -30,6 +33,7 @@ export function boxedPrompt(history) {
     let firstRender = true;
     let histIdx = history.length; // == length means "current draft"
     let stash = "";
+    let menuIdx = 0;              // highlighted row in the slash-command menu
 
     const innerW = () => Math.max(8, cols() - 4); // fill the terminal width
 
@@ -67,9 +71,24 @@ export function boxedPrompt(history) {
         return `${GRAY}│${R} ${txt}${pad} ${GRAY}│${R}`;
       });
       const hint = `  ${GRAY}↵ send  ·  ⇧↵ newline  ·  / for commands  ·  exit${R}`;
-      out([top, ...body, bot, hint].join("\n"));
 
-      lastRows = rows.length + 3; // top + rows + bottom + hint
+      // Slash-command menu (Claude-Code style): rows of matching commands under
+      // the box, with ↑/↓ to move and Tab/↵ to autofill the highlighted one.
+      const menu = matchSlash(buf);
+      if (menuIdx >= menu.length) menuIdx = Math.max(0, menu.length - 1);
+      const shown = menu.slice(0, MENU_MAX);
+      const nameW = shown.reduce((m, c) => Math.max(m, c.name.length + c.args.length + (c.args ? 1 : 0)), 0);
+      const menuLines = shown.map((c, i) => {
+        const sig = c.args ? `${c.name} ${c.args}` : c.name;
+        const sel = i === menuIdx;
+        const marker = sel ? `${BLUE}❯${R}` : " ";
+        const label = sel ? `${BLUE}${sig}${R}` : `${CYAN}${sig}${R}`;
+        return `  ${marker} ${label}${" ".repeat(nameW - sig.length)}  ${GRAY}${c.hint}${R}`;
+      });
+
+      out([top, ...body, bot, hint, ...menuLines].join("\n"));
+
+      lastRows = rows.length + 3 + menuLines.length; // top + rows + bottom + hint + menu
       out(up(lastRows - 1 - (1 + curRow))); // park on the cursor's content row
       out(`\x1b[${3 + curCol}G`);            // col 1:'│' 2:' ' 3:text
       lastTop = 1 + curRow;
@@ -78,6 +97,17 @@ export function boxedPrompt(history) {
     function setBuf(next, cur) {
       buf = next;
       cursor = cur === undefined ? next.length : Math.max(0, Math.min(cur, next.length));
+      menuIdx = 0; // typing/editing resets the menu selection to the top match
+    }
+
+    // If the slash menu is open, fill in the highlighted command (+ trailing
+    // space so the menu closes and args can follow) and return true.
+    function acceptSlash() {
+      const menu = matchSlash(buf);
+      if (!menu.length) return false;
+      const pick = menu[Math.min(menuIdx, menu.length - 1)];
+      setBuf(pick.name + " ");
+      return true;
     }
 
     function insertNewline() {
@@ -124,8 +154,15 @@ export function boxedPrompt(history) {
             const code = m[2] ?? m[1];
             if (code === "D") cursor = Math.max(0, cursor - 1);
             else if (code === "C") cursor = Math.min(buf.length, cursor + 1);
-            // ↑/↓ browse history only for a single-line draft, so they don't clobber a multi-line one
-            else if ((code === "A" || code === "B") && !buf.includes("\n")) browseHistory(code === "A" ? -1 : 1);
+            else if (code === "A" || code === "B") {
+              // ↑/↓ move the slash menu when it's open; otherwise browse history
+              // (single-line drafts only, so they don't clobber a multi-line one).
+              const menu = matchSlash(buf);
+              if (menu.length) menuIdx = code === "A"
+                ? (menuIdx - 1 + menu.length) % menu.length
+                : (menuIdx + 1) % menu.length;
+              else if (!buf.includes("\n")) browseHistory(code === "A" ? -1 : 1);
+            }
             else if (code === "H") cursor = 0;
             else if (code === "F") cursor = buf.length;
             else if (m[1] === "3" && code === "~") setBuf(buf.slice(0, cursor) + buf.slice(cursor + 1), cursor);
@@ -137,7 +174,11 @@ export function boxedPrompt(history) {
         }
 
         const code = ch.charCodeAt(0);
-        if (ch === "\r" || ch === "\n") { done(buf); return; } // plain Enter submits
+        if (ch === "\t") { acceptSlash(); i++; continue; }                   // Tab autofills command
+        if (ch === "\r" || ch === "\n") {                                    // Enter
+          if (acceptSlash()) { i++; continue; }                             // accept menu pick…
+          done(buf); return;                                                // …else submit
+        }
         if (code === 3) { done(EXIT); return; }                              // Ctrl+C
         if (code === 4) { if (!buf) { done(EXIT); return; } i++; continue; } // Ctrl+D
         if (code === 1) { cursor = 0; i++; continue; }                       // Ctrl+A
