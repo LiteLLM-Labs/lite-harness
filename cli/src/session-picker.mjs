@@ -30,7 +30,12 @@ export function sessionPicker(sessions) {
     let rendered = 0;
 
     function render() {
-      if (rendered > 0) out(up(rendered));
+      if (rendered > 0) {
+        out(up(rendered));
+        out("\x1b[0J"); // erase from cursor to end of screen
+      } else {
+        out("\n"); // start on fresh line after the input box
+      }
       const lines = [];
       lines.push(`  ${BOLD}${WHITE}Sessions${R}  ${DIM}↑↓ select  ·  Enter open  ·  Esc cancel${R}`);
       lines.push("");
@@ -40,7 +45,7 @@ export function sessionPicker(sessions) {
         const title = (s.title || s.id).slice(0, 40).padEnd(40);
         const sid   = s.id.slice(0, 14);
         const age   = relativeTime(s.time?.updated ?? s.time?.created);
-        const titleColored = i === sel ? `${CYAN}${title}${R}` : `${title}`;
+        const titleColored = i === sel ? `${CYAN}${title}${R}` : title;
         lines.push(`  ${cursor} ${titleColored}  ${GRAY}${sid}  ${age}${R}`);
       }
       lines.push("");
