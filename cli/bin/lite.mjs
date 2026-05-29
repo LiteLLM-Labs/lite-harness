@@ -10,7 +10,7 @@
  */
 
 import { R, BOLD, CYAN, GRAY, WHITE } from "../src/ansi.mjs";
-import { HARNESSES } from "../src/harnesses.mjs";
+import { BUILTIN_AGENTS } from "../src/agents.mjs";
 import { login } from "../src/commands/login.mjs";
 import { list } from "../src/commands/list.mjs";
 import { models } from "../src/commands/models.mjs";
@@ -37,7 +37,7 @@ function printHelp() {
     `  ${CYAN}<harness>${R}          start a chat session`,
     `    ${GRAY}--model <id>${R}     override model ${GRAY}(default: first from server)${R}`,
     "",
-    `  ${GRAY}Harnesses: ${HARNESSES.join("  ")}${R}`,
+    `  ${GRAY}Agents: ${BUILTIN_AGENTS.join("  ")}${R}`,
     "",
   ].join("\n"));
 }
@@ -51,7 +51,7 @@ if (!cmd || cmd === "--help" || cmd === "-h") {
 } else if (cmd === "login") {
   await login();
 } else if (cmd === "list") {
-  list();
+  await list();
 } else if (cmd === "models") {
   await models();
 } else {

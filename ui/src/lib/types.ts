@@ -1,6 +1,9 @@
 export interface OpencodeSession {
   id: string;
   title?: string;
+  /** Server now returns `agent`; `harness` kept for backwards compat with older responses. */
+  agent?: "opencode" | "claude-code" | "github-copilot";
+  /** @deprecated Use `agent` instead. Kept for backwards compat. */
   harness?: "opencode" | "claude-code" | "github-copilot";
   time?: { created: number; updated?: number };
   [k: string]: unknown;

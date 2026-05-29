@@ -28,6 +28,9 @@ import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
+import { handleMcpRequest, PLATFORM_MCP_URL } from "../mcp/index.mjs";
+import { initDb as initAgentDb, getAgent, listAgents, deleteAgent } from "../mcp/agents/store.mjs";
+import "../mcp/tools.mjs";
 
 const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
@@ -77,7 +80,7 @@ function authOk(req, urlObj) {
 
 // Per-session harness tag. opencode sessions exist in the child's DB;
 // cc sessions live entirely in-process.
-const sessionHarness = new Map(); // id → "opencode" | "cc"
+const sessionAgent = new Map(); // id → "opencode" | "cc"
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -110,7 +113,7 @@ const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
 // callPromptAsync — unified dispatch used by LoopPlugin (and any future plugin)
 // to fire a new prompt into an existing session without going through HTTP.
 async function callPromptAsync(sessionId, prompt) {
-  const harness = sessionHarness.get(sessionId);
+  const harness = sessionAgent.get(sessionId);
   if (harness === "cc") {
     const cs = ccSessions.get(sessionId);
     if (!cs) throw new Error(`callPromptAsync: cc session ${sessionId} not found`);
@@ -147,7 +150,7 @@ pluginRegistry.setup({
   dbPath: LOOP_DB_PATH,
   callPromptAsync,
   isSessionActive: (sid) =>
-    ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionHarness.get(sid) === "opencode",
+    ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionAgent.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
 // Returns true if a plugin handled the message (response already sent).
@@ -502,6 +505,8 @@ async function ccRunTurn(s, userText, modelId) {
       abortController: ac,
       disallowedTools: ["AskUserQuestion"],
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
+      ...(s.systemPrompt ? { system: s.systemPrompt } : {}),
+      mcpServers: [{ type: "http", url: PLATFORM_MCP_URL }],
     }});
     for await (const m of stream) {
       if (m.type === "system" && m.subtype === "init" && m.session_id && !s.sdkSessionId) s.sdkSessionId = m.session_id;
@@ -789,6 +794,42 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (p === "/mcp" && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const raw = await readBody(req);
+    let mcpBody = {};
+    try { mcpBody = JSON.parse(raw || "{}"); } catch {}
+    const response = await handleMcpRequest(mcpBody);
+    if (response === null) { res.writeHead(204); res.end(); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(response));
+    return;
+  }
+
+  if (p === "/agents" && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(listAgents()));
+    return;
+  }
+
+  const agentRouteMatch = p.match(/^\/agents\/([^/]+)$/);
+  if (agentRouteMatch && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const a = getAgent(decodeURIComponent(agentRouteMatch[1]));
+    if (!a) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(a));
+    return;
+  }
+
+  if (agentRouteMatch && req.method === "DELETE") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    deleteAgent(decodeURIComponent(agentRouteMatch[1]));
+    res.writeHead(204); res.end();
+    return;
+  }
+
   // Reject NEW session creates while draining; all other in-flight paths continue.
   if (draining && p === "/session" && req.method === "POST") {
     res.writeHead(503, { "content-type": "application/json" });
@@ -810,9 +851,25 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     try { body = JSON.parse(raw || "{}"); } catch {}
 
-    const harness = body.harness === "claude-code" ? "cc" : body.harness === "github-copilot" ? "github-copilot" : body.harness === "codex" ? "codex" : "opencode";
+    const agentParam = body.agent ?? body.harness;
+    const builtin = agentParam === "claude-code" ? "cc" : agentParam === "github-copilot" ? "github-copilot" : agentParam === "codex" ? "codex" : agentParam === "cc" ? "cc" : agentParam === "opencode" ? "opencode" : null;
 
-    if (harness === "github-copilot") {
+    let systemPromptOverride = body.systemPrompt || null;
+
+    if (!builtin) {
+      let savedAgent = null;
+      try { savedAgent = getAgent(agentParam); } catch {}
+      if (!savedAgent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
+        return;
+      }
+      systemPromptOverride = savedAgent.system_prompt;
+      body.title = body.title || savedAgent.name;
+    }
+    const resolvedAgent = builtin ?? "cc";
+
+    if (resolvedAgent === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "github-copilot requires LITELLM_API_BASE (BYOK) or GITHUB_TOKEN (native Copilot)" }));
@@ -822,14 +879,14 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set() };
       copilotSessions.set(id, s);
-      sessionHarness.set(id, "github-copilot");
+      sessionAgent.set(id, "github-copilot");
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "github-copilot" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "github-copilot" }));
       return;
     }
 
-    if (harness === "codex") {
+    if (resolvedAgent === "codex") {
       if (!process.env.LITELLM_API_BASE) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "codex requires LITELLM_API_BASE" }));
@@ -839,14 +896,14 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set(), activeProcess: null };
       codexSessions.set(id, s);
-      sessionHarness.set(id, "codex");
+      sessionAgent.set(id, "codex");
       log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "codex" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "codex" }));
       return;
     }
 
-    if (harness === "cc") {
+    if (resolvedAgent === "cc") {
       if (!ccQuery) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "claude-code SDK not available" }));
@@ -854,26 +911,27 @@ const server = http.createServer(async (req, res) => {
       }
       const id = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
       const now = Date.now();
-      const s = { id, title: body.title || "New session", time: { created: now }, harness: "claude-code", sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set() };
+      const s = { id, title: body.title || "New session", time: { created: now }, agent: "claude-code", sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(), systemPrompt: systemPromptOverride };
       ccSessions.set(id, s);
-      sessionHarness.set(id, "cc");
+      sessionAgent.set(id, "cc");
       log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "claude-code" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "claude-code" }));
       return;
     }
 
     const n = materializeSkills(body.files);
     if (Array.isArray(body.files)) body.files = body.files.filter((f) => !skillSlug(f.sandbox_path));
     log(`session create: materialized ${n} skill(s) title=${JSON.stringify(body.title || "")}`);
-    const { harness: _h, ...forwardBody } = body;
+    const { harness: _h, agent: _a, ...forwardBody } = body;
+    forwardBody.mcp = { ...(forwardBody.mcp || {}), platform: { type: "remote", url: PLATFORM_MCP_URL, enabled: true } };
     const upReq = http.request(UP + "/session", { method: "POST", headers: { "content-type": "application/json" } }, (upRes) => {
       let respData = "";
       upRes.on("data", c => respData += c);
       upRes.on("end", () => {
         try {
           const parsed = JSON.parse(respData);
-          if (parsed.id) sessionHarness.set(parsed.id, "opencode");
+          if (parsed.id) sessionAgent.set(parsed.id, "opencode");
         } catch {}
         res.writeHead(upRes.statusCode || 200, upRes.headers);
         res.end(respData);
@@ -895,17 +953,17 @@ const server = http.createServer(async (req, res) => {
     });
     const ocSessions = await ocFetch();
     const tagged = (Array.isArray(ocSessions) ? ocSessions : []).map(s => {
-      sessionHarness.set(s.id, "opencode");
-      return { ...s, harness: "opencode" };
+      sessionAgent.set(s.id, "opencode");
+      return { ...s, agent: "opencode" };
     });
     const ccList = [...ccSessions.values()].map(s => ({
-      id: s.id, title: s.title, time: s.time, harness: "claude-code",
+      id: s.id, title: s.title, time: s.time, agent: "claude-code",
     }));
     const copilotList = [...copilotSessions.values()].map(s => ({
-      id: s.id, title: s.title, time: s.time, harness: "github-copilot",
+      id: s.id, title: s.title, time: s.time, agent: "github-copilot",
     }));
     const codexList = [...codexSessions.values()].map(s => ({
-      id: s.id, title: s.title, time: s.time, harness: "codex",
+      id: s.id, title: s.title, time: s.time, agent: "codex",
     }));
     const all = [...tagged, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
@@ -916,31 +974,31 @@ const server = http.createServer(async (req, res) => {
   const getOneMatch = p.match(/^\/session\/([^/]+)$/) && req.method === "GET";
   if (getOneMatch) {
     const sid = p.match(/^\/session\/([^/]+)$/)[1];
-    if (sessionHarness.get(sid) === "cc") {
+    if (sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "claude-code" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "claude-code" }));
       return;
     }
-    if (sessionHarness.get(sid) === "github-copilot") {
+    if (sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "github-copilot" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "github-copilot" }));
       return;
     }
-    if (sessionHarness.get(sid) === "codex") {
+    if (sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "codex" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "codex" }));
       return;
     }
-    // opencode: proxy and inject harness field
+    // opencode: proxy and inject agent field
     const ocReq = http.request(UP + p, { method: "GET" }, (ocRes) => {
       let d = ""; ocRes.on("data", c => d += c); ocRes.on("end", () => {
-        try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, harness: "opencode" })); }
+        try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, agent: "opencode" })); }
         catch { res.writeHead(ocRes.statusCode || 502); res.end(d); }
       });
     });
@@ -957,7 +1015,7 @@ const server = http.createServer(async (req, res) => {
     const sessionIdMatch = p.match(/^\/session\/([^/]+)\//);
     const sid = sessionIdMatch?.[1];
 
-    if (sid && sessionHarness.get(sid) === "cc") {
+    if (sid && sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
 
@@ -981,7 +1039,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Route codex sessions in-process
-    if (sid && sessionHarness.get(sid) === "codex") {
+    if (sid && sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
 
@@ -1000,7 +1058,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Route github-copilot sessions in-process
-    if (sid && sessionHarness.get(sid) === "github-copilot") {
+    if (sid && sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
 
@@ -1073,21 +1131,21 @@ const server = http.createServer(async (req, res) => {
   const getMsgMatch = p.match(/^\/session\/([^/]+)\/message$/);
   if (req.method === "GET" && getMsgMatch) {
     const sid = getMsgMatch[1];
-    if (sessionHarness.get(sid) === "cc") {
+    if (sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(cs.history));
       return;
     }
-    if (sessionHarness.get(sid) === "github-copilot") {
+    if (sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(cs.history));
       return;
     }
-    if (sessionHarness.get(sid) === "codex") {
+    if (sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
@@ -1158,7 +1216,7 @@ const server = http.createServer(async (req, res) => {
   const abortMatch = p.match(/^\/session\/([^/]+)\/abort$/);
   if (abortMatch && req.method === "POST") {
     const sid = abortMatch[1];
-    const harness = sessionHarness.get(sid);
+    const harness = sessionAgent.get(sid);
     if (harness === "cc") {
       const cs = ccSessions.get(sid);
       if (cs?.abortController) { cs.abortController.abort(); log(`abort: cc sid=${sid}`); }
@@ -1208,6 +1266,7 @@ async function waitChild() {
 }
 
 fs.mkdirSync(SKILLS_ROOT, { recursive: true });
+initAgentDb();
 startChild();
 waitChild().then((ok) => {
   if (!ok) { log("opencode serve never became ready"); process.exit(1); }

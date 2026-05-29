@@ -64,11 +64,12 @@ function ChatInner() {
     }).catch(() => {});
   }, []);
 
-  // Fetch session metadata to get the locked harness
+  // Fetch session metadata to get the locked agent/harness
   useEffect(() => {
     if (!sid) return;
     getSession(sid).then(s => {
-      if (s.harness === "claude-code" || s.harness === "opencode" || s.harness === "github-copilot") setSessionHarness(s.harness);
+      const agentValue = s.agent ?? s.harness;
+      if (agentValue === "claude-code" || agentValue === "opencode" || agentValue === "github-copilot") setSessionHarness(agentValue);
     }).catch(() => {});
   }, [sid]);
 
