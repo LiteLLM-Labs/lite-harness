@@ -4,4 +4,6 @@ node_modules/
 # Generated at boot by harnesses/opencode/{entrypoint.sh,start-local.sh}.
 # Contains live LiteLLM + E2B credentials — never commit.
 harnesses/opencode/opencode.json
-
+.env
+ui/out/
+.DS_Store
