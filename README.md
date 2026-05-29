@@ -1,6 +1,6 @@
 # lite-harness
 
-one server. any coding agent. any model.
+Run Claude Code/Codex/OpenCode on a sandbox in autopilot.
 
 ![litellm_hero_v11](https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6)
 
