@@ -389,7 +389,7 @@ async function chat(harnessName, flags) {
   // ── Welcome box ─────────────────────────────────────────────────────────────
   const shortUrl = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   process.stdout.write(drawBox([
-    `${BLUE}✻${R} ${BOLD}${WHITE}Welcome to lite${R}`,
+    `${BLUE}✻${R} ${BOLD}${WHITE}Welcome to lite-harness${R}`,
     "",
     `${GRAY}harness${R}   ${CYAN}${harnessName}${R}`,
     `${GRAY}model${R}     ${model}`,
