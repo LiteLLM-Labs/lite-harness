@@ -28,7 +28,7 @@ import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
-import { handleMcpRequest, PLATFORM_MCP_URL } from "../mcp/index.mjs";
+import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
 import { initDb as initAgentDb, getAgent, listAgents, deleteAgent } from "../mcp/agents/store.mjs";
 import "../mcp/tools.mjs";
 
@@ -895,6 +895,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // MCP Streamable HTTP transport: POST /mcp
   if (p === "/mcp" && req.method === "POST") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
     const raw = await readBody(req);
@@ -904,6 +905,25 @@ const server = http.createServer(async (req, res) => {
     if (response === null) { res.writeHead(204); res.end(); return; }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(response));
+    return;
+  }
+
+  // MCP HTTP+SSE transport (legacy): GET /mcp/sse
+  if (p === "/mcp/sse" && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    handleMcpSse(req, res, `/mcp/message`);
+    return;
+  }
+
+  // MCP HTTP+SSE transport: POST /mcp/message?sessionId=xxx
+  if (p === "/mcp/message" && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const sessionId = url.searchParams.get("sessionId") || "";
+    const raw = await readBody(req);
+    let mcpBody = {};
+    try { mcpBody = JSON.parse(raw || "{}"); } catch {}
+    await handleMcpMessage(mcpBody, sessionId);
+    res.writeHead(202); res.end();
     return;
   }
 
@@ -1377,7 +1397,9 @@ if (ocWorkdir) {
   try {
     if (fs.existsSync(ocConfigPath)) {
       const cfg = JSON.parse(fs.readFileSync(ocConfigPath, "utf8"));
-      cfg.mcp = { ...(cfg.mcp || {}), platform: { type: "remote", url: PLATFORM_MCP_URL, enabled: true } };
+      const platformEntry = { type: "remote", url: PLATFORM_MCP_URL, enabled: true };
+      if (MASTER_KEY) platformEntry.headers = { Authorization: `Bearer ${MASTER_KEY}` };
+      cfg.mcp = { ...(cfg.mcp || {}), platform: platformEntry };
       fs.writeFileSync(ocConfigPath, JSON.stringify(cfg, null, 2));
       log("injected platform MCP into opencode.json");
     }
