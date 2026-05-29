@@ -11,7 +11,7 @@ Everything is configured via environment variables. Set them on `docker run` (or
 
 The harness queries `${LITELLM_API_BASE}/v1/models` at boot and registers every model the gateway returns. Clients pick a `modelID` per request. If the gateway returns no models, boot fails fast with a clear error.
 
-## Auth on lite-harness itself
+## Auth on lite itself
 
 | Var          | What it is                                                                                                  |
 |--------------|-------------------------------------------------------------------------------------------------------------|
@@ -80,7 +80,7 @@ Delegates sandbox provisioning to the LAP platform API, which injects agent-spec
 | `LAP_AUTH_TOKEN` | yes | Platform auth token (`MASTER_KEY` accepted as fallback) |
 | `SESSION_ID` | yes | LAP session ID (or pass `session_id` per `provision` call) |
 
-## CLI (`lite-harness`)
+## CLI (`lite`)
 
 A zero-dependency Node.js CLI (requires Node 18+). Install:
 
@@ -90,10 +90,10 @@ cd cli && npm install -g .
 
 | Command | What it does |
 |---|---|
-| `lite-harness login` | Prompt for server URL + master key, validate, save to `~/.config/lite-harness/config.json` |
-| `lite-harness list` | List available harnesses |
-| `lite-harness models` | List models from the configured server |
-| `lite-harness <harness>` | Start a TUI chat session with the named harness |
+| `lite login` | Prompt for server URL + master key, validate, save to `~/.config/lite/config.json` |
+| `lite list` | List available harnesses |
+| `lite models` | List models from the configured server |
+| `lite <harness>` | Start a TUI chat session with the named harness |
 
 Chat session flags:
 
@@ -113,6 +113,7 @@ In-session commands:
 | Var          | What it is                                                                              |
 |--------------|-----------------------------------------------------------------------------------------|
 | `CC_REPO_DIR`| Working dir for the claude-code in-process adapter. Defaults to `$HOME`.                |
+| `CODEX_MODEL`| Model passed to `codex exec -m`. Must be an OpenAI model name (e.g. `gpt-4o`, `o3`). Defaults to `gpt-4o`. Anthropic model names fail — codex's Responses API WebSocket only accepts OpenAI model identifiers. |
 
 ## Example
 
@@ -121,7 +122,7 @@ docker run -p 4096:4096 \
   -e LITELLM_API_BASE=https://litellm.internal.acme.com \
   -e LITELLM_API_KEY=sk-litellm-... \
   -e MASTER_KEY=$(openssl rand -hex 32) \
-  ghcr.io/litellm-labs/lite-harness:latest
+  ghcr.io/litellm-labs/lite:latest
 ```
 
 Open `http://localhost:4096`, paste the `MASTER_KEY` on the login page, and you're in.
