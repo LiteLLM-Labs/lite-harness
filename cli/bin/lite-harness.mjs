@@ -194,7 +194,7 @@ async function chat(harnessName, flags) {
   process.stdout.write(`  ${BOLD}${WHITE}lite-harness${R}  ${CYAN}${harnessName}${R}\n`);
   process.stdout.write(`  ${GRAY}${model}  ·  ${shortUrl}  ·  ${currentSid.slice(0, 12)}${R}\n`);
   process.stdout.write(`\n`);
-  process.stdout.write(`  ${DIM}/clear to reset history  ·  /paste for multi-line  ·  Ctrl+C or "exit" to quit${R}\n`);
+  process.stdout.write(`  ${DIM}/clear to reset history  ·  Ctrl+C or "exit" to quit${R}\n`);
   process.stdout.write(`\n`);
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -301,10 +301,6 @@ async function chat(harnessName, flags) {
     process.stdout.write(`  ${GREEN}✓ Session cleared${R}  ${GRAY}${currentSid.slice(0, 12)}${R}\n\n`);
   }
 
-  // ── readline loop ─────────────────────────────────────────────────────────
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  rl.on("close", () => { abort.abort(); process.exit(0); });
-
   async function sendAndWait(text) {
     const done = new Promise((resolve) => { idleResolve = resolve; });
     renderer.startSpinner();
@@ -328,52 +324,102 @@ async function chat(harnessName, flags) {
     idleResolve = null;
   }
 
-  while (true) {
-    // \x01..\x02 marks zero-width sequences so readline calculates cursor position correctly
-    const input = await new Promise((resolve) =>
-      rl.question(`\x01${CYAN}\x02❯\x01${R}\x02 `, resolve)
-    );
-    const text = input.trim();
-    if (!text) continue;
+  // ── Raw input with bracketed paste support ────────────────────────────────
+  process.stdout.write("\x1b[?2004h"); // enable bracketed paste mode
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
 
-    if (text === "exit" || text === "quit" || text === "\\q") { rl.close(); break; }
+  let lineBuf  = "";
+  let pasteBuf = null; // non-null = inside a bracketed paste
+  let escBuf   = "";   // accumulate escape sequences
+  let busy     = false;
+
+  function showPrompt() {
+    process.stdout.write(`${CYAN}❯${R} `);
+  }
+
+  async function handleText(text) {
+    if (!text) { showPrompt(); return; }
+
+    if (text === "exit" || text === "quit" || text === "\\q") {
+      process.stdout.write("\x1b[?2004l");
+      process.stdin.setRawMode(false);
+      abort.abort();
+      process.exit(0);
+    }
 
     if (text === "/clear") {
       try { await clearSession(); } catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n\n`); }
-      continue;
-    }
-
-    if (text === "/paste") {
-      process.stdout.write(`  ${DIM}Paste text. Type ${CYAN}.${R}${DIM} on its own line to send, or ${CYAN}/cancel${R}${DIM} to abort.${R}\n`);
-      const lines = [];
-      while (true) {
-        const line = await new Promise((resolve) => rl.question(`  ${GRAY}│${R} `, resolve));
-        if (line === "/cancel") { lines.length = 0; break; }
-        if (line === ".") break;
-        lines.push(line);
-      }
-      const pasteText = lines.join("\n").trim();
-      if (!pasteText) continue;
-      process.stdout.write("\n");
-      try {
-        await sendAndWait(pasteText);
-      } catch (e) {
-        process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`);
-      }
-      process.stdout.write("\n");
-      continue;
+      showPrompt();
+      return;
     }
 
     process.stdout.write("\n");
+    busy = true;
     try {
       await sendAndWait(text);
     } catch (e) {
       process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`);
     }
     process.stdout.write("\n");
+    busy = false;
+    showPrompt();
   }
 
-  abort.abort();
+  process.stdin.on("data", (data) => {
+    for (let i = 0; i < data.length; ) {
+      const rest = data.slice(i);
+
+      if (rest.startsWith("\x1b[200~")) { pasteBuf = ""; i += 6; continue; }
+
+      if (pasteBuf !== null && rest.startsWith("\x1b[201~")) {
+        const text = (lineBuf + pasteBuf).trim();
+        lineBuf = ""; pasteBuf = null; i += 6;
+        if (text) { process.stdout.write("\n"); handleText(text); }
+        continue;
+      }
+
+      const ch = data[i++];
+
+      if (pasteBuf !== null) {
+        if (ch !== "\r") { pasteBuf += ch; process.stdout.write(ch); }
+        continue;
+      }
+
+      // Skip escape sequences (arrow keys etc.)
+      if (escBuf || ch === "\x1b") {
+        escBuf += ch;
+        if (escBuf.length > 1 && /[A-Za-z~]/.test(ch)) escBuf = "";
+        continue;
+      }
+
+      if (busy) continue; // ignore typed input while response is streaming
+
+      if (ch === "\r" || ch === "\n") {
+        const text = lineBuf.trim(); lineBuf = "";
+        process.stdout.write("\n");
+        handleText(text);
+      } else if (ch === "\x7f") { // backspace
+        if (lineBuf.length > 0) { lineBuf = lineBuf.slice(0, -1); process.stdout.write("\b \b"); }
+      } else if (ch === "\x03" || ch === "\x04") { // Ctrl+C / Ctrl+D
+        process.stdout.write("\n");
+        process.stdout.write("\x1b[?2004l");
+        process.stdin.setRawMode(false);
+        abort.abort();
+        process.exit(0);
+      } else if (ch === "\x15") { // Ctrl+U — clear line
+        process.stdout.write("\r\x1b[K");
+        showPrompt();
+        lineBuf = "";
+      } else if (ch >= " ") {
+        lineBuf += ch; process.stdout.write(ch);
+      }
+    }
+  });
+
+  showPrompt();
+  await new Promise(() => {}); // keep alive; exit via process.exit above
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
