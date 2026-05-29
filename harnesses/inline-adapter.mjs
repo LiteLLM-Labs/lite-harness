@@ -28,6 +28,9 @@ import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
+import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
+import { initDb as initAgentDb, getAgent, listAgents, deleteAgent } from "../mcp/agents/store.mjs";
+import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb } from "./loop-store.mjs";
 import {
@@ -95,7 +98,7 @@ function authOk(req, urlObj) {
 
 // Per-session harness tag. opencode sessions exist in the child's DB;
 // cc sessions live entirely in-process.
-const sessionHarness = new Map(); // id → "opencode" | "cc"
+const sessionAgent = new Map(); // id → "opencode" | "cc"
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -128,7 +131,7 @@ const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
 // callPromptAsync — unified dispatch used by LoopPlugin (and any future plugin)
 // to fire a new prompt into an existing session without going through HTTP.
 async function callPromptAsync(sessionId, prompt) {
-  const harness = sessionHarness.get(sessionId);
+  const harness = sessionAgent.get(sessionId);
   if (harness === "cc") {
     const cs = ccSessions.get(sessionId);
     if (!cs) throw new Error(`callPromptAsync: cc session ${sessionId} not found`);
@@ -165,7 +168,7 @@ pluginRegistry.setup({
   dbPath: DB_PATH,
   callPromptAsync,
   isSessionActive: (sid) =>
-    ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionHarness.get(sid) === "opencode",
+    ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionAgent.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
 // Returns true if a plugin handled the message (response already sent).
@@ -259,6 +262,23 @@ async function getCopilotEndpoint() {
   return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
 }
 
+// OpenAI-format tool definition for save_agent, injected into every copilot request.
+const SAVE_AGENT_TOOL = {
+  type: "function",
+  function: {
+    name: "save_agent",
+    description: "Save this session as a reusable named agent that can be launched from the CLI with `lite <agent_name>`",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string" },
+        system_prompt: { type: "string" },
+      },
+      required: ["agent_name", "system_prompt"],
+    },
+  },
+};
+
 async function copilotRunTurn(s, userText, modelId) {
   const startedAt = Date.now();
 
@@ -291,42 +311,122 @@ async function copilotRunTurn(s, userText, modelId) {
   const model = modelId || process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
   try {
     const endpoint = await getCopilotEndpoint();
-    const resp = await fetch(endpoint.url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${endpoint.key}`,
-        "Content-Type": "application/json",
-        ...endpoint.extraHeaders,
-      },
-      body: JSON.stringify({ model, messages, stream: true }),
-    });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
-    }
-    // Parse SSE stream
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
+
+    // Agentic loop: re-run if model calls a tool (e.g. save_agent).
+    // On each iteration we stream text deltas; if a tool_call fires we
+    // execute it and append tool messages, then loop for the next reply.
+    let loopMessages = [...messages];
+    let toolCallsThisTurn = 0;
+    const MAX_TOOL_LOOPS = 5;
+
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const payload = line.slice(6).trim();
-        if (payload === "[DONE]") break;
-        try {
-          const chunk = JSON.parse(payload);
-          const delta = chunk.choices?.[0]?.delta?.content ?? "";
-          if (delta) {
-            totalText += delta;
-            copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta });
-          }
-        } catch {}
+      const resp = await fetch(endpoint.url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${endpoint.key}`,
+          "Content-Type": "application/json",
+          ...endpoint.extraHeaders,
+        },
+        body: JSON.stringify({ model, messages: loopMessages, tools: [SAVE_AGENT_TOOL], stream: true }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
       }
+
+      // Parse SSE stream, accumulating both text deltas and tool_call deltas.
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      // tool_calls are streamed in chunks; accumulate by index.
+      const toolCallAccum = {}; // index → { id, name, argumentsRaw }
+      let finishReason = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") { finishReason = finishReason ?? "stop"; break; }
+          try {
+            const chunk = JSON.parse(payload);
+            const choice = chunk.choices?.[0];
+            if (!choice) continue;
+            if (choice.finish_reason) finishReason = choice.finish_reason;
+            const delta = choice.delta;
+            if (!delta) continue;
+            // Accumulate text content
+            if (delta.content) {
+              totalText += delta.content;
+              copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta: delta.content });
+            }
+            // Accumulate tool_calls deltas
+            if (Array.isArray(delta.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                if (!toolCallAccum[idx]) toolCallAccum[idx] = { id: "", name: "", argumentsRaw: "" };
+                if (tc.id) toolCallAccum[idx].id += tc.id;
+                if (tc.function?.name) toolCallAccum[idx].name += tc.function.name;
+                if (tc.function?.arguments) toolCallAccum[idx].argumentsRaw += tc.function.arguments;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      const pendingToolCalls = Object.values(toolCallAccum);
+
+      // If the model did NOT call any tool, the turn is done.
+      if (pendingToolCalls.length === 0 || finishReason !== "tool_calls" || toolCallsThisTurn >= MAX_TOOL_LOOPS) break;
+
+      // Build the assistant message with tool_calls for the next loop iteration.
+      const assistantMsg = {
+        role: "assistant",
+        content: totalText || null,
+        tool_calls: pendingToolCalls.map(tc => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.name, arguments: tc.argumentsRaw },
+        })),
+      };
+      loopMessages.push(assistantMsg);
+
+      // Execute each tool call and append tool result messages.
+      for (const tc of pendingToolCalls) {
+        let toolResult = "";
+        try {
+          let args = {};
+          try { args = JSON.parse(tc.argumentsRaw); } catch {}
+          if (tc.name === "save_agent") {
+            log(`copilot tool call: save_agent agent_name=${args.agent_name}`);
+            const mcpResp = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(MASTER_KEY ? { "Authorization": `Bearer ${MASTER_KEY}` } : {}) },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "save_agent", arguments: args } }),
+            });
+            const mcpJson = await mcpResp.json();
+            const resultContent = mcpJson?.result?.content;
+            if (Array.isArray(resultContent)) {
+              toolResult = resultContent.map(c => c.text ?? JSON.stringify(c)).join("\n");
+            } else {
+              toolResult = JSON.stringify(mcpJson?.result ?? mcpJson);
+            }
+            log(`copilot save_agent result: ${toolResult.slice(0, 200)}`);
+          } else {
+            toolResult = `Unknown tool: ${tc.name}`;
+          }
+        } catch (toolErr) {
+          toolResult = `Tool error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`;
+          log(`copilot tool error: ${toolResult}`);
+        }
+        loopMessages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
+      }
+
+      toolCallsThisTurn++;
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -395,6 +495,10 @@ async function codexRunTurn(s, userText) {
       "-c", `model_providers.litellm.base_url=${litellmBase.replace(/\/+$/, "")}`,
       "-c", `model_providers.litellm.env_key=LITELLM_API_KEY`,
       "-c", `model_provider=litellm`,
+      // Inject the platform MCP server so codex sessions can call save_agent.
+      // Uses the same -c override mechanism as the model config above.
+      // TOML path matches what `codex mcp add --url` writes: [mcp_servers.<name>] / url = "..."
+      "-c", `mcp_servers.platform.url="${PLATFORM_MCP_URL}"`,
       "-m", model,
       "--dangerously-bypass-approvals-and-sandbox",
       fullPrompt,
@@ -550,6 +654,8 @@ async function ccRunTurn(s, userText, modelId) {
       abortController: ac,
       disallowedTools: ["AskUserQuestion"],
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
+      ...(s.systemPrompt ? { system: s.systemPrompt } : {}),
+      mcpServers: [{ type: "http", url: PLATFORM_MCP_URL }],
     }});
     for await (const m of stream) {
       if (m.type === "system" && m.subtype === "init" && m.session_id && !s.sdkSessionId) s.sdkSessionId = m.session_id;
@@ -931,6 +1037,62 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // MCP Streamable HTTP transport: POST /mcp
+  if (p === "/mcp" && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const raw = await readBody(req);
+    let mcpBody = {};
+    try { mcpBody = JSON.parse(raw || "{}"); } catch {}
+    const response = await handleMcpRequest(mcpBody);
+    if (response === null) { res.writeHead(204); res.end(); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(response));
+    return;
+  }
+
+  // MCP HTTP+SSE transport (legacy): GET /mcp/sse
+  if (p === "/mcp/sse" && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    handleMcpSse(req, res, `/mcp/message`);
+    return;
+  }
+
+  // MCP HTTP+SSE transport: POST /mcp/message?sessionId=xxx
+  if (p === "/mcp/message" && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const sessionId = url.searchParams.get("sessionId") || "";
+    const raw = await readBody(req);
+    let mcpBody = {};
+    try { mcpBody = JSON.parse(raw || "{}"); } catch {}
+    await handleMcpMessage(mcpBody, sessionId);
+    res.writeHead(202); res.end();
+    return;
+  }
+
+  if (p === "/agents" && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(listAgents()));
+    return;
+  }
+
+  const agentRouteMatch = p.match(/^\/agents\/([^/]+)$/);
+  if (agentRouteMatch && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const a = getAgent(decodeURIComponent(agentRouteMatch[1]));
+    if (!a) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(a));
+    return;
+  }
+
+  if (agentRouteMatch && req.method === "DELETE") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    deleteAgent(decodeURIComponent(agentRouteMatch[1]));
+    res.writeHead(204); res.end();
+    return;
+  }
+
   // Reject NEW session creates while draining; all other in-flight paths continue.
   if (draining && p === "/session" && req.method === "POST") {
     res.writeHead(503, { "content-type": "application/json" });
@@ -952,9 +1114,25 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     try { body = JSON.parse(raw || "{}"); } catch {}
 
-    const harness = body.harness === "claude-code" ? "cc" : body.harness === "github-copilot" ? "github-copilot" : body.harness === "codex" ? "codex" : "opencode";
+    const agentParam = body.agent ?? body.harness;
+    const builtin = agentParam === "claude-code" ? "cc" : agentParam === "github-copilot" ? "github-copilot" : agentParam === "codex" ? "codex" : agentParam === "cc" ? "cc" : agentParam === "opencode" ? "opencode" : null;
 
-    if (harness === "github-copilot") {
+    let systemPromptOverride = body.systemPrompt || null;
+
+    if (!builtin) {
+      let savedAgent = null;
+      try { savedAgent = getAgent(agentParam); } catch {}
+      if (!savedAgent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
+        return;
+      }
+      systemPromptOverride = savedAgent.system_prompt;
+      body.title = body.title || savedAgent.name;
+    }
+    const resolvedAgent = builtin ?? "cc";
+
+    if (resolvedAgent === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "github-copilot requires LITELLM_API_BASE (BYOK) or GITHUB_TOKEN (native Copilot)" }));
@@ -964,15 +1142,16 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set() };
       copilotSessions.set(id, s);
+      sessionAgent.set(id, "github-copilot");
       sessionHarness.set(id, "github-copilot");
       persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now });
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "github-copilot" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "github-copilot" }));
       return;
     }
 
-    if (harness === "codex") {
+    if (resolvedAgent === "codex") {
       if (!process.env.LITELLM_API_BASE) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "codex requires LITELLM_API_BASE" }));
@@ -982,15 +1161,16 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set(), activeProcess: null };
       codexSessions.set(id, s);
+      sessionAgent.set(id, "codex");
       sessionHarness.set(id, "codex");
       persistSession({ id, harness: "codex", title: s.title, createdAt: now });
       log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "codex" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "codex" }));
       return;
     }
 
-    if (harness === "cc") {
+    if (resolvedAgent === "cc") {
       if (!ccQuery) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "claude-code SDK not available" }));
@@ -998,20 +1178,22 @@ const server = http.createServer(async (req, res) => {
       }
       const id = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
       const now = Date.now();
-      const s = { id, title: body.title || "New session", time: { created: now }, harness: "claude-code", sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set() };
+      const s = { id, title: body.title || "New session", time: { created: now }, agent: "claude-code", sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(), systemPrompt: systemPromptOverride };
       ccSessions.set(id, s);
+      sessionAgent.set(id, "cc");
       sessionHarness.set(id, "cc");
       persistSession({ id, harness: "cc", title: s.title, createdAt: now });
       log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "claude-code" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "claude-code" }));
       return;
     }
 
     const n = materializeSkills(body.files);
     if (Array.isArray(body.files)) body.files = body.files.filter((f) => !skillSlug(f.sandbox_path));
     log(`session create: materialized ${n} skill(s) title=${JSON.stringify(body.title || "")}`);
-    const { harness: _h, ...forwardBody } = body;
+    const { harness: _h, agent: _a, ...forwardBody } = body;
+    forwardBody.mcp = { ...(forwardBody.mcp || {}), platform: { type: "remote", url: PLATFORM_MCP_URL, enabled: true } };
     const upReq = http.request(UP + "/session", { method: "POST", headers: { "content-type": "application/json" } }, (upRes) => {
       let respData = "";
       upRes.on("data", c => respData += c);
@@ -1019,6 +1201,7 @@ const server = http.createServer(async (req, res) => {
         try {
           const parsed = JSON.parse(respData);
           if (parsed.id) {
+            sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
             persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now() });
           }
@@ -1043,8 +1226,8 @@ const server = http.createServer(async (req, res) => {
     });
     const ocSessions = await ocFetch();
     const tagged = (Array.isArray(ocSessions) ? ocSessions : []).map(s => {
-      sessionHarness.set(s.id, "opencode");
-      return { ...s, harness: "opencode" };
+      sessionAgent.set(s.id, "opencode");
+      return { ...s, agent: "opencode" };
     });
     // Merge in DB-persisted opencode sessions not currently known to the child.
     const liveOcIds = new Set(tagged.map(s => s.id));
@@ -1055,13 +1238,13 @@ const server = http.createServer(async (req, res) => {
         return { id: r.id, title: r.title, time: { created: r.created_at, ...(r.updated_at ? { updated: r.updated_at } : {}) }, harness: "opencode" };
       });
     const ccList = [...ccSessions.values()].map(s => ({
-      id: s.id, title: s.title, time: s.time, harness: "claude-code",
+      id: s.id, title: s.title, time: s.time, agent: "claude-code",
     }));
     const copilotList = [...copilotSessions.values()].map(s => ({
-      id: s.id, title: s.title, time: s.time, harness: "github-copilot",
+      id: s.id, title: s.title, time: s.time, agent: "github-copilot",
     }));
     const codexList = [...codexSessions.values()].map(s => ({
-      id: s.id, title: s.title, time: s.time, harness: "codex",
+      id: s.id, title: s.title, time: s.time, agent: "codex",
     }));
     const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
@@ -1072,31 +1255,31 @@ const server = http.createServer(async (req, res) => {
   const getOneMatch = p.match(/^\/session\/([^/]+)$/) && req.method === "GET";
   if (getOneMatch) {
     const sid = p.match(/^\/session\/([^/]+)$/)[1];
-    if (sessionHarness.get(sid) === "cc") {
+    if (sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "claude-code" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "claude-code" }));
       return;
     }
-    if (sessionHarness.get(sid) === "github-copilot") {
+    if (sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "github-copilot" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "github-copilot" }));
       return;
     }
-    if (sessionHarness.get(sid) === "codex") {
+    if (sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "codex" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "codex" }));
       return;
     }
-    // opencode: proxy and inject harness field
+    // opencode: proxy and inject agent field
     const ocReq = http.request(UP + p, { method: "GET" }, (ocRes) => {
       let d = ""; ocRes.on("data", c => d += c); ocRes.on("end", () => {
-        try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, harness: "opencode" })); }
+        try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, agent: "opencode" })); }
         catch { res.writeHead(ocRes.statusCode || 502); res.end(d); }
       });
     });
@@ -1113,7 +1296,7 @@ const server = http.createServer(async (req, res) => {
     const sessionIdMatch = p.match(/^\/session\/([^/]+)\//);
     const sid = sessionIdMatch?.[1];
 
-    if (sid && sessionHarness.get(sid) === "cc") {
+    if (sid && sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
 
@@ -1137,7 +1320,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Route codex sessions in-process
-    if (sid && sessionHarness.get(sid) === "codex") {
+    if (sid && sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
 
@@ -1156,7 +1339,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Route github-copilot sessions in-process
-    if (sid && sessionHarness.get(sid) === "github-copilot") {
+    if (sid && sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
 
@@ -1244,21 +1427,21 @@ const server = http.createServer(async (req, res) => {
   const getMsgMatch = p.match(/^\/session\/([^/]+)\/message$/);
   if (req.method === "GET" && getMsgMatch) {
     const sid = getMsgMatch[1];
-    if (sessionHarness.get(sid) === "cc") {
+    if (sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(cs.history));
       return;
     }
-    if (sessionHarness.get(sid) === "github-copilot") {
+    if (sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(cs.history));
       return;
     }
-    if (sessionHarness.get(sid) === "codex") {
+    if (sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
@@ -1342,7 +1525,7 @@ const server = http.createServer(async (req, res) => {
   const abortMatch = p.match(/^\/session\/([^/]+)\/abort$/);
   if (abortMatch && req.method === "POST") {
     const sid = abortMatch[1];
-    const harness = sessionHarness.get(sid);
+    const harness = sessionAgent.get(sid);
     if (harness === "cc") {
       const cs = ccSessions.get(sid);
       if (cs?.abortController) { cs.abortController.abort(); log(`abort: cc sid=${sid}`); }
@@ -1392,11 +1575,37 @@ async function waitChild() {
 }
 
 fs.mkdirSync(SKILLS_ROOT, { recursive: true });
+initAgentDb();
+
+// Inject platform MCP into opencode.json before child starts so opencode
+// discovers save_agent at startup (opencode reads config once, not per-session).
+const ocWorkdir = process.env.OPENCODE_INLINE_WORKDIR;
+if (ocWorkdir) {
+  const ocConfigPath = path.join(ocWorkdir, "opencode.json");
+  try {
+    if (fs.existsSync(ocConfigPath)) {
+      const cfg = JSON.parse(fs.readFileSync(ocConfigPath, "utf8"));
+      const platformEntry = { type: "remote", url: PLATFORM_MCP_URL, enabled: true };
+      if (MASTER_KEY) platformEntry.headers = { Authorization: `Bearer ${MASTER_KEY}` };
+      cfg.mcp = { ...(cfg.mcp || {}), platform: platformEntry };
+      fs.writeFileSync(ocConfigPath, JSON.stringify(cfg, null, 2));
+      log("injected platform MCP into opencode.json");
+    }
+  } catch (e) {
+    log(`platform MCP injection warning: ${e.message}`);
+  }
+}
+
+// Start HTTP server BEFORE opencode so platform MCP is reachable when
+// opencode connects to it during startup (opencode pings MCP servers on init).
+server.listen(PORT, "0.0.0.0", () => {
+  log(`adapter listening :${PORT} (platform MCP ready)`);
+});
+
 startChild();
 waitChild().then((ok) => {
   if (!ok) { log("opencode serve never became ready"); process.exit(1); }
-  log(`listening :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
-  server.listen(PORT, "0.0.0.0");
+  log(`opencode ready :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
 
   const healthTimer = setInterval(async () => {
     const probe = await probeChild();
