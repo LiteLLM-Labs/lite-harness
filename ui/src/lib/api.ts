@@ -84,13 +84,18 @@ export async function listSessions(): Promise<OpencodeSession[]> {
   );
 }
 
-export async function createSession(title?: string, harness?: "opencode" | "claude-code" | "github-copilot"): Promise<OpencodeSession> {
+export async function createSession(title?: string, agent?: string): Promise<OpencodeSession> {
   const res = await req("/session", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title, ...(harness ? { harness } : {}) }),
+    body: JSON.stringify({ title, ...(agent ? { agent } : {}) }),
   });
   return jsonOrThrow<OpencodeSession>(res);
+}
+
+export async function listAgents(): Promise<{ id: string; name: string; base_agent: string; created_at: number }[]> {
+  const res = await req("/agents");
+  return jsonOrThrow(res);
 }
 
 export async function deleteSession(id: string): Promise<void> {

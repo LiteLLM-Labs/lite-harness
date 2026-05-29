@@ -56,7 +56,8 @@ function toLocal(m: HarnessMessage): LocalMessage {
   const providerID = (m.info as Record<string, unknown>).providerID as string | undefined;
   const modelID = (m.info as Record<string, unknown>).modelID as string | undefined;
   const model = providerID && modelID ? `${providerID}/${modelID}` : modelID;
-  const harness = (m.info as Record<string, unknown>).harness as string | undefined;
+  const infoRecord = m.info as Record<string, unknown>;
+  const harness = (infoRecord.agent ?? infoRecord.harness) as string | undefined;
   const tokens = (m.info as Record<string, unknown>).tokens as LocalMessage["tokens"] | undefined;
   const cost = (m.info as Record<string, unknown>).cost as number | undefined;
 
