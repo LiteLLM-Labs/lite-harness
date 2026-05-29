@@ -39,7 +39,6 @@ const YELLOW = "\x1b[33m";
 const ERASE  = "\r\x1b[K"; // move to col 0, erase line
 
 const SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
-const BORDER = `  ${GRAY}│${R} `;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function ask(rl, prompt) {
@@ -81,8 +80,8 @@ function makeRenderer() {
   let spinnerTimer  = null;
   let spinnerFrame  = 0;
   let spinnerActive = false;
-  let firstChunk    = true;   // true until first text arrives
-  let atLineStart   = true;   // track position for border prefix
+  let firstChunk    = true;
+  let atLineStart   = true;
 
   function startSpinner() {
     spinnerActive = true;
@@ -103,7 +102,7 @@ function makeRenderer() {
   function writeChunk(text) {
     if (firstChunk) {
       stopSpinner();
-      process.stdout.write(BORDER);
+      process.stdout.write("  ");
       atLineStart = false;
       firstChunk  = false;
     }
@@ -112,7 +111,7 @@ function makeRenderer() {
         process.stdout.write("\n");
         atLineStart = true;
       } else {
-        if (atLineStart) { process.stdout.write(BORDER); atLineStart = false; }
+        if (atLineStart) { process.stdout.write("  "); atLineStart = false; }
         process.stdout.write(ch);
       }
     }
@@ -147,7 +146,7 @@ function makeRenderer() {
       for (const l of lines) process.stdout.write(`    ${GRAY}${l}${R}\n`);
       if (text.split("\n").length > 8) process.stdout.write(`    ${GRAY}…${R}\n`);
     }
-    firstChunk = true; // next text chunk starts fresh with border
+    firstChunk = true;
   }
 
   return { startSpinner, stopSpinner, writeChunk, writeTool, finish, error };
@@ -195,7 +194,7 @@ async function chat(harnessName, flags) {
   process.stdout.write(`  ${BOLD}${WHITE}lite-harness${R}  ${CYAN}${harnessName}${R}\n`);
   process.stdout.write(`  ${GRAY}${model}  ·  ${shortUrl}  ·  ${currentSid.slice(0, 12)}${R}\n`);
   process.stdout.write(`\n`);
-  process.stdout.write(`  ${DIM}/clear to reset history  ·  Ctrl+C or "exit" to quit${R}\n`);
+  process.stdout.write(`  ${DIM}/clear to reset history  ·  /paste for multi-line  ·  Ctrl+C or "exit" to quit${R}\n`);
   process.stdout.write(`\n`);
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -341,6 +340,27 @@ async function chat(harnessName, flags) {
 
     if (text === "/clear") {
       try { await clearSession(); } catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n\n`); }
+      continue;
+    }
+
+    if (text === "/paste") {
+      process.stdout.write(`  ${DIM}Paste text. Type ${CYAN}.${R}${DIM} on its own line to send, or ${CYAN}/cancel${R}${DIM} to abort.${R}\n`);
+      const lines = [];
+      while (true) {
+        const line = await new Promise((resolve) => rl.question(`  ${GRAY}│${R} `, resolve));
+        if (line === "/cancel") { lines.length = 0; break; }
+        if (line === ".") break;
+        lines.push(line);
+      }
+      const pasteText = lines.join("\n").trim();
+      if (!pasteText) continue;
+      process.stdout.write("\n");
+      try {
+        await sendAndWait(pasteText);
+      } catch (e) {
+        process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`);
+      }
+      process.stdout.write("\n");
       continue;
     }
 
