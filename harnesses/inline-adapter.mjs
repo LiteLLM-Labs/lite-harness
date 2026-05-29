@@ -63,12 +63,12 @@ if (process.env.LITELLM_API_KEY) {
 // adapter runs open (local dev). The whoami probe is the only exception so
 // the login page can validate a key without first being authorized.
 const MASTER_KEY = process.env.MASTER_KEY || "";
-const LOOP_DB_PATH = process.env.LOOP_DB_PATH ||
-  path.join(process.env.HOME || "/home/sandbox", ".local", "share", "opencode", "loops.db");
+const DB_PATH = process.env.DB_PATH ||
+  path.join(process.env.HOME || "/home/sandbox", ".local", "share", "lite-harness", "db.db");
 
 // Initialize DB synchronously so session hydration runs before any request.
 // LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
-initDb(LOOP_DB_PATH);
+initDb(DB_PATH);
 
 // Plugin registry — handles /vault, /help, and future slash commands at the
 // adapter level before any harness sees the message.
@@ -158,7 +158,7 @@ async function callPromptAsync(sessionId, prompt) {
 // Run plugin setup now that callPromptAsync is defined.
 pluginRegistry.setup({
   masterKey: MASTER_KEY,
-  dbPath: LOOP_DB_PATH,
+  dbPath: DB_PATH,
   callPromptAsync,
   isSessionActive: (sid) =>
     ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionHarness.get(sid) === "opencode",
@@ -761,9 +761,9 @@ const server = http.createServer(async (req, res) => {
       const db = getDb();
       const sessionCount = db.prepare("SELECT COUNT(*) as n FROM sessions").get().n;
       const msgCount = db.prepare("SELECT COUNT(*) as n FROM session_messages").get().n;
-      dbDebug = { dbOk: true, sessions: sessionCount, messages: msgCount, dbPath: LOOP_DB_PATH };
+      dbDebug = { dbOk: true, sessions: sessionCount, messages: msgCount, dbPath: DB_PATH };
     } catch (e) {
-      dbDebug = { dbOk: false, dbError: e.message, dbPath: LOOP_DB_PATH };
+      dbDebug = { dbOk: false, dbError: e.message, dbPath: DB_PATH };
     }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ harness: "inline", ok: true, draining, inFlight, restartCount, ui: UI_DIST_EXISTS, ...dbDebug }));
