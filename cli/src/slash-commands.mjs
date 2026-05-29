@@ -6,6 +6,7 @@
 
 export const SLASH_COMMANDS = [
   { name: "/loop", args: "<interval> <prompt>", hint: "run a prompt on a repeating interval" },
+  { name: "/agent", args: "[<one-liner>]", hint: "build an autonomous agent, then schedule it" },
   { name: "/vault", args: "KEY=VALUE", hint: "store a secret injected into sandboxes" },
   { name: "/clear", args: "", hint: "reset session history" },
   { name: "/resume", args: "", hint: "pick a previous session to continue" },
