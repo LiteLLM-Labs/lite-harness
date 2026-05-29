@@ -33,16 +33,51 @@ function assertDb() {
   if (!_db) throw new Error("loop-store: call initDb() before using the store");
 }
 
+function initSessionSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id             TEXT PRIMARY KEY,
+      harness        TEXT NOT NULL,
+      title          TEXT NOT NULL,
+      created_at     INTEGER NOT NULL,
+      updated_at     INTEGER,
+      sdk_session_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS session_messages (
+      id         TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      seq        INTEGER NOT NULL,
+      info_json  TEXT NOT NULL,
+      parts_json TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS session_messages_sid_seq
+      ON session_messages(session_id, seq);
+  `);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Return the shared db handle. Throws if initDb() hasn't been called.
+ *
+ * @returns {import("better-sqlite3").Database}
+ */
+export function getDb() {
+  assertDb();
+  return _db;
+}
 
 /**
  * Open (or create) the SQLite database at `dbPath`, run CREATE TABLE IF NOT
  * EXISTS, and store the handle at module level.  Call once at startup.
+ * Subsequent calls with the same path are no-ops (returns existing handle).
  *
  * @param {string} dbPath  Absolute path to the .db file.
  * @returns {import("better-sqlite3").Database}
  */
 export function initDb(dbPath) {
+  if (_db) return _db;
+
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   let Database;
@@ -67,6 +102,7 @@ export function initDb(dbPath) {
       created_at       INTEGER NOT NULL
     )
   `);
+  initSessionSchema(_db);
 
   return _db;
 }
