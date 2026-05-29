@@ -41,9 +41,9 @@ Set `E2B_API_KEY` or `DAYTONA_API_KEY` and agents get an isolated Linux sandbox 
 
 ## about
 
-We built lite-harness because running opencode and claude-code as separate servers got hard to maintain — multiple services, different API specs, unreliable session management, different inputs for MCP tools and system prompts.
+We built lite-harness because running opencode and claude-code as separate servers got hard to maintain - multiple services, different API specs, unreliable session management, different inputs for MCP tools and system prompts.
 
-So we wrapped all harnesses in an OpenCode-compatible server and put it in one Dockerfile — one service to scale, with shared MCP tools, prompts, and session management across all harnesses.
+So we wrapped all harnesses in an OpenCode-compatible server and put it in one Dockerfile, giving us one service to maintain, with shared MCP tools, prompts, and session management across all harnesses.
 
 ## docs
 
