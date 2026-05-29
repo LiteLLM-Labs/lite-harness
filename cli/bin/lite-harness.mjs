@@ -387,7 +387,13 @@ async function chat(harnessName, flags) {
         continue;
       }
 
-      // Skip escape sequences (arrow keys etc.)
+      // Escape: bare \x1b with no following bytes in this chunk = Escape key
+      if (ch === "\x1b" && i === data.length) {
+        if (busy) { idleResolve?.(); idleResolve = null; renderer.finish(); busy = false; process.stdout.write("\n"); showPrompt(); }
+        continue;
+      }
+
+      // Skip multi-char escape sequences (arrow keys etc.)
       if (escBuf || ch === "\x1b") {
         escBuf += ch;
         if (escBuf.length > 1 && /[A-Za-z~]/.test(ch)) escBuf = "";
