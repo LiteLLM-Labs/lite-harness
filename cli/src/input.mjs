@@ -3,7 +3,7 @@
 // the submitted string, or the EXIT sentinel on Ctrl+C / Ctrl+D-on-empty.
 
 import readline from "node:readline";
-import { R, GRAY, BLUE, cols, up } from "./ansi.mjs";
+import { R, GRAY, BLUE, cols, up, down } from "./ansi.mjs";
 
 export const EXIT = Symbol("exit");
 
@@ -26,51 +26,62 @@ export function boxedPrompt(history) {
     let buf = "";
     let cursor = 0;               // index into buf
     let lastTop = 0;              // lines from parked cursor up to the top border
+    let lastRows = 0;             // total rows the box occupies (top+body+bottom+hint)
     let firstRender = true;
     let histIdx = history.length; // == length means "current draft"
     let stash = "";
 
     const innerW = () => Math.max(8, cols() - 4); // fill the terminal width
 
-    function wrap(s, w) {
-      const lines = [];
-      for (let i = 0; i < s.length; i += w) lines.push(s.slice(i, i + w));
-      return lines.length ? lines : [""];
+    // Lay PROMPT + buf (which may contain explicit "\n") into visual rows of
+    // width w, and locate the cursor within that grid.
+    function layout(w) {
+      const rows = [""];
+      let r = 0, c = 0, curRow = 0, curCol = 0;
+      const put = (ch) => { if (c >= w) { rows.push(""); r++; c = 0; } rows[r] += ch; c++; };
+      for (const ch of PROMPT) put(ch);
+      for (let k = 0; k <= buf.length; k++) {
+        if (k === cursor) { curRow = r; curCol = c; }
+        if (k === buf.length) break;
+        if (buf[k] === "\n") { rows.push(""); r++; c = 0; } else put(buf[k]);
+      }
+      if (curCol >= w) { curRow++; curCol = 0; }  // cursor at a wrap boundary
+      if (curRow >= rows.length) rows.push("");   // cursor on a fresh trailing row
+      return { rows, curRow, curCol };
     }
 
     function render() {
       const w = innerW();
-      const combined = PROMPT + buf;
-      const lines = wrap(combined, w);
-      const pos = PROMPT.length + cursor;
-      let curRow = Math.floor(pos / w);
-      let curCol = pos % w;
-      if (curRow >= lines.length) lines.push(""); // cursor sits past wrapped text
+      const { rows, curRow, curCol } = layout(w);
 
       if (!firstRender) { out(up(lastTop)); out("\r\x1b[0J"); }
       else { out("\r"); firstRender = false; }
 
-      const top  = `${GRAY}╭${"─".repeat(w + 2)}╮${R}`;
-      const bot  = `${GRAY}╰${"─".repeat(w + 2)}╯${R}`;
-      const body = lines.map((ln, i) => {
+      const top = `${GRAY}╭${"─".repeat(w + 2)}╮${R}`;
+      const bot = `${GRAY}╰${"─".repeat(w + 2)}╯${R}`;
+      const body = rows.map((ln, i) => {
         const txt = i === 0
           ? `${BLUE}${ln.slice(0, PROMPT.length)}${R}${ln.slice(PROMPT.length)}`
           : ln;
         const pad = " ".repeat(Math.max(0, w - ln.length));
         return `${GRAY}│${R} ${txt}${pad} ${GRAY}│${R}`;
       });
-      const hint = `  ${GRAY}↵ send  ·  /clear  ·  exit${R}`;
+      const hint = `  ${GRAY}↵ send  ·  ⇧↵ newline  ·  /clear  ·  exit${R}`;
       out([top, ...body, bot, hint].join("\n"));
 
-      const totalRows = lines.length + 3; // top + body + bottom + hint
-      out(up(totalRows - 1 - (1 + curRow)));        // park on the cursor's content row
-      out(`\x1b[${3 + curCol}G`);                   // col 1:'│' 2:' ' 3:text
+      lastRows = rows.length + 3; // top + rows + bottom + hint
+      out(up(lastRows - 1 - (1 + curRow))); // park on the cursor's content row
+      out(`\x1b[${3 + curCol}G`);            // col 1:'│' 2:' ' 3:text
       lastTop = 1 + curRow;
     }
 
     function setBuf(next, cur) {
       buf = next;
       cursor = cur === undefined ? next.length : Math.max(0, Math.min(cur, next.length));
+    }
+
+    function insertNewline() {
+      setBuf(buf.slice(0, cursor) + "\n" + buf.slice(cursor), cursor + 1);
     }
 
     function browseHistory(dir) {
@@ -86,7 +97,11 @@ export function boxedPrompt(history) {
       stdin.setRawMode(false);
       stdin.pause();
       stdin.removeListener("data", onData);
-      out(up(lastTop)); out("\r\x1b[0J"); // wipe the box, leave cursor at its top-left
+      render(); // ensure the box reflects the final text (e.g. paste-then-Enter)
+      // Keep the box on screen (with the typed text inside) and move the cursor
+      // onto a fresh line below it, so it stays as scrollback after submit.
+      out(down((lastRows - 1) - lastTop)); // parked row → hint line (the last box row)
+      out("\r\n");
       resolve(value);
     }
 
@@ -98,14 +113,19 @@ export function boxedPrompt(history) {
       while (i < s.length) {
         const ch = s[i];
 
-        if (ch === "\x1b") { // escape sequence (arrows, home/end, delete)
+        if (ch === "\x1b") { // escape sequence (arrows, home/end, delete, modified Enter)
+          const nxt = s[i + 1];
+          if (nxt === "\r" || nxt === "\n") { insertNewline(); i += 2; continue; } // Alt/Option+Enter
           const rest = s.slice(i);
-          const m = rest.match(/^\x1b\[([0-9;]*)([A-Z~HF])/) || rest.match(/^\x1bO([A-Z])/);
+          const m = rest.match(/^\x1b\[([0-9;]*)([A-Za-z~])/) || rest.match(/^\x1bO([A-Z])/);
           if (m) {
+            // Shift+Enter — kitty (CSI 13;2u) or modifyOtherKeys (CSI 27;2;13~)
+            if (m[0] === "\x1b[13;2u" || m[0] === "\x1b[27;2;13~") { insertNewline(); i += m[0].length; continue; }
             const code = m[2] ?? m[1];
             if (code === "D") cursor = Math.max(0, cursor - 1);
             else if (code === "C") cursor = Math.min(buf.length, cursor + 1);
-            else if (code === "A" || code === "B") browseHistory(code === "A" ? -1 : 1);
+            // ↑/↓ browse history only for a single-line draft, so they don't clobber a multi-line one
+            else if ((code === "A" || code === "B") && !buf.includes("\n")) browseHistory(code === "A" ? -1 : 1);
             else if (code === "H") cursor = 0;
             else if (code === "F") cursor = buf.length;
             else if (m[1] === "3" && code === "~") setBuf(buf.slice(0, cursor) + buf.slice(cursor + 1), cursor);
@@ -117,7 +137,7 @@ export function boxedPrompt(history) {
         }
 
         const code = ch.charCodeAt(0);
-        if (ch === "\r" || ch === "\n") { done(buf); return; }
+        if (ch === "\r" || ch === "\n") { done(buf); return; } // plain Enter submits
         if (code === 3) { done(EXIT); return; }                              // Ctrl+C
         if (code === 4) { if (!buf) { done(EXIT); return; } i++; continue; } // Ctrl+D
         if (code === 1) { cursor = 0; i++; continue; }                       // Ctrl+A
