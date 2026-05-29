@@ -20,7 +20,7 @@ Code shared by all harnesses lives in `_shared/` (e.g. `_shared/entrypoint-commo
 - Wires both paths through LiteLLM (`LITELLM_API_BASE` / `LITELLM_API_KEY`).
 - Merges both SSE event streams onto a single `/event` bus.
 
-The `opencode/Dockerfile` builds the one production image: it packages the inline adapter, the opencode binary, the claude-code SDK node_modules, and the static UI together.
+The root `Dockerfile` builds the one production image: it packages the inline adapter, the opencode binary, the claude-code SDK node_modules, and the static UI together.
 
 ## Adding a new harness
 
