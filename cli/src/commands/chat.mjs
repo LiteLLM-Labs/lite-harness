@@ -1,12 +1,12 @@
 // `lite <harness>` — interactive TUI chat session.
-// Wires the client (server I/O), renderer (output), and boxedPrompt (input)
-// into a prompt → stream → prompt loop.
+// The composer owns a bottom-pinned input box; the conversation (this turn's
+// echo, reasoning, tools, answer) is printed above it via composer.print.
 
 import { R, BOLD, DIM, CYAN, GREEN, GRAY, RED, WHITE, BLUE, drawBox } from "../ansi.mjs";
 import { loadConfig } from "../config.mjs";
 import { LiteClient } from "../client.mjs";
 import { makeRenderer } from "../renderer.mjs";
-import { boxedPrompt, EXIT } from "../input.mjs";
+import { createComposer } from "../composer.mjs";
 import { sessionPicker } from "../session-picker.mjs";
 
 export async function chat(harnessName, flags) {
@@ -28,24 +28,13 @@ export async function chat(harnessName, flags) {
   }
   let currentSid = session.id;
 
-  // ── Welcome box ─────────────────────────────────────────────────────────────
-  process.stdout.write(drawBox([
-    `${BLUE}✻${R} ${BOLD}${WHITE}Welcome to lite-harness${R}`,
-    "",
-    `${GRAY}harness${R}   ${CYAN}${harnessName}${R}`,
-    `${GRAY}model${R}     ${model}`,
-    `${GRAY}server${R}    ${client.shortUrl}`,
-    `${GRAY}session${R}   ${currentSid.slice(0, 16)}`,
-    "",
-    `${DIM}/help for commands  ·  /resume to switch session  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
-  ], { color: BLUE }));
-
-  // ── Event handling ────────────────────────────────────────────────────────────
+  // ── Event handling ──────────────────────────────────────────────────────────
   const abort = new AbortController();
-  const renderer = makeRenderer();
   const partWritten = new Map();
   const assistantMsgIds = new Set(); // only render parts for assistant messages
   let idleResolve = null;
+
+  function resetTurn() { partWritten.clear(); assistantMsgIds.clear(); }
 
   function handleEvent(ev) {
     if (ev.type === "message.updated") {
@@ -86,54 +75,15 @@ export async function chat(harnessName, flags) {
     }
   }
 
-  function resetTurn() {
-    partWritten.clear();
-    assistantMsgIds.clear();
-  }
-
   client.streamEvents((ev) => {
     const evSid = ev?.properties?.sessionID ?? ev?.properties?.info?.sessionID;
     if (evSid === currentSid) handleEvent(ev);
   }, abort.signal);
 
-  // ── Actions ───────────────────────────────────────────────────────────────────
-  async function clearSession() {
-    await client.deleteSession(currentSid);
-    const s = await client.createSession(harnessName);
-    currentSid = s.id;
-    resetTurn();
-    idleResolve = null;
-    process.stdout.write("\x1b[2J\x1b[H"); // clear screen, cursor to top
-  }
-
-  function quit() {
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
-    abort.abort();
-    process.stdout.write("\n");
-    process.exit(0);
-  }
-
+  // ── Turn ──────────────────────────────────────────────────────────────────────
   async function sendAndWait(text) {
     const done = new Promise((resolve) => { idleResolve = resolve; });
     renderer.startSpinner();
-
-    // While streaming, watch for Esc (interrupt) / Ctrl+C (quit).
-    let onKey = null;
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-      process.stdin.resume();
-      onKey = (d) => {
-        const k = d.toString("utf8");
-        if (k.includes("\x03")) quit();          // Ctrl+C
-        else if (k === "\x1b") {                  // bare Esc → interrupt
-          renderer.finish();
-          process.stdout.write(`  ${GRAY}interrupted${R}\n`);
-          idleResolve?.(); idleResolve = null;
-        }
-      };
-      process.stdin.on("data", onKey);
-    }
-
     try {
       await client.prompt(currentSid, model, text);
       const timeout = new Promise((resolve) => setTimeout(resolve, 600_000));
@@ -142,87 +92,103 @@ export async function chat(harnessName, flags) {
       renderer.error(e.message);
     } finally {
       idleResolve = null;
-      if (onKey) {
-        process.stdin.removeListener("data", onKey);
-        if (process.stdin.isTTY) process.stdin.setRawMode(false);
-      }
     }
   }
 
-  // ── Input loop ──────────────────────────────────────────────────────────────
-  const history = [];
+  async function clearSession() {
+    await client.deleteSession(currentSid);
+    const s = await client.createSession(harnessName);
+    currentSid = s.id;
+    resetTurn();
+    idleResolve = null;
+    composer.clearConversation();
+  }
 
-  while (true) {
-    const input = await boxedPrompt(history);
-    if (input === EXIT) quit();
-    const text = input.trim();
-    if (!text) continue;
-    if (text === "exit" || text === "quit" || text === "\\q") quit();
+  function printHelp() {
+    composer.print([
+      "",
+      `  ${BOLD}${WHITE}Slash commands${R}`,
+      `  ${CYAN}/clear${R}    ${GRAY}reset session history${R}`,
+      `  ${CYAN}/resume${R}   ${GRAY}pick a previous session to continue${R}`,
+      `  ${CYAN}/help${R}     ${GRAY}show this command list${R}`,
+      `  ${CYAN}exit${R}      ${GRAY}quit lite-harness${R}`,
+      "",
+    ].join("\n") + "\n");
+  }
 
-    history.push(text);
-    // In a TTY the submitted box stays on screen as scrollback; only the
-    // non-TTY (piped) path needs the prompt echoed back.
-    if (!process.stdin.isTTY) process.stdout.write(`  ${BLUE}❯${R} ${text}\n`);
+  async function resume() {
+    let sessions;
+    try { sessions = await client.listSessions(harnessName); }
+    catch (e) { composer.print(`  ${RED}✗ ${e.message}${R}\n`); return; }
+    if (!sessions.length) { composer.print(`  ${GRAY}No sessions found.${R}\n`); return; }
+    sessions.sort((a, b) => (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0));
 
-    if (text === "/" || text === "/help") {
-      process.stdout.write([
-        "",
-        `  ${BOLD}${WHITE}Slash commands${R}`,
-        `  ${CYAN}/clear${R}    ${GRAY}reset session history${R}`,
-        `  ${CYAN}/resume${R}   ${GRAY}pick a previous session to continue${R}`,
-        `  ${CYAN}/help${R}     ${GRAY}show this command list${R}`,
-        `  ${CYAN}exit${R}      ${GRAY}quit lite-harness${R}`,
-        "",
-      ].join("\n"));
-      continue;
-    }
+    composer.suspend();              // hand the screen to the full-screen picker
+    const picked = await sessionPicker(sessions);
+    composer.resume();               // re-pin the box
+    if (!picked) return;
 
-    if (text === "/clear") {
-      try { await clearSession(); } catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`); }
-      process.stdout.write("\n");
-      continue;
-    }
-
-    if (text === "/resume") {
-      let sessions;
-      try { sessions = await client.listSessions(harnessName); }
-      catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n\n`); continue; }
-      if (!sessions.length) { process.stdout.write(`  ${GRAY}No sessions found.${R}\n\n`); continue; }
-      // Sort newest first
-      sessions.sort((a, b) => (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0));
-      const picked = await sessionPicker(sessions);
-      if (picked) {
-        currentSid = picked.id;
-        resetTurn();
-        idleResolve = null;
-        process.stdout.write(`\n  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
-        try {
-          const msgs = await client.listMessages(currentSid);
-          for (const msg of msgs) {
-            const role = msg.info?.role;
-            if (role === "user") {
-              const text = msg.parts?.find(p => p.type === "text")?.text ?? "";
-              if (text) process.stdout.write(`  ${BLUE}❯${R} ${text}\n\n`);
-            } else if (role === "assistant") {
-              for (const part of msg.parts ?? []) {
-                if (part.type === "text" && part.text) {
-                  renderer.text(part.text);
-                } else if (part.type === "tool" && part.tool) {
-                  renderer.tool(part.tool, part.state);
-                }
-              }
-              renderer.finish();
-              process.stdout.write("\n");
-            }
+    currentSid = picked.id;
+    resetTurn();
+    idleResolve = null;
+    composer.print(`  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
+    try {
+      const msgs = await client.listMessages(currentSid);
+      for (const msg of msgs) {
+        const role = msg.info?.role;
+        if (role === "user") {
+          const t = msg.parts?.find((p) => p.type === "text")?.text ?? "";
+          if (t) composer.print(`  ${BLUE}❯${R} ${t}\n`);
+        } else if (role === "assistant") {
+          for (const part of msg.parts ?? []) {
+            if (part.type === "text" && part.text) renderer.text(part.text);
+            else if (part.type === "tool" && part.tool) renderer.tool(part.tool, part.state);
           }
-        } catch (e) {
-          process.stdout.write(`  ${GRAY}(could not load history: ${e.message})${R}\n\n`);
+          renderer.finish();
         }
       }
-      continue;
+    } catch (e) {
+      composer.print(`  ${GRAY}(could not load history: ${e.message})${R}\n`);
     }
-
-    await sendAndWait(text);
-    process.stdout.write("\n");
   }
+
+  function quit() { composer.stop(); abort.abort(); process.exit(0); }
+
+  // ── Composer (owns the pinned box + stdin) ───────────────────────────────────
+  const composer = createComposer({
+    onQuit: quit,
+    onInterrupt: () => {
+      renderer.finish();
+      composer.print(`  ${GRAY}interrupted${R}\n`);
+      idleResolve?.(); idleResolve = null;
+    },
+    onSubmit: async (raw) => {
+      const text = raw.trim();
+      if (text) {
+        if (text === "exit" || text === "quit" || text === "\\q") return quit();
+        if (text === "/" || text === "/help") printHelp();
+        else if (text === "/clear") { try { await clearSession(); } catch (e) { composer.print(`  ${RED}✗ ${e.message}${R}\n`); } }
+        else if (text === "/resume") await resume();
+        else await sendAndWait(text);
+      }
+      composer.idle(); // re-focus the box for the next message
+    },
+  });
+
+  const renderer = makeRenderer(composer.print);
+
+  composer.start();
+  composer.print(drawBox([
+    `${BLUE}✻${R} ${BOLD}${WHITE}Welcome to lite-harness${R}`,
+    "",
+    `${GRAY}harness${R}   ${CYAN}${harnessName}${R}`,
+    `${GRAY}model${R}     ${model}`,
+    `${GRAY}server${R}    ${client.shortUrl}`,
+    `${GRAY}session${R}   ${currentSid.slice(0, 16)}`,
+    "",
+    `${DIM}/help for commands  ·  /resume to switch session  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
+  ], { color: BLUE }));
+  composer.idle();
+
+  await new Promise(() => {}); // composer drives everything via events
 }
