@@ -87,9 +87,15 @@ lite claude-code --model gpt-4o
 
 ## In-session commands
 
+Type `/` to open the slash-command menu. Use `↑`/`↓` to move and `Tab` or `↵`
+to autofill the highlighted command.
+
 | Input | Action |
 |-------|--------|
+| `/loop <interval> <prompt>` | Run a prompt on a repeating interval (`30s`, `5m`, `1h`, `daily`, `weekly`). Also `/loop list`, `/loop status <id>`, `/loop stop <id>` |
+| `/vault KEY=VALUE` | Store a secret injected into sandboxes (also `list` / `delete` / `clear`) |
 | `/clear` | Delete current session and start a fresh one |
+| `/help` | List available commands |
 | `exit` / `quit` / `\q` | Exit the CLI |
 | `Ctrl+C` | Exit the CLI |
 
