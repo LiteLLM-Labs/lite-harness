@@ -7,8 +7,8 @@ import {
   SPINNER_FRAMES, cols,
 } from "./ansi.mjs";
 
-export function makeRenderer() {
-  const out = (s) => process.stdout.write(s);
+export function makeRenderer(write = (s) => process.stdout.write(s)) {
+  const out = write;
 
   let spinnerTimer = null;
   let spinnerFrame = 0;
