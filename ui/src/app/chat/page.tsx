@@ -18,7 +18,7 @@ import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
-import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession } from "@/lib/api";
+import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession, listAgents } from "@/lib/api";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 import type { Frame } from "@/components/inspector-panel";
 
@@ -39,7 +39,8 @@ function ChatInner() {
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const eventBufferRef = useRef<Frame[]>([]);
-  const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code" | "github-copilot">("opencode");
+  const [sessionHarness, setSessionHarness] = useState<string>("opencode");
+  const [savedAgents, setSavedAgents] = useState<{ id: string; name: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
 
@@ -64,17 +65,22 @@ function ChatInner() {
     }).catch(() => {});
   }, []);
 
-  // Fetch session metadata to get the locked agent/harness
+  // Fetch session metadata to get the locked agent
   useEffect(() => {
     if (!sid) return;
     getSession(sid).then(s => {
-      const agentValue = s.agent ?? s.harness;
-      if (agentValue === "claude-code" || agentValue === "opencode" || agentValue === "github-copilot") setSessionHarness(agentValue);
+      const a = s.agent ?? s.harness;
+      if (a) setSessionHarness(a);
     }).catch(() => {});
   }, [sid]);
 
-  // On harness change before first message: delete current empty session, create new, redirect
-  const onHarnessChange = useCallback(async (next: "opencode" | "claude-code" | "github-copilot") => {
+  // Fetch saved agents for dropdown
+  useEffect(() => {
+    listAgents().then(setSavedAgents).catch(() => {});
+  }, []);
+
+  // On agent change before first message: delete current empty session, create new, redirect
+  const onHarnessChange = useCallback(async (next: string) => {
     if (!sid || next === sessionHarness) return;
     await deleteSession(sid);
     const s = await createSession(undefined, next);
@@ -226,18 +232,29 @@ function ChatInner() {
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-muted-foreground">harness</span>
+              <span className="text-[11px] text-muted-foreground">agent</span>
               {messages && messages.length > 0 ? (
                 <span className="h-8 px-3 flex items-center text-xs font-mono border border-border rounded-md bg-muted text-muted-foreground">{sessionHarness}</span>
               ) : (
-                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v as "opencode" | "claude-code" | "github-copilot")}>
-                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v)}>
+                  <SelectTrigger className="h-8 text-xs w-[150px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
                     <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
                     <SelectItem value="github-copilot" className="text-xs font-mono">github copilot</SelectItem>
+                    {savedAgents.length > 0 && (
+                      <>
+                        <div className="px-2 py-1.5 text-[10px] text-muted-foreground uppercase tracking-wider border-t mt-1 pt-2">Saved agents</div>
+                        {savedAgents.map(a => (
+                          <SelectItem key={a.id} value={a.name} className="text-xs font-mono">{a.name}</SelectItem>
+                        ))}
+                      </>
+                    )}
+                    <div className="px-2 py-2 text-[10px] text-muted-foreground border-t mt-1">
+                      💡 Say <span className="font-mono">&quot;save this agent&quot;</span> to save a session
+                    </div>
                   </SelectContent>
                 </Select>
               )}
