@@ -47,8 +47,10 @@ export async function chat(harnessName, flags) {
   const partWritten = new Map();
   const assistantMsgIds = new Set(); // only render parts for assistant messages
   let idleResolve = null;
+  let interrupted = false;
 
   function handleEvent(ev) {
+    if (interrupted) return;
     if (ev.type === "message.updated") {
       const info = ev.properties?.info;
       if (info?.id && info?.role === "assistant") assistantMsgIds.add(info.id);
@@ -90,6 +92,7 @@ export async function chat(harnessName, flags) {
   function resetTurn() {
     partWritten.clear();
     assistantMsgIds.clear();
+    interrupted = false;
   }
 
   client.streamEvents((ev) => {
@@ -127,8 +130,10 @@ export async function chat(harnessName, flags) {
         const k = d.toString("utf8");
         if (k.includes("\x03")) quit();          // Ctrl+C
         else if (k === "\x1b") {                  // bare Esc → interrupt
+          interrupted = true;
           renderer.finish();
           process.stdout.write(`  ${GRAY}interrupted${R}\n`);
+          client.abort(currentSid);
           idleResolve?.(); idleResolve = null;
         }
       };
