@@ -1,95 +1,26 @@
-<h1 align="center">lite-harness</h1>
-<p align="center">A unified API for coding-agent harnesses. Talk to Claude Code, OpenCode, GitHub Copilot, Codex through one server.</p>
+# lite-harness
 
-<h4 align="center">
-  <a href="#get-started">Get started</a> ·
-  <a href="docs/configuration.md">Configuration</a> ·
-  <a href="docs/api.md">API reference</a> ·
-  <a href="docs/architecture.md">Architecture</a> ·
-  <a href="harnesses/README.md">Add a harness</a>
-</h4>
+one server. any coding agent. any model.
 
----
+![litellm_hero_v11](https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6)
 
-<img width="1200" height="630" alt="litellm_hero_v11" src="https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6" />
-
-
-
-## What is lite-harness
-
-lite-harness is a single HTTP server that fronts any coding-agent harness (opencode, claude-code, claude-agent-sdk, openai-agents) behind one API. Same 3 endpoints, every harness. Point it at a LiteLLM gateway and every harness can use any model.
-
----
-
-## Why lite-harness
-
-- **Unified API.** `/session`, `/session/{id}/prompt_async`, `/event`. That's it.
-- **Swap harnesses with one field.** `"harness": "opencode"` to `"harness": "claude-code"`. Nothing else changes.
-- **Any model via LiteLLM.** Every harness routes through your gateway. Claude, GPT, Gemini, Bedrock all work when the gateway routes them.
-- **Master-key auth out of the box.** Set `MASTER_KEY` and every API route requires `Authorization: Bearer <key>`. UI ships with a login page.
-- **Sandboxing via E2B or Daytona.** Set `E2B_API_KEY` or `DAYTONA_API_KEY` to give agents an isolated Linux sandbox with `provision`, `execute`, `read_file`, and `upload_artifact` tools. No other config needed.
-
----
-
-## Create a session
-
-Pick your harness in the body. Same call, every harness.
-
-### opencode
+## usage
 
 ```bash
-curl -X POST localhost:4096/session \
-  -H 'content-type: application/json' \
-  -H "authorization: Bearer $MASTER_KEY" \
-  -d '{"title": "fix the bug", "harness": "opencode"}'
+# git clone https://github.com/LiteLLM-Labs/lite-harness && cd lite-harness
+
+# cd cli && npm install -g .
+
+lite login           # point at your server, save master key
+lite opencode        # start a TUI chat session
+lite claude-code --model anthropic/claude-opus-4-7
 ```
 
-### claude-code
+Supported agents: `opencode` `claude-code` `github-copilot` `codex`
+
+## setup
 
 ```bash
-curl -X POST localhost:4096/session \
-  -H 'content-type: application/json' \
-  -H "authorization: Bearer $MASTER_KEY" \
-  -d '{"title": "fix the bug", "harness": "claude-code"}'
-```
-
----
-
-## Send a prompt
-
-Same call for every harness. Swap `modelID` for any model your LiteLLM gateway routes (Claude, GPT, Gemini, Bedrock, ...).
-
-```bash
-curl -X POST localhost:4096/session/$SID/prompt_async \
-  -H 'content-type: application/json' \
-  -H "authorization: Bearer $MASTER_KEY" \
-  -d '{"model": {"providerID": "litellm", "modelID": "claude-sonnet-4-6"},
-       "parts": [{"type": "text", "text": "summarize this repo"}]}'
-```
-
----
-
-## Stream events
-
-One SSE stream, every session.
-
-```bash
-curl -N localhost:4096/event
-```
-
-```
-data: {"type":"message.part.updated","properties":{"sessionID":"ses_...","part":{...}}}
-data: {"type":"message.completed","properties":{"sessionID":"ses_..."}}
-```
-
----
-
-## Get started
-
-You need a LiteLLM gateway URL and a virtual key. If you don't have one, run [BerriAI/litellm](https://github.com/BerriAI/litellm) first.
-
-```bash
-# Generate a master key so you can paste it on the login page
 export MASTER_KEY=$(openssl rand -hex 32)
 echo "MASTER_KEY: $MASTER_KEY"
 
@@ -100,62 +31,20 @@ docker run -p 4096:4096 \
   ghcr.io/litellm-labs/lite-harness:latest
 ```
 
-Open [localhost:4096](http://localhost:4096), paste the `MASTER_KEY` (the echoed value above) on the login page, then click the gear icon in the sidebar and hit **Test connection** to confirm the gateway is reachable.
+Open [localhost:4096](http://localhost:4096), paste the master key on the login page.
 
-Full env-var reference: [docs/configuration.md](docs/configuration.md).
+Needs a [LiteLLM](https://github.com/BerriAI/litellm) gateway. Full config: [docs/configuration.md](docs/configuration.md).
 
-## Supported harnesses
+## sandboxing
 
-| Harness            | Status   |
-|--------------------|----------|
-| `opencode`         | shipped  |
-| `claude-code`      | shipped  |
-| `github-copilot`   | shipped  |
-| `codex`            | shipped  |
+Set `E2B_API_KEY` or `DAYTONA_API_KEY` and agents get an isolated Linux sandbox automatically. No other config.
 
-## Sandboxing
+## about
 
-Agents can provision and use ephemeral Linux sandboxes via the `sandbox` MCP tool.
+We built lite-harness because running opencode and claude-code as separate servers got hard to maintain — multiple services, different API specs, unreliable session management, different inputs for MCP tools and system prompts.
 
-| Provider | Env var | Auto-selected when |
-|---|---|---|
-| **E2B** | `E2B_API_KEY` | `E2B_API_KEY` is set |
-| **Daytona** | `DAYTONA_API_KEY` | `DAYTONA_API_KEY` is set |
+So we wrapped all harnesses in an OpenCode-compatible server and put it in one Dockerfile — one service to scale, with shared MCP tools, prompts, and session management across all harnesses.
 
-Force a specific provider with `SANDBOX_PROVIDER=e2b` or `SANDBOX_PROVIDER=daytona`.
+## license
 
-```bash
-# E2B
-docker run -p 4096:4096 \
-  -e LITELLM_API_BASE=... -e LITELLM_API_KEY=... \
-  -e E2B_API_KEY=e2b-... \
-  ghcr.io/litellm-labs/lite-harness:latest
-
-# Daytona
-docker run -p 4096:4096 \
-  -e LITELLM_API_BASE=... -e LITELLM_API_KEY=... \
-  -e DAYTONA_API_KEY=dtn-... \
-  ghcr.io/litellm-labs/lite-harness:latest
-```
-
-Full sandbox config reference: [docs/configuration.md](docs/configuration.md).
-
-## CLI
-
-A zero-dependency terminal chat client (Node 18+):
-
-```bash
-cd cli && npm install -g .
-
-lite login          # save server URL + master key
-lite list           # list harnesses
-lite models         # list models from server
-lite claude-code    # start a TUI chat session
-lite claude-code --model anthropic/claude-opus-4-7
-```
-
-Inside chat: `/clear` resets history, `exit` quits.
-
-## License
-
-MIT.
+MIT
