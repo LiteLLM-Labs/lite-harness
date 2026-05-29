@@ -208,8 +208,10 @@ export function createComposer({ onSubmit, onInterrupt, onQuit }) {
   function start() {
     out("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback, home
     setRegion(4);
-    out("\x1b[1;1H\x1b7");       // conversation cursor at the top, saved
-    paintBox(false);            // empty box pinned at the bottom (restores cursor to top)
+    // Anchor the conversation cursor at the bottom of the scroll region, so
+    // content sits right above the box (no mid-screen gap) and scrolls upward.
+    out(`\x1b[${Math.max(1, rows() - 4)};1H\x1b7`);
+    paintBox(false);            // empty box pinned at the bottom (restores cursor)
     attach();
   }
 
@@ -220,8 +222,8 @@ export function createComposer({ onSubmit, onInterrupt, onQuit }) {
     suspend() { detach(); out("\x1b[r"); out("\x1b[2J\x1b[3J\x1b[H"); },
     resume() { start(); },
     clearConversation() {
-      out("\x1b[2J\x1b[H");      // clear, cursor to top
-      out("\x1b7");              // save conversation cursor at the top
+      out("\x1b[2J");            // clear screen
+      out(`\x1b[${Math.max(1, rows() - reserved)};1H\x1b7`); // re-anchor against the box
       paintBox(busy);            // redraw box (restores cursor when not active)
     },
     stop() {
