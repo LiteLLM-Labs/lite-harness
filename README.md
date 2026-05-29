@@ -8,16 +8,37 @@ one server. any coding agent. any model.
 
 ```bash
 # git clone https://github.com/LiteLLM-Labs/lite-harness && cd lite-harness
-
 # cd cli && npm install -g .
 
-lite login  # point at your server, save master key
+lite login
+# Server URL [http://localhost:4096]:
+# Master key: ✓ Saved
 
 lite claude-code
-❯ monitor CI every hour and fix any bugs
 
+  lite  claude-code
+  claude-sonnet-4-6  ·  localhost:4096  ·  sess_a1b2c3
+
+  /clear to reset history  · Ctrl+C or "exit" to quit
+
+❯ monitor CI every hour and fix any bugs
+  ⠙ thinking…
+  ✓ bash {"command":"gh run list --limit 5"}
+  I'll set up a recurring CI monitor. Checking the last 5 runs now...
+```
+
+```bash
 lite opencode
+
+  lite  opencode
+  claude-sonnet-4-6  ·  localhost:4096  ·  sess_d4e5f6
+
+  /clear to reset history  · Ctrl+C or "exit" to quit
+
 ❯ dm github stargazers daily
+  ⠙ thinking…
+  ✓ bash {"command":"gh api /repos/LiteLLM-Labs/lite-harness/stargazers"}
+  Got 42 new stargazers. Drafting DMs...
 ```
 
 Supported agents: `opencode` `claude-code` `github-copilot` `codex`
