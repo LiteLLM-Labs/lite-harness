@@ -123,6 +123,11 @@ async function callPromptAsync(sessionId, prompt) {
     const modelId = process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
     return copilotRunTurn(cs, prompt, modelId);
   }
+  if (harness === "codex") {
+    const cs = codexSessions.get(sessionId);
+    if (!cs) throw new Error(`callPromptAsync: codex session ${sessionId} not found`);
+    return codexRunTurn(cs, prompt);
+  }
   // opencode — send via HTTP to the child process
   const body = JSON.stringify({ parts: [{ type: "text", text: prompt }] });
   return new Promise((resolve, reject) => {
@@ -142,7 +147,7 @@ pluginRegistry.setup({
   dbPath: LOOP_DB_PATH,
   callPromptAsync,
   isSessionActive: (sid) =>
-    ccSessions.has(sid) || copilotSessions.has(sid) || sessionHarness.get(sid) === "opencode",
+    ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionHarness.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
 // Returns true if a plugin handled the message (response already sent).
@@ -160,6 +165,10 @@ async function tryPlugin(text, sid, harness, res) {
 // In-process state for github-copilot sessions.
 const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers}
 const copilotGlobalBus = new Set(); // SSE response writers
+
+// In-process state for codex sessions.
+const codexSessions = new Map(); // id → {id, title, time, history, busSubscribers, activeProcess}
+const codexGlobalBus = new Set(); // SSE response writers
 
 // Token cache for GitHub Copilot native mode (tokens expire ~30 min)
 let _copilotToken = null;
@@ -291,6 +300,98 @@ async function copilotRunTurn(s, userText, modelId) {
   copilotEmit(s.id, "message.updated", { info: fullInfo });
   copilotEmit(s.id, "session.idle", {});
   log(`copilot turn done id=${s.id} model=${modelId} chars=${totalText.length}`);
+}
+
+function codexEmit(sessionId, type, props) {
+  const ev = { id: `evt_${randomUUID().replace(/-/g,"").slice(0,20)}`, type, properties: { ...props, sessionID: sessionId } };
+  const line = `data: ${JSON.stringify(ev)}\n\n`;
+  const s = codexSessions.get(sessionId);
+  if (s) for (const cb of s.busSubscribers) { try { cb(line); } catch {} }
+  for (const cb of codexGlobalBus) { try { cb(line); } catch {} }
+}
+
+async function codexRunTurn(s, userText) {
+  const startedAt = Date.now();
+
+  // Build context from history for codex prompt
+  const contextLines = [];
+  for (const msg of s.history) {
+    const role = msg.info.role === "assistant" ? "Assistant" : "User";
+    const text = (msg.parts || []).filter(p => p.type === "text").map(p => p.text).join("\n");
+    if (text) contextLines.push(`${role}: ${text}`);
+  }
+  const fullPrompt = contextLines.length > 0
+    ? `${contextLines.join("\n\n")}\n\nUser: ${userText}`
+    : userText;
+
+  // Record user message
+  const userMsgId = `msg_${randomUUID().replace(/-/g,"").slice(0,20)}`;
+  const userPart = { id: `${userMsgId}_p0`, messageID: userMsgId, type: "text", text: userText };
+  const userMsg = { info: { id: userMsgId, role: "user", time: { created: startedAt, completed: startedAt } }, parts: [userPart] };
+  s.history.push(userMsg);
+  codexEmit(s.id, "message.updated", { info: userMsg.info });
+  codexEmit(s.id, "message.part.updated", { messageID: userMsgId, part: userPart });
+
+  const asstMsgId = `msg_${randomUUID().replace(/-/g,"").slice(0,20)}`;
+  const partID = `${asstMsgId}_b0`;
+  let totalText = "";
+  let lastError;
+
+  codexEmit(s.id, "message.updated", { info: { id: asstMsgId, role: "assistant", time: { created: startedAt } } });
+  codexEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: { id: partID, messageID: asstMsgId, type: "text", text: "" } });
+
+  try {
+    const litellmBase = process.env.LITELLM_API_BASE;
+    if (!litellmBase) throw new Error("LITELLM_API_BASE not set — codex requires LiteLLM routing");
+
+    const args = [
+      "-c", `model_providers.litellm.name=LiteLLM`,
+      "-c", `model_providers.litellm.base_url=${litellmBase.replace(/\/+$/, "")}`,
+      "-c", `model_providers.litellm.env_key=LITELLM_API_KEY`,
+      "-c", `model_provider=litellm`,
+      "--approval-mode", "full-auto",
+      "--quiet",
+      fullPrompt,
+    ];
+
+    const child = spawn("codex", args, {
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    s.activeProcess = child;
+
+    child.stdout.on("data", (chunk) => {
+      const delta = chunk.toString("utf8");
+      totalText += delta;
+      codexEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta });
+    });
+
+    child.stderr.on("data", (chunk) => {
+      log(`codex stderr id=${s.id}: ${chunk.toString("utf8").slice(0, 200)}`);
+    });
+
+    await new Promise((resolve, reject) => {
+      child.on("exit", (code) => {
+        s.activeProcess = null;
+        if (code !== 0 && code !== null) reject(new Error(`codex exited with code ${code}`));
+        else resolve();
+      });
+      child.on("error", reject);
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastError = { name: "CodexError", data: { message: msg.slice(0, 500) } };
+    log(`codex turn error id=${s.id}: ${msg}`);
+  }
+
+  const completedAt = Date.now();
+  const textPart = { id: partID, messageID: asstMsgId, type: "text", text: totalText };
+  const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "codex", modelID: "codex", ...(lastError ? { error: lastError } : { finish: "stop" }) };
+  s.history.push({ info: fullInfo, parts: [textPart] });
+  s.time.updated = completedAt;
+  codexEmit(s.id, "message.updated", { info: fullInfo });
+  codexEmit(s.id, "session.idle", {});
+  log(`codex turn done id=${s.id} chars=${totalText.length}`);
 }
 
 function ccEmit(sessionId, type, props) {
@@ -709,7 +810,7 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     try { body = JSON.parse(raw || "{}"); } catch {}
 
-    const harness = body.harness === "claude-code" ? "cc" : body.harness === "github-copilot" ? "github-copilot" : "opencode";
+    const harness = body.harness === "claude-code" ? "cc" : body.harness === "github-copilot" ? "github-copilot" : body.harness === "codex" ? "codex" : "opencode";
 
     if (harness === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
@@ -725,6 +826,23 @@ const server = http.createServer(async (req, res) => {
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "github-copilot" }));
+      return;
+    }
+
+    if (harness === "codex") {
+      if (!process.env.LITELLM_API_BASE) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "codex requires LITELLM_API_BASE" }));
+        return;
+      }
+      const id = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const now = Date.now();
+      const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set(), activeProcess: null };
+      codexSessions.set(id, s);
+      sessionHarness.set(id, "codex");
+      log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "codex" }));
       return;
     }
 
@@ -786,7 +904,10 @@ const server = http.createServer(async (req, res) => {
     const copilotList = [...copilotSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, harness: "github-copilot",
     }));
-    const all = [...tagged, ...ccList, ...copilotList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    const codexList = [...codexSessions.values()].map(s => ({
+      id: s.id, title: s.title, time: s.time, harness: "codex",
+    }));
+    const all = [...tagged, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(all));
     return;
@@ -807,6 +928,13 @@ const server = http.createServer(async (req, res) => {
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "github-copilot" }));
+      return;
+    }
+    if (sessionHarness.get(sid) === "codex") {
+      const cs = codexSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, harness: "codex" }));
       return;
     }
     // opencode: proxy and inject harness field
@@ -847,6 +975,25 @@ const server = http.createServer(async (req, res) => {
         log(`cc prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
         ccRunTurn(cs, text, modelId).catch(e => log(`cc runTurn error id=${sid}:`, e.message));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
+    }
+
+    // Route codex sessions in-process
+    if (sid && sessionHarness.get(sid) === "codex") {
+      const cs = codexSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
+
+      if (p.endsWith("/prompt_async")) {
+        let body = {};
+        try { body = JSON.parse(raw || "{}"); } catch {}
+        const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
+        if (await tryPlugin(text, sid, "codex", res)) return;
+        if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
+        log(`codex prompt_async id=${sid}`);
+        res.writeHead(204); res.end();
+        codexRunTurn(cs, text).catch(e => log(`codex runTurn error id=${sid}:`, e.message));
         return;
       }
       res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
@@ -940,6 +1087,13 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(cs.history));
       return;
     }
+    if (sessionHarness.get(sid) === "codex") {
+      const cs = codexSessions.get(sid);
+      if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "session not found" })); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(cs.history));
+      return;
+    }
     // opencode sessions fall through to the transparent passthrough below
   }
 
@@ -954,18 +1108,21 @@ const server = http.createServer(async (req, res) => {
     ccGlobalBus.add(ccPush);
     const copilotPush = (line) => { try { res.write(line); } catch {} };
     copilotGlobalBus.add(copilotPush);
+    const codexPush = (line) => { try { res.write(line); } catch {} };
+    codexGlobalBus.add(codexPush);
     const pluginPush = (line) => { try { res.write(line); } catch {} };
     pluginGlobalBus.add(pluginPush);
 
     const ocReq = http.get(UP + "/event", (ocRes) => {
       ocRes.on("data", (chunk) => { tapOcSseChunk(chunk); try { res.write(chunk); } catch {} });
-      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
+      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); codexGlobalBus.delete(codexPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
     });
-    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
+    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); codexGlobalBus.delete(codexPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
 
     req.on("close", () => {
       ccGlobalBus.delete(ccPush);
       copilotGlobalBus.delete(copilotPush);
+      codexGlobalBus.delete(codexPush);
       pluginGlobalBus.delete(pluginPush);
       ocReq.destroy();
     });
@@ -1009,6 +1166,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (harness === "github-copilot") {
+      res.writeHead(204); res.end();
+      return;
+    }
+    if (harness === "codex") {
+      const cs = codexSessions.get(sid);
+      if (cs?.activeProcess) { cs.activeProcess.kill("SIGTERM"); cs.activeProcess = null; log(`abort: codex sid=${sid}`); }
       res.writeHead(204); res.end();
       return;
     }
