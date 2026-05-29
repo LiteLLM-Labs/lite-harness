@@ -28,6 +28,7 @@ import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
+import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb } from "./loop-store.mjs";
 import {
   hydrateFromDb,
@@ -75,6 +76,7 @@ const pluginRegistry = new PluginRegistry();
 pluginRegistry.register(new VaultPlugin());
 pluginRegistry.register(new HelpPlugin());
 pluginRegistry.register(new LoopPlugin());
+pluginRegistry.register(new AgentPlugin());
 function authOk(req, urlObj) {
   if (!MASTER_KEY) return true;
   const h = req.headers["authorization"] || req.headers["Authorization"];
