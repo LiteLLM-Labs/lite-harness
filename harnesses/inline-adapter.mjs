@@ -73,6 +73,8 @@ const MASTER_KEY = process.env.MASTER_KEY || "";
 const DB_PATH = process.env.DB_PATH ||
   path.join(process.env.HOME || "/home/sandbox", ".local", "share", "lite-harness", "db.db");
 
+let CAPABILITIES_CACHE = null;
+
 // Initialize DB synchronously so session hydration runs before any request.
 // LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
 initDb(DB_PATH);
@@ -965,6 +967,129 @@ function forward(method, urlPath, search, bodyBuf, clientRes, label) {
   upReq.end();
 }
 
+async function buildCapabilities() {
+  const providers = [];
+  if (process.env.LITELLM_API_BASE) providers.push("litellm");
+  else if (process.env.ANTHROPIC_API_KEY) providers.push("anthropic");
+  const harnessesDir = path.join(path.dirname(new URL(import.meta.url).pathname));
+  const knownHarnesses = ["claude-code", "opencode", "github-copilot", "codex"];
+  const harnesses = knownHarnesses
+    .filter(name => {
+      try { return fs.statSync(path.join(harnessesDir, name)).isDirectory(); } catch { return false; }
+    })
+    .map(name => {
+      let version = "unknown";
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(harnessesDir, name, "package.json"), "utf8"));
+        version = pkg.version || "unknown";
+      } catch {}
+      return { name, version, model_providers: providers };
+    });
+
+  const mcp_servers = [];
+  if (process.env.E2B_API_KEY || process.env.DAYTONA_API_KEY || process.env.LAP_PLATFORM_MODE) {
+    mcp_servers.push({
+      name: "sandbox",
+      description: "Code execution sandbox",
+      tools: ["provision", "execute", "read_file", "upload_artifact"],
+      auth_required: true,
+      auth_type: "api_key",
+    });
+  }
+  const lapBase = process.env.LAP_BASE_URL;
+  const lapAccess = process.env.LAP_ACCESS_TOKEN || process.env.LAP_AUTH_TOKEN;
+  if (lapBase && (process.env.AGENT_ID || lapAccess)) {
+    mcp_servers.push({
+      name: "lap-memory",
+      description: "Agent memory storage via LAP platform",
+      tools: ["memory_store", "memory_get", "memory_list", "memory_delete"],
+      auth_required: true,
+      auth_type: "bearer_token",
+    });
+  }
+  if (lapBase && lapAccess) {
+    mcp_servers.push({
+      name: "lap-issue-reporter",
+      description: "Report issues to LAP platform",
+      tools: ["report_issue"],
+      auth_required: true,
+      auth_type: "bearer_token",
+    });
+  }
+  // Platform MCP server (same process — call handler directly, no HTTP round-trip)
+  try {
+    const resp = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const tools = resp?.result?.tools ?? [];
+    if (tools.length > 0) {
+      mcp_servers.push({
+        name: "platform",
+        description: "Built-in platform tools (save_agent, etc.)",
+        tools: tools.map(t => t.name),
+        auth_required: !!MASTER_KEY,
+        auth_type: "bearer_token",
+      });
+    }
+  } catch {}
+
+  const rawLitellmBase = process.env.LITELLM_API_BASE || "";
+  const litellmKey = process.env.LITELLM_API_KEY || "";
+  const litellmBase = rawLitellmBase.replace(/\/+$/, "").replace(/\/v1$/, "");
+  if (litellmBase && litellmKey) {
+    try {
+      const r = await fetch(`${litellmBase}/v1/mcp/server`, {
+        headers: { Authorization: `Bearer ${litellmKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const list = Array.isArray(data) ? data : (data.servers ?? []);
+        for (const s of list) {
+          const name = s.alias || s.server_name;
+          if (!name) continue;
+          mcp_servers.push({
+            name,
+            description: s.description || "",
+            tools: Array.isArray(s.tools) ? s.tools : [],
+            auth_required: true,
+            auth_type: "bearer_token",
+          });
+        }
+      }
+    } catch {}
+  }
+
+  const vaultAvailable = !!(process.env.MASTER_KEY || process.env.VAULT_DB_PATH);
+  const vault = {
+    available: vaultAvailable,
+    operations: vaultAvailable ? ["store", "list_keys", "delete"] : [],
+  };
+
+  const scheduler = {
+    available: true,
+    min_interval_minutes: Number(process.env.SCHEDULER_MIN_INTERVAL_MINUTES ?? 1),
+    cron_supported: false,
+    manual_trigger: false,
+  };
+
+  let sandbox = null;
+  if (process.env.LAP_PLATFORM_MODE) {
+    sandbox = { provider: "lap-platform", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
+  } else if (process.env.E2B_API_KEY) {
+    sandbox = { provider: "e2b", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
+  } else if (process.env.DAYTONA_API_KEY) {
+    sandbox = { provider: "daytona", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
+  }
+
+  return {
+    harnesses,
+    mcp_servers,
+    vault,
+    scheduler,
+    ...(sandbox && { sandbox }),
+    agents: {},
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
@@ -985,6 +1110,17 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, auth: MASTER_KEY ? "required" : "open" }));
+    return;
+  }
+
+  if (p === "/api/capabilities" && (req.method === "GET" || req.method === "OPTIONS")) {
+    res.writeHead(req.method === "OPTIONS" ? 204 : 200, {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    });
+    res.end(req.method === "OPTIONS" ? "" : JSON.stringify(CAPABILITIES_CACHE));
     return;
   }
 
@@ -1603,8 +1739,9 @@ server.listen(PORT, "0.0.0.0", () => {
 });
 
 startChild();
-waitChild().then((ok) => {
+waitChild().then(async (ok) => {
   if (!ok) { log("opencode serve never became ready"); process.exit(1); }
+  CAPABILITIES_CACHE = await buildCapabilities();
   log(`opencode ready :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
 
   const healthTimer = setInterval(async () => {
