@@ -24,6 +24,9 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
+import { VaultPlugin } from "./vault-plugin.mjs";
+import { HelpPlugin } from "./help-plugin.mjs";
 
 const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
@@ -50,6 +53,15 @@ if (process.env.LITELLM_API_KEY) {
 // adapter runs open (local dev). The whoami probe is the only exception so
 // the login page can validate a key without first being authorized.
 const MASTER_KEY = process.env.MASTER_KEY || "";
+
+// Plugin registry — handles /vault, /help, and future slash commands at the
+// adapter level before any harness sees the message.
+const pluginRegistry = new PluginRegistry();
+pluginRegistry.register(new VaultPlugin());
+pluginRegistry.register(new HelpPlugin());
+pluginRegistry.setup({ masterKey: MASTER_KEY }).catch(e =>
+  console.error("[inline-adapter] plugin setup error:", e.message),
+);
 function authOk(req, urlObj) {
   if (!MASTER_KEY) return true;
   const h = req.headers["authorization"] || req.headers["Authorization"];
@@ -88,6 +100,19 @@ try {
 // In-process state for claude-code sessions.
 const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
 const ccGlobalBus = new Set(); // SSE response writers for cc events
+const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
+
+// Returns true if a plugin handled the message (response already sent).
+async function tryPlugin(text, sid, harness, res) {
+  if (!text.trim().startsWith("/")) return false;
+  const emitter = createEmitter(sid, (line) => {
+    for (const cb of pluginGlobalBus) { try { cb(line); } catch {} }
+  });
+  res.writeHead(204); res.end();
+  pluginRegistry.matchAndHandle(text.trim(), { sessionId: sid, harness }, emitter)
+    .catch(e => log(`plugin error sid=${sid}:`, e.message));
+  return true;
+}
 
 // In-process state for github-copilot sessions.
 const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers}
@@ -751,6 +776,7 @@ const server = http.createServer(async (req, res) => {
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
+        if (await tryPlugin(text, sid, "cc", res)) return;
         // Strip provider prefix (e.g. "anthropic/claude-opus-4-7" → "claude-opus-4-7") —
         // the Anthropic API and LiteLLM's Anthropic-compatible endpoint both expect the
         // bare model name without a provider prefix.
@@ -774,6 +800,7 @@ const server = http.createServer(async (req, res) => {
         let body = {};
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
+        if (await tryPlugin(text, sid, "github-copilot", res)) return;
         const modelId = body.model?.modelID ?? (process.env.GITHUB_COPILOT_MODEL || "gpt-4o");
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`copilot prompt_async id=${sid} model=${modelId}`);
@@ -784,7 +811,14 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(cs.history)); return;
     }
 
-    // opencode session — existing proxy logic
+    // opencode session — plugin intercept before proxying to child
+    if (p.endsWith("/prompt_async") && sid) {
+      let _body = {};
+      try { _body = JSON.parse(raw || "{}"); } catch {}
+      const _text = Array.isArray(_body.parts) ? _body.parts.filter(pt => pt.type === "text").map(pt => pt.text).join("\n") : (_body.text ?? "");
+      if (await tryPlugin(_text, sid, "opencode", res)) return;
+    }
+
     const tail = extractMsgTail(raw);
     if (tail !== null) log(`message tail for ${p}: ${JSON.stringify(tail)}`);
 
@@ -856,16 +890,19 @@ const server = http.createServer(async (req, res) => {
     ccGlobalBus.add(ccPush);
     const copilotPush = (line) => { try { res.write(line); } catch {} };
     copilotGlobalBus.add(copilotPush);
+    const pluginPush = (line) => { try { res.write(line); } catch {} };
+    pluginGlobalBus.add(pluginPush);
 
     const ocReq = http.get(UP + "/event", (ocRes) => {
       ocRes.on("data", (chunk) => { tapOcSseChunk(chunk); try { res.write(chunk); } catch {} });
-      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); try { res.end(); } catch {} });
+      ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
     });
-    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); try { res.end(); } catch {} });
+    ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
 
     req.on("close", () => {
       ccGlobalBus.delete(ccPush);
       copilotGlobalBus.delete(copilotPush);
+      pluginGlobalBus.delete(pluginPush);
       ocReq.destroy();
     });
     return;

@@ -143,6 +143,10 @@ COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/lap/claude-c
 # github-copilot harness uses native fetch — no separate node_modules stage needed
 
 COPY --chown=sandbox:sandbox harnesses/inline-adapter.mjs /opt/lap/inline-adapter.mjs
+COPY --chown=sandbox:sandbox harnesses/plugin-registry.mjs /opt/lap/plugin-registry.mjs
+COPY --chown=sandbox:sandbox harnesses/vault-backend.mjs /opt/lap/vault-backend.mjs
+COPY --chown=sandbox:sandbox harnesses/vault-plugin.mjs /opt/lap/vault-plugin.mjs
+COPY --chown=sandbox:sandbox harnesses/help-plugin.mjs /opt/lap/help-plugin.mjs
 
 COPY --from=ui-builder --chown=sandbox:sandbox /ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out
