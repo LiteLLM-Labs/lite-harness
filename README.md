@@ -13,11 +13,9 @@ one server. any coding agent. any model.
 
 lite login  # point at your server, save master key
 
-# run claude-code to monitor CI and fix bugs
 lite claude-code
 ❯ monitor CI every hour and fix any bugs
 
-# run opencode to dm github stargazers daily
 lite opencode
 ❯ dm github stargazers daily
 ```
