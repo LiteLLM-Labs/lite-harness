@@ -54,6 +54,8 @@ if (process.env.LITELLM_API_KEY) {
 // adapter runs open (local dev). The whoami probe is the only exception so
 // the login page can validate a key without first being authorized.
 const MASTER_KEY = process.env.MASTER_KEY || "";
+const LOOP_DB_PATH = process.env.LOOP_DB_PATH ||
+  path.join(process.env.HOME || "/home/sandbox", ".local", "share", "opencode", "loops.db");
 
 // Plugin registry — handles /vault, /help, and future slash commands at the
 // adapter level before any harness sees the message.
@@ -137,6 +139,7 @@ async function callPromptAsync(sessionId, prompt) {
 // Run plugin setup now that callPromptAsync is defined.
 pluginRegistry.setup({
   masterKey: MASTER_KEY,
+  dbPath: LOOP_DB_PATH,
   callPromptAsync,
   isSessionActive: (sid) =>
     ccSessions.has(sid) || copilotSessions.has(sid) || sessionHarness.get(sid) === "opencode",

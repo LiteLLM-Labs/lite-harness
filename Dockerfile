@@ -96,6 +96,15 @@ RUN find /root/.opencode -maxdepth 2 -type d -name 'cache' -exec rm -rf {} + 2>/
  && find /root/.opencode -maxdepth 2 -name '*.zip' -delete 2>/dev/null || true \
  && find /root/.opencode -maxdepth 2 -name '*.tar*' -delete 2>/dev/null || true
 
+# ============================================================== harness root deps
+# better-sqlite3 and any other deps shared by root-level harness plugins
+# (vault-backend.mjs, loop-store.mjs). Lives separately from opencode's MCP
+# server deps so createRequire(import.meta.url) resolves from /opt/lap/.
+FROM node:20-bookworm-slim AS harness-deps
+WORKDIR /harness
+COPY harnesses/package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund
+
 # ============================================================== sandbox-mcp deps
 FROM node:20-bookworm-slim AS mcp-deps
 WORKDIR /mcp
@@ -138,6 +147,7 @@ COPY --chown=sandbox:sandbox harnesses/opencode/memory-mcp.mjs /opt/lap/opencode
 COPY --chown=sandbox:sandbox harnesses/opencode/report-issue-mcp.mjs /opt/lap/opencode-sandbox-mcp/report-issue-mcp.mjs
 COPY --chown=sandbox:sandbox harnesses/opencode/gen-mcp-config.mjs /opt/lap/opencode-sandbox-mcp/gen-mcp-config.mjs
 COPY --chown=sandbox:sandbox harnesses/opencode/package.json /opt/lap/opencode-sandbox-mcp/package.json
+COPY --from=harness-deps --chown=sandbox:sandbox /harness/node_modules /opt/lap/node_modules
 COPY --from=mcp-deps --chown=sandbox:sandbox /mcp/node_modules /opt/lap/opencode-sandbox-mcp/node_modules
 COPY --from=cc-deps  --chown=sandbox:sandbox /cc/node_modules  /opt/lap/claude-code/node_modules
 # github-copilot harness uses native fetch — no separate node_modules stage needed
