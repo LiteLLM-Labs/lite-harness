@@ -7,3 +7,6 @@ harnesses/opencode/opencode.json
 .env
 ui/out/
 .DS_Store
+__pycache__/
+*.pyc
+*.pyo
