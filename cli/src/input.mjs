@@ -4,7 +4,7 @@
 
 import readline from "node:readline";
 import { R, GRAY, BLUE, CYAN, cols, up, down } from "./ansi.mjs";
-import { matchSlash } from "./slash-commands.mjs";
+import { matchSlash, commandToken } from "./slash-commands.mjs";
 
 const MENU_MAX = 6; // most command rows shown under the box at once
 
@@ -63,10 +63,14 @@ export function boxedPrompt(history) {
 
       const top = `${GRAY}╭${"─".repeat(w + 2)}╮${R}`;
       const bot = `${GRAY}╰${"─".repeat(w + 2)}╯${R}`;
+      const tok = commandToken(buf); // leading "/command" to paint blue, or null
       const body = rows.map((ln, i) => {
-        const txt = i === 0
-          ? `${BLUE}${ln.slice(0, PROMPT.length)}${R}${ln.slice(PROMPT.length)}`
-          : ln;
+        let txt = ln;
+        if (i === 0) {
+          let rest = ln.slice(PROMPT.length);
+          if (tok && rest.startsWith(tok)) rest = `${BLUE}${tok}${R}${rest.slice(tok.length)}`;
+          txt = `${BLUE}${ln.slice(0, PROMPT.length)}${R}${rest}`;
+        }
         const pad = " ".repeat(Math.max(0, w - ln.length));
         return `${GRAY}│${R} ${txt}${pad} ${GRAY}│${R}`;
       });
