@@ -45,7 +45,7 @@ This works in local dev because `harnesses/<name>/node_modules/` exists on disk.
 The Docker image doesn't automatically include `harnesses/<name>/node_modules/`.
 You must add an explicit build stage and COPY it in.
 
-Open `harnesses/opencode/Dockerfile` and add:
+Open the root `Dockerfile` and add:
 
 ```dockerfile
 # ============================================================== <name> SDK
@@ -161,7 +161,7 @@ add a `SelectItem` for it.
 
 ```bash
 cd ui && npm run build
-git add harnesses/opencode/Dockerfile harnesses/<name>/ ui/src/ ui/out/
+git add Dockerfile harnesses/<name>/ ui/src/ ui/out/
 git commit -m "feat(harness): add <name>"
 ```
 
