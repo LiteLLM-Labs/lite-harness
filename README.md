@@ -147,11 +147,11 @@ A zero-dependency terminal chat client (Node 18+):
 ```bash
 cd cli && npm install -g .
 
-lite-harness login          # save server URL + master key
-lite-harness list           # list harnesses
-lite-harness models         # list models from server
-lite-harness claude-code    # start a TUI chat session
-lite-harness claude-code --model anthropic/claude-opus-4-7
+lite login          # save server URL + master key
+lite list           # list harnesses
+lite models         # list models from server
+lite claude-code    # start a TUI chat session
+lite claude-code --model anthropic/claude-opus-4-7
 ```
 
 Inside chat: `/clear` resets history, `exit` quits.
