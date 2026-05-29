@@ -6,6 +6,9 @@
   "bin": {
     "lite": "./bin/lite.mjs"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
     "node": ">=18"
   }
