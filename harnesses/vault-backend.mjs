@@ -5,7 +5,7 @@
  * v0: SQLite via better-sqlite3. AES-256-GCM encryption with MASTER_KEY.
  *
  * Env vars:
- *   VAULT_DB_PATH  — path to vault.db (default: ~/.local/share/opencode/vault.db)
+ *   VAULT_DB_PATH  — path to vault.db (default: ~/.local/share/lite-harness/vault.db)
  *   MASTER_KEY     — encryption key; plaintext fallback if unset (with warning)
  *
  * Future extensibility: set VAULT_BACKEND=clawpatrol|lap to swap backends.
@@ -21,7 +21,7 @@ const _require = createRequire(import.meta.url);
 
 export const VAULT_DB_PATH =
   process.env.VAULT_DB_PATH ||
-  path.join(process.env.HOME || os.homedir(), ".local/share/opencode/vault.db");
+  path.join(process.env.HOME || os.homedir(), ".local/share/lite-harness/vault.db");
 
 // ── Encryption ────────────────────────────────────────────────────────────────
 
