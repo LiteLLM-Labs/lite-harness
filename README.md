@@ -72,7 +72,7 @@ So we wrapped all harnesses in an OpenCode-compatible server and put it in one D
 
 ## docs
 
-[API reference](docs/api.md) · [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) · [Add a harness](docs/contributing-harness.md)
+[API reference](docs/api.md) · [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) · [CLI](cli/README.md) · [Add a harness](docs/contributing-harness.md)
 
 ## license
 
