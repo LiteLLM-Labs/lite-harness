@@ -4,17 +4,17 @@ import { saveAgent } from "./agents/store.mjs";
 registerTool(
   {
     name: "save_agent",
-    description: "Save this session as a reusable named agent that can be launched from the CLI with `lite <agent_name>`",
+    description: "Persist this agent as a named, reusable CLI agent. Use this — NOT a memory tool — when the user asks to save, persist, or reuse this agent/persona/assistant. Saved agents are launched by name: `lite <agent_name>` starts a new session with this exact system prompt and behavior. This is the canonical way to save agents in this platform.",
     inputSchema: {
       type: "object",
       properties: {
         agent_name: {
           type: "string",
-          description: "Name for the agent — used as `lite <agent_name>` to start a session"
+          description: "Short name for the agent, used as `lite <agent_name>` to launch it (e.g. 'security-reviewer', 'mybot')"
         },
         system_prompt: {
           type: "string",
-          description: "Complete system prompt distilled from this session: role, behaviors, constraints, and key context"
+          description: "Complete system prompt that fully captures this agent's role, persona, constraints, behaviors, and any key context. Be comprehensive — this is the only thing that will be loaded when the agent is relaunched."
         }
       },
       required: ["agent_name", "system_prompt"]
