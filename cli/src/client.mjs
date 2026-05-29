@@ -57,6 +57,12 @@ export class LiteClient {
     return r.json();
   }
 
+  async listMessages(sessionId) {
+    const r = await fetch(`${this.url}/session/${encodeURIComponent(sessionId)}/message`, { headers: this.authHdr });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
   async listSessions(harness) {
     const r = await fetch(`${this.url}/session`, { headers: this.authHdr });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);

@@ -8,6 +8,7 @@ import { LiteClient } from "../client.mjs";
 import { makeRenderer } from "../renderer.mjs";
 import { boxedPrompt, EXIT } from "../input.mjs";
 import { sessionPicker } from "../session-picker.mjs";
+import { SLASH_COMMANDS } from "../slash-commands.mjs";
 
 export async function chat(harnessName, flags) {
   const config = loadConfig();
@@ -165,13 +166,16 @@ export async function chat(harnessName, flags) {
     if (!process.stdin.isTTY) process.stdout.write(`  ${BLUE}❯${R} ${text}\n`);
 
     if (text === "/" || text === "/help") {
+      const sig = (c) => (c.args ? `${c.name} ${c.args}` : c.name);
+      const w = Math.max(...SLASH_COMMANDS.map((c) => sig(c).length), "exit".length);
+      const rows = SLASH_COMMANDS.map(
+        (c) => `  ${CYAN}${sig(c).padEnd(w)}${R}   ${GRAY}${c.hint}${R}`
+      );
       process.stdout.write([
         "",
         `  ${BOLD}${WHITE}Slash commands${R}`,
-        `  ${CYAN}/clear${R}    ${GRAY}reset session history${R}`,
-        `  ${CYAN}/resume${R}   ${GRAY}pick a previous session to continue${R}`,
-        `  ${CYAN}/help${R}     ${GRAY}show this command list${R}`,
-        `  ${CYAN}exit${R}      ${GRAY}quit lite-harness${R}`,
+        ...rows,
+        `  ${CYAN}${"exit".padEnd(w)}${R}   ${GRAY}quit lite-harness${R}`,
         "",
       ].join("\n"));
       continue;
@@ -195,7 +199,29 @@ export async function chat(harnessName, flags) {
         currentSid = picked.id;
         resetTurn();
         idleResolve = null;
-        process.stdout.write(`  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
+        process.stdout.write(`\n  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
+        try {
+          const msgs = await client.listMessages(currentSid);
+          for (const msg of msgs) {
+            const role = msg.info?.role;
+            if (role === "user") {
+              const text = msg.parts?.find(p => p.type === "text")?.text ?? "";
+              if (text) process.stdout.write(`  ${BLUE}❯${R} ${text}\n\n`);
+            } else if (role === "assistant") {
+              for (const part of msg.parts ?? []) {
+                if (part.type === "text" && part.text) {
+                  renderer.text(part.text);
+                } else if (part.type === "tool" && part.tool) {
+                  renderer.tool(part.tool, part.state);
+                }
+              }
+              renderer.finish();
+              process.stdout.write("\n");
+            }
+          }
+        } catch (e) {
+          process.stdout.write(`  ${GRAY}(could not load history: ${e.message})${R}\n\n`);
+        }
       }
       continue;
     }

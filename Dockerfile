@@ -167,12 +167,16 @@ COPY --chown=sandbox:sandbox harnesses/vault-plugin.mjs /opt/lap/vault-plugin.mj
 COPY --chown=sandbox:sandbox harnesses/help-plugin.mjs /opt/lap/help-plugin.mjs
 COPY --chown=sandbox:sandbox harnesses/loop-store.mjs /opt/lap/loop-store.mjs
 COPY --chown=sandbox:sandbox harnesses/loop-plugin.mjs /opt/lap/loop-plugin.mjs
+COPY --chown=sandbox:sandbox harnesses/session-store.mjs /opt/lap/session-store.mjs
+COPY --chown=sandbox:sandbox harnesses/agent-store.mjs /opt/lap/agent-store.mjs
+COPY --chown=sandbox:sandbox harnesses/agent-plugin.mjs /opt/lap/agent-plugin.mjs
 
 COPY --from=ui-builder --chown=sandbox:sandbox /ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out
 
 COPY --chown=sandbox:sandbox harnesses/opencode/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
+    && mkdir -p /home/sandbox/.local/share \
     && mkdir -p /home/sandbox/.local/state \
     && chown -R sandbox:sandbox /home/sandbox/.local
 
