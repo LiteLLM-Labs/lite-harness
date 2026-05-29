@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SLASH_COMMANDS, matchSlash } from "./slash-commands.mjs";
+import { SLASH_COMMANDS, matchSlash, commandToken } from "./slash-commands.mjs";
 
 const names = (q) => matchSlash(q).map((c) => c.name);
 
@@ -30,4 +30,15 @@ test("menu closes once args are being typed", () => {
 test("non-command and unknown input yield no menu", () => {
   assert.deepEqual(names("hello"), []);
   assert.deepEqual(names("/xyz"), []);
+});
+
+test("commandToken highlights a known command, with or without args", () => {
+  assert.equal(commandToken("/lo"), "/lo");          // prefix still being typed
+  assert.equal(commandToken("/loop"), "/loop");      // exact command
+  assert.equal(commandToken("/loop 5m run ci"), "/loop"); // command + args
+});
+
+test("commandToken ignores unknown tokens and plain text", () => {
+  assert.equal(commandToken("/xyz"), null);
+  assert.equal(commandToken("hello"), null);
 });
