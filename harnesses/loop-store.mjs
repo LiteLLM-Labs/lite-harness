@@ -55,6 +55,26 @@ function initSessionSchema(db) {
   `);
 }
 
+function initAgentSchema(db) {
+  // Columns name/model/system/tools mirror the Anthropic Managed Agents
+  // request body (POST /v1/agents); `cadence` is the only field we add on top.
+  // See agent-store.mjs for the full contract.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id               TEXT PRIMARY KEY,
+      name             TEXT NOT NULL,
+      model            TEXT NOT NULL,
+      system           TEXT NOT NULL,
+      tools            TEXT NOT NULL,
+      cadence          TEXT,
+      interval_seconds INTEGER,
+      session_id       TEXT NOT NULL,
+      loop_id          TEXT,
+      created_at       INTEGER NOT NULL
+    )
+  `);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -103,6 +123,7 @@ export function initDb(dbPath) {
     )
   `);
   initSessionSchema(_db);
+  initAgentSchema(_db);
 
   return _db;
 }
