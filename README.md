@@ -62,7 +62,7 @@ Needs a [LiteLLM](https://github.com/BerriAI/litellm) gateway. Full config: [doc
 
 ## sandboxing
 
-Set `E2B_API_KEY` or `DAYTONA_API_KEY` and agents get an isolated Linux sandbox automatically. No other config.
+Set `E2B_API_KEY` or `DAYTONA_API_KEY` and agents get an isolated Linux sandbox automatically. Full options (templates, snapshots, vault): [docs/configuration.md](docs/configuration.md#sandbox-opencode-mcp).
 
 ## about
 
