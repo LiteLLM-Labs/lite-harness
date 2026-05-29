@@ -60,6 +60,27 @@ Open [localhost:4096](http://localhost:4096), paste the master key on the login 
 
 Needs a [LiteLLM](https://github.com/BerriAI/litellm) gateway. Full config: [docs/configuration.md](docs/configuration.md).
 
+## persistence
+
+By default, sessions (history, model context) are lost when the server restarts. To keep them across restarts, mount persistent storage at the data directory:
+
+**Docker:**
+```bash
+docker run -p 4096:4096 \
+  -v ./data:/home/sandbox/.local/share/lite-harness \
+  -e LITELLM_API_BASE=... \
+  -e LITELLM_API_KEY=... \
+  -e MASTER_KEY=... \
+  ghcr.io/litellm-labs/lite-harness:latest
+```
+
+**Custom path** (e.g. a mounted cloud volume at `/mnt/data`):
+```bash
+-e DB_PATH=/mnt/data/db.db
+```
+
+On restart the server logs `hydrated N session(s) from db` and all prior sessions are immediately available.
+
 ## sandboxing
 
 Set `E2B_API_KEY` or `DAYTONA_API_KEY` and agents get an isolated Linux sandbox automatically. Full options (templates, snapshots, vault): [docs/configuration.md](docs/configuration.md#sandbox-opencode-mcp).
