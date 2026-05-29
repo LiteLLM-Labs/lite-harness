@@ -155,6 +155,17 @@ export function setOcSessionChildId(sessionId, childSid) {
  *
  * @returns {{ id: string, title: string, created_at: number, updated_at: number|null, sdk_session_id: string|null }[]}
  */
+export function loadMessages(sessionId) {
+  try {
+    return getDb()
+      .prepare("SELECT * FROM session_messages WHERE session_id = ? ORDER BY seq ASC")
+      .all(sessionId);
+  } catch (e) {
+    log("loadMessages error:", e.message);
+    return [];
+  }
+}
+
 export function loadOcSessions() {
   try {
     return getDb()
