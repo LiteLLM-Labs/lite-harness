@@ -389,7 +389,7 @@ async function chat(harnessName, flags) {
 
       // Escape: bare \x1b with no following bytes in this chunk = Escape key
       if (ch === "\x1b" && i === data.length) {
-        if (busy) { idleResolve?.(); idleResolve = null; renderer.finish(); assistantMsgIds.clear(); partWritten.clear(); busy = false; process.stdout.write("\n"); showPrompt(); }
+        if (busy) { renderer.finish(); assistantMsgIds.clear(); partWritten.clear(); idleResolve?.(); idleResolve = null; }
         continue;
       }
 
