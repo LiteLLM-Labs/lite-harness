@@ -783,13 +783,19 @@ async function ensureOcChildAlive(ourSid) {
   return { childSid: newChildSid, preamble };
 }
 
+// Per-turn SSE buffers for opencode message persistence.
+// Keyed by opencode child session id (what the child emits).
+//   ocMsgBuf:   childSid → Map<msgId, { info, parts: Map<partId, part> }>
+//   ocPartToSid: partId  → childSid  (reverse index for message.part.delta lookup)
+const ocMsgBuf = new Map();
+const ocPartToSid = new Map();
+
 // Parse SSE chunks from the opencode event stream.
-// - Clears pending turn on session.idle (turn complete).
-// - Updates lastEventAt on ANY event — so the stuck watchdog only fires when
-//   the session has been truly silent, not merely slow.
-// - Tracks toolInFlight: MCP tools can take minutes with no SSE events; the
-//   watchdog uses a 10-minute timeout instead of STUCK_TIMEOUT_MS when a tool
-//   is actively executing so it doesn't abort a legitimate long-running call.
+// - Buffers message.updated / message.part.updated / message.part.delta so we
+//   capture full assistant text without relying on GET /message (which omits parts).
+// - Flushes buffer to SQLite on session.idle (turn complete).
+// - Updates lastEventAt so the stuck watchdog only fires on truly silent turns.
+// - Tracks toolInFlight for the 10-minute tool-call timeout.
 function tapOcSseChunk(chunk) {
   const text = chunk.toString("utf8");
   const now = Date.now();
@@ -797,14 +803,56 @@ function tapOcSseChunk(chunk) {
     if (!line.startsWith("data: ")) continue;
     try {
       const ev = JSON.parse(line.slice(6));
-      // session.idle and most events use properties.sessionID directly.
-      // message.part.updated embeds sessionID inside properties.part.sessionID.
       const sid = ev.properties?.sessionID ?? ev.properties?.part?.sessionID;
+
+      // ── Message buffering (runs for all events, not just pending turns) ──
+      if (ev.type === "message.updated" && sid && ev.properties?.info?.id) {
+        const info = ev.properties.info;
+        let msgs = ocMsgBuf.get(sid);
+        if (!msgs) { msgs = new Map(); ocMsgBuf.set(sid, msgs); }
+        const entry = msgs.get(info.id) ?? { info: null, parts: new Map() };
+        entry.info = info;
+        msgs.set(info.id, entry);
+      } else if (ev.type === "message.part.updated" && sid && ev.properties?.part) {
+        const part = ev.properties.part;
+        if (part.messageID) {
+          const msgs = ocMsgBuf.get(sid);
+          const msg = msgs?.get(part.messageID);
+          if (msg) {
+            msg.parts.set(part.id, { ...part });
+            ocPartToSid.set(part.id, sid);
+          }
+        }
+      } else if (ev.type === "message.part.delta" && ev.properties) {
+        const { messageID, partID, field, delta } = ev.properties;
+        if (partID && field === "text" && typeof delta === "string") {
+          const deltaSid = ocPartToSid.get(partID);
+          if (deltaSid) {
+            const part = ocMsgBuf.get(deltaSid)?.get(messageID)?.parts?.get(partID);
+            if (part) part.text = (part.text ?? "") + delta;
+          }
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────
+
       if (!sid || !ocPendingTurns.has(sid)) continue;
       if (ev.type === "session.idle") {
         ocPendingTurns.delete(sid);
         const ourSid = ocSidRemapReverse.get(sid) ?? sid;
-        snapshotOcMessages(ourSid).catch(() => {});
+        // Flush SSE-buffered messages (full content) to DB.
+        const msgs = ocMsgBuf.get(sid);
+        if (msgs?.size) {
+          const arr = [...msgs.values()]
+            .filter(m => m.info)
+            .map(m => ({ info: m.info, parts: [...m.parts.values()] }));
+          if (arr.length) saveOcMessages(ourSid, arr);
+          // Clean up part-to-sid index for this session's parts
+          for (const [pid, s] of ocPartToSid) { if (s === sid) ocPartToSid.delete(pid); }
+          ocMsgBuf.delete(sid);
+        } else {
+          // Fallback: fetch from child REST API
+          snapshotOcMessages(ourSid).catch(() => {});
+        }
       } else {
         const entry = ocPendingTurns.get(sid);
         let toolInFlight = entry.toolInFlight ?? false;
