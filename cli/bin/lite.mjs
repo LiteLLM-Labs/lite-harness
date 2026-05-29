@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * lite-harness CLI
+ * lite CLI
  *
- * lite-harness login             — save server URL + master key
- * lite-harness <harness-name>    — start a TUI chat session
+ * lite login             — save server URL + master key
+ * lite <harness-name>    — start a TUI chat session
  *   Flags: --model <id>          — override model (default: first from /v1/models)
  */
 
@@ -13,7 +13,7 @@ import path from "node:path";
 import os from "node:os";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const CONFIG_DIR = path.join(os.homedir(), ".config", "lite-harness");
+const CONFIG_DIR = path.join(os.homedir(), ".config", "lite");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 function loadConfig() {
@@ -156,7 +156,7 @@ function makeRenderer() {
 async function chat(harnessName, flags) {
   const config = loadConfig();
   if (!config) {
-    console.error(`${RED}Not logged in. Run: lite-harness login${R}`);
+    console.error(`${RED}Not logged in. Run: lite login${R}`);
     process.exit(1);
   }
 
@@ -191,7 +191,7 @@ async function chat(harnessName, flags) {
   // ── Banner ────────────────────────────────────────────────────────────────
   const shortUrl = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   process.stdout.write("\n");
-  process.stdout.write(`  ${BOLD}${WHITE}lite-harness${R}  ${CYAN}${harnessName}${R}\n`);
+  process.stdout.write(`  ${BOLD}${WHITE}lite${R}  ${CYAN}${harnessName}${R}\n`);
   process.stdout.write(`  ${GRAY}${model}  ·  ${shortUrl}  ·  ${currentSid.slice(0, 12)}${R}\n`);
   process.stdout.write(`\n`);
   process.stdout.write(`  ${DIM}/clear to reset history  ·  Ctrl+C or "exit" to quit${R}\n`);
@@ -437,7 +437,7 @@ const HARNESSES = ["opencode", "claude-code", "github-copilot", "codex"];
 function printHelp() {
   process.stdout.write([
     "",
-    `  ${BOLD}${WHITE}lite-harness${R}`,
+    `  ${BOLD}${WHITE}lite${R}`,
     "",
     `  ${CYAN}login${R}              save server URL + master key`,
     `  ${CYAN}list${R}               list available harnesses`,
@@ -465,7 +465,7 @@ if (cmd === "login") {
   process.stdout.write("\n");
 } else if (cmd === "models") {
   const config = loadConfig();
-  if (!config) { console.error(`${RED}Not logged in. Run: lite-harness login${R}`); process.exit(1); }
+  if (!config) { console.error(`${RED}Not logged in. Run: lite login${R}`); process.exit(1); }
   const { url, key } = config;
   const r = await fetch(`${url}/v1/models`, { headers: key ? { authorization: `Bearer ${key}` } : {} });
   if (!r.ok) { console.error(`${RED}HTTP ${r.status}${R}`); process.exit(1); }

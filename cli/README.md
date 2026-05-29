@@ -1,11 +1,11 @@
-# lite-harness CLI
+# lite CLI
 
-Terminal interface for lite-harness. Start TUI chat sessions against any harness from the command line.
+Terminal interface for lite. Start TUI chat sessions against any harness from the command line.
 
 ## Requirements
 
 - Node.js 18+
-- A running lite-harness server
+- A running lite server
 
 ## Install
 
@@ -20,27 +20,27 @@ npm link --prefix cli
 Or run directly without installing:
 
 ```bash
-node cli/bin/lite-harness.mjs <command>
+node cli/bin/lite.mjs <command>
 ```
 
 ## Quick start
 
 ```bash
 # 1. Save your server URL and master key
-lite-harness login
+lite login
 
 # 2. Start a chat session
-lite-harness opencode
+lite opencode
 ```
 
 ## Commands
 
 ### `login`
 
-Save server URL and master key to `~/.config/lite-harness/config.json`.
+Save server URL and master key to `~/.config/lite/config.json`.
 
 ```bash
-lite-harness login
+lite login
 # Server URL [http://localhost:4096]: 
 # Master key (leave empty if none): 
 ```
@@ -52,7 +52,7 @@ Verifies the credentials by calling `/whoami` before saving.
 Print available harnesses.
 
 ```bash
-lite-harness list
+lite list
 ```
 
 ### `models`
@@ -60,7 +60,7 @@ lite-harness list
 List models returned by `/v1/models` on your server.
 
 ```bash
-lite-harness models
+lite models
 ```
 
 ### `<harness>`
@@ -68,10 +68,10 @@ lite-harness models
 Start an interactive TUI chat session against a harness.
 
 ```bash
-lite-harness opencode
-lite-harness claude-code
-lite-harness github-copilot
-lite-harness codex
+lite opencode
+lite claude-code
+lite github-copilot
+lite codex
 ```
 
 **Flags**
@@ -81,8 +81,8 @@ lite-harness codex
 | `--model <id>` | Override model. Default: first model from `/v1/models`. |
 
 ```bash
-lite-harness opencode --model claude-opus-4-8
-lite-harness claude-code --model gpt-4o
+lite opencode --model claude-opus-4-8
+lite claude-code --model gpt-4o
 ```
 
 ## In-session commands
@@ -95,7 +95,7 @@ lite-harness claude-code --model gpt-4o
 
 ## Config file
 
-Credentials are stored at `~/.config/lite-harness/config.json`:
+Credentials are stored at `~/.config/lite/config.json`:
 
 ```json
 {
@@ -113,14 +113,14 @@ Edit this file directly to change server or key without re-running `login`.
 ./start-local.sh
 
 # In another terminal, log in and chat
-lite-harness login   # accept default http://localhost:4096
-lite-harness opencode
+lite login   # accept default http://localhost:4096
+lite opencode
 ```
 
 ## Example session
 
 ```
-  lite-harness  opencode
+  lite  opencode
   claude-opus-4-8  ·  localhost:4096  ·  sess_abc123
 
   /clear to reset history  ·  Ctrl+C or "exit" to quit
