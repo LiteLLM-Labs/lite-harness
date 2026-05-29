@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Activity, Loader2 } from "lucide-react";
+import { Activity, Loader2, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -18,7 +18,7 @@ import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
-import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels } from "@/lib/api";
+import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession } from "@/lib/api";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 import type { Frame } from "@/components/inspector-panel";
 
@@ -151,6 +151,14 @@ function ChatInner() {
           refetch();
         } else if (ev.type === "session.error") {
           const errObj = ev.properties?.error as Record<string, unknown> | undefined;
+          const errName = (errObj as {name?: string} | undefined)?.name ?? "";
+          // MessageAbortedError is raised by our own watchdog abort — not a real failure.
+          // Suppress it so the UI doesn't show a scary error card for auto-aborted turns.
+          if (errName === "MessageAbortedError") {
+            setSessionStatus("idle");
+            refetch();
+            return;
+          }
           const msg = (errObj as {data?: {message?: string}} | undefined)?.data?.message
             ?? (errObj as {message?: string} | undefined)?.message
             ?? JSON.stringify(errObj ?? ev.properties);
@@ -198,10 +206,16 @@ function ChatInner() {
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono text-muted-foreground">{shortSid}</span>
             {sessionStatus === "busy" ? (
-              <span className="flex items-center gap-1 text-[11px] text-amber-500 font-mono">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                busy
-              </span>
+              <button
+                onClick={() => sid && abortSession(sid).catch(() => {})}
+                className="flex items-center gap-1 text-[11px] text-amber-500 font-mono hover:text-red-500 transition-colors group"
+                title="Abort agent"
+              >
+                <Loader2 className="w-3 h-3 animate-spin group-hover:hidden" />
+                <Square className="w-3 h-3 hidden group-hover:block fill-current" />
+                <span className="group-hover:hidden">busy</span>
+                <span className="hidden group-hover:inline">abort</span>
+              </button>
             ) : (
               <span className="flex items-center gap-1 text-[11px] text-emerald-500 font-mono">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
