@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
+import { LoopPlugin } from "./loop-plugin.mjs";
 
 const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
@@ -59,9 +60,7 @@ const MASTER_KEY = process.env.MASTER_KEY || "";
 const pluginRegistry = new PluginRegistry();
 pluginRegistry.register(new VaultPlugin());
 pluginRegistry.register(new HelpPlugin());
-pluginRegistry.setup({ masterKey: MASTER_KEY }).catch(e =>
-  console.error("[inline-adapter] plugin setup error:", e.message),
-);
+pluginRegistry.register(new LoopPlugin());
 function authOk(req, urlObj) {
   if (!MASTER_KEY) return true;
   const h = req.headers["authorization"] || req.headers["Authorization"];
@@ -101,6 +100,47 @@ try {
 const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
 const ccGlobalBus = new Set(); // SSE response writers for cc events
 const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
+
+// In-process state for github-copilot sessions (declared early so callPromptAsync can close over it).
+// The full copilotSessions Map is re-used below; this forward reference is safe because
+// callPromptAsync is only *called* at runtime, not at parse time.
+
+// callPromptAsync — unified dispatch used by LoopPlugin (and any future plugin)
+// to fire a new prompt into an existing session without going through HTTP.
+async function callPromptAsync(sessionId, prompt) {
+  const harness = sessionHarness.get(sessionId);
+  if (harness === "cc") {
+    const cs = ccSessions.get(sessionId);
+    if (!cs) throw new Error(`callPromptAsync: cc session ${sessionId} not found`);
+    const modelId = process.env.LITELLM_DEFAULT_MODEL || "claude-sonnet-4-6";
+    return ccRunTurn(cs, prompt, modelId);
+  }
+  if (harness === "github-copilot") {
+    const cs = copilotSessions.get(sessionId);
+    if (!cs) throw new Error(`callPromptAsync: copilot session ${sessionId} not found`);
+    const modelId = process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
+    return copilotRunTurn(cs, prompt, modelId);
+  }
+  // opencode — send via HTTP to the child process
+  const body = JSON.stringify({ parts: [{ type: "text", text: prompt }] });
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      `${UP}/session/${sessionId}/prompt_async`,
+      { method: "POST", headers: { "content-type": "application/json" } },
+      (res) => { res.resume(); resolve(); },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+// Run plugin setup now that callPromptAsync is defined.
+pluginRegistry.setup({
+  masterKey: MASTER_KEY,
+  callPromptAsync,
+  isSessionActive: (sid) =>
+    ccSessions.has(sid) || copilotSessions.has(sid) || sessionHarness.get(sid) === "opencode",
+}).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
 // Returns true if a plugin handled the message (response already sent).
 async function tryPlugin(text, sid, harness, res) {
