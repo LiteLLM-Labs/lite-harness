@@ -176,6 +176,7 @@ ENV UI_DIST=/opt/lap/ui/out
 
 COPY --chown=sandbox:sandbox harnesses/opencode/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
+    && mkdir -p /home/sandbox/.local/share \
     && mkdir -p /home/sandbox/.local/state \
     && chown -R sandbox:sandbox /home/sandbox/.local
 
