@@ -53,8 +53,8 @@ const visibleLen = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").length;
 const up = (n) => (n > 0 ? `\x1b[${n}A` : "");
 
 // ── Box drawing (rounded, ANSI-aware) ─────────────────────────────────────────
-function drawBox(lines, { color = GRAY, minWidth = 0 } = {}) {
-  const w = Math.min(Math.max(minWidth, ...lines.map(visibleLen)), cols() - 4);
+function drawBox(lines, { color = GRAY } = {}) {
+  const w = cols() - 4; // fill the terminal width
   const top = `${color}╭${"─".repeat(w + 2)}╮${R}`;
   const bot = `${color}╰${"─".repeat(w + 2)}╯${R}`;
   const body = lines.map((line) => {
@@ -225,7 +225,7 @@ function boxedPrompt(history) {
     let histIdx = history.length; // == length means "current draft"
     let stash = "";
 
-    const innerW = () => Math.max(8, Math.min(cols() - 4, 100) - 2);
+    const innerW = () => Math.max(8, cols() - 4); // fill the terminal width
 
     function wrap(s, w) {
       const lines = [];
@@ -397,7 +397,7 @@ async function chat(harnessName, flags) {
     `${GRAY}session${R}   ${currentSid.slice(0, 16)}`,
     "",
     `${DIM}/clear to reset history  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
-  ], { color: BLUE, minWidth: 54 }));
+  ], { color: BLUE }));
 
   // ── SSE ─────────────────────────────────────────────────────────────────────
   const sseUrl = `${url}/event${key ? `?key=${encodeURIComponent(key)}` : ""}`;
