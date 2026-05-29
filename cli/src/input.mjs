@@ -100,8 +100,8 @@ export function boxedPrompt(history) {
       render(); // ensure the box reflects the final text (e.g. paste-then-Enter)
       // Keep the box on screen (with the typed text inside) and move the cursor
       // onto a fresh line below it, so it stays as scrollback after submit.
-      out(down((lastRows - 1) - lastTop)); // parked row → hint line (the last box row)
-      out("\r\n");
+      out(down(lastRows - lastTop)); // parked row → past the hint line (the last box row)
+      out("\r");
       resolve(value);
     }
 
