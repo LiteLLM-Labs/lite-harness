@@ -1,7 +1,14 @@
 // Platform MCP server — tool registry + JSON-RPC handler
-// MCP Streamable HTTP transport uses JSON-RPC 2.0
+// Supports both MCP transports:
+//   Streamable HTTP: POST /mcp
+//   HTTP+SSE (legacy): GET /mcp/sse  +  POST /mcp/message
+
+import { randomUUID } from "node:crypto";
 
 const toolRegistry = new Map(); // name → { definition, handler }
+
+// SSE sessions: sessionId → { res (SSE response writer) }
+const sseSessions = new Map();
 
 export function registerTool(definition, handler) {
   toolRegistry.set(definition.name, { definition, handler });
@@ -27,7 +34,7 @@ export async function handleMcpRequest(body) {
       });
 
     case "notifications/initialized":
-      return null; // notifications need no response
+      return null;
 
     case "tools/list":
       return jsonRpc(id, {
@@ -41,18 +48,40 @@ export async function handleMcpRequest(body) {
       if (!entry) return jsonRpcError(id, -32601, `Unknown tool: ${name}`);
       try {
         const result = await entry.handler(args);
-        return jsonRpc(id, {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-        });
+        return jsonRpc(id, { content: [{ type: "text", text: JSON.stringify(result) }] });
       } catch (e) {
-        return jsonRpc(id, {
-          content: [{ type: "text", text: e.message }],
-          isError: true,
-        });
+        return jsonRpc(id, { content: [{ type: "text", text: e.message }], isError: true });
       }
     }
 
     default:
       return jsonRpcError(id, -32601, "Method not found");
+  }
+}
+
+// HTTP+SSE transport — GET /mcp/sse
+// Opens SSE stream and sends the message endpoint URL to the client.
+export function handleMcpSse(req, res, messageUrl) {
+  const sessionId = randomUUID().replace(/-/g, "").slice(0, 16);
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    "connection": "keep-alive",
+  });
+  sseSessions.set(sessionId, res);
+  res.on("close", () => sseSessions.delete(sessionId));
+
+  // Send endpoint event — tells client where to POST messages
+  res.write(`event: endpoint\ndata: ${messageUrl}?sessionId=${sessionId}\n\n`);
+}
+
+// HTTP+SSE transport — POST /mcp/message?sessionId=xxx
+// Receives JSON-RPC, executes, sends response back via SSE stream.
+export async function handleMcpMessage(body, sessionId) {
+  const response = await handleMcpRequest(body);
+  if (response === null) return; // notification, no response needed
+  const sseRes = sseSessions.get(sessionId);
+  if (sseRes) {
+    sseRes.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
   }
 }
