@@ -7,6 +7,7 @@ import { loadConfig } from "../config.mjs";
 import { LiteClient } from "../client.mjs";
 import { makeRenderer } from "../renderer.mjs";
 import { boxedPrompt, EXIT } from "../input.mjs";
+import { sessionPicker } from "../session-picker.mjs";
 
 export async function chat(harnessName, flags) {
   const config = loadConfig();
@@ -36,7 +37,7 @@ export async function chat(harnessName, flags) {
     `${GRAY}server${R}    ${client.shortUrl}`,
     `${GRAY}session${R}   ${currentSid.slice(0, 16)}`,
     "",
-    `${DIM}/help for commands  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
+    `${DIM}/help for commands  ·  /resume to switch session  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
   ], { color: BLUE }));
 
   // ── Event handling ────────────────────────────────────────────────────────────
@@ -167,9 +168,10 @@ export async function chat(harnessName, flags) {
       process.stdout.write([
         "",
         `  ${BOLD}${WHITE}Slash commands${R}`,
-        `  ${CYAN}/clear${R}   ${GRAY}reset session history${R}`,
-        `  ${CYAN}/help${R}    ${GRAY}show this command list${R}`,
-        `  ${CYAN}exit${R}     ${GRAY}quit lite-harness${R}`,
+        `  ${CYAN}/clear${R}    ${GRAY}reset session history${R}`,
+        `  ${CYAN}/resume${R}   ${GRAY}pick a previous session to continue${R}`,
+        `  ${CYAN}/help${R}     ${GRAY}show this command list${R}`,
+        `  ${CYAN}exit${R}      ${GRAY}quit lite-harness${R}`,
         "",
       ].join("\n"));
       continue;
@@ -178,6 +180,23 @@ export async function chat(harnessName, flags) {
     if (text === "/clear") {
       try { await clearSession(); } catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`); }
       process.stdout.write("\n");
+      continue;
+    }
+
+    if (text === "/resume") {
+      let sessions;
+      try { sessions = await client.listSessions(harnessName); }
+      catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n\n`); continue; }
+      if (!sessions.length) { process.stdout.write(`  ${GRAY}No sessions found.${R}\n\n`); continue; }
+      // Sort newest first
+      sessions.sort((a, b) => (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0));
+      const picked = await sessionPicker(sessions);
+      if (picked) {
+        currentSid = picked.id;
+        resetTurn();
+        idleResolve = null;
+        process.stdout.write(`  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
+      }
       continue;
     }
 

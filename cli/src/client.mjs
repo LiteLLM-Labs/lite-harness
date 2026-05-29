@@ -51,6 +51,14 @@ export class LiteClient {
     return r.json();
   }
 
+  async listSessions(harness) {
+    const r = await fetch(`${this.url}/session`, { headers: this.authHdr });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const all = await r.json();
+    const list = Array.isArray(all) ? all : [];
+    return harness ? list.filter((s) => s.harness === harness) : list;
+  }
+
   deleteSession(id) {
     return fetch(`${this.url}/session/${encodeURIComponent(id)}`, {
       method: "DELETE", headers: this.authHdr,
