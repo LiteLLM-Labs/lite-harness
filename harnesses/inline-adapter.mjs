@@ -1267,6 +1267,24 @@ async function waitChild() {
 
 fs.mkdirSync(SKILLS_ROOT, { recursive: true });
 initAgentDb();
+
+// Inject platform MCP into opencode.json before child starts so opencode
+// discovers save_agent at startup (opencode reads config once, not per-session).
+const ocWorkdir = process.env.OPENCODE_INLINE_WORKDIR;
+if (ocWorkdir) {
+  const ocConfigPath = path.join(ocWorkdir, "opencode.json");
+  try {
+    if (fs.existsSync(ocConfigPath)) {
+      const cfg = JSON.parse(fs.readFileSync(ocConfigPath, "utf8"));
+      cfg.mcp = { ...(cfg.mcp || {}), platform: { type: "remote", url: PLATFORM_MCP_URL, enabled: true } };
+      fs.writeFileSync(ocConfigPath, JSON.stringify(cfg, null, 2));
+      log("injected platform MCP into opencode.json");
+    }
+  } catch (e) {
+    log(`platform MCP injection warning: ${e.message}`);
+  }
+}
+
 startChild();
 waitChild().then((ok) => {
   if (!ok) { log("opencode serve never became ready"); process.exit(1); }
