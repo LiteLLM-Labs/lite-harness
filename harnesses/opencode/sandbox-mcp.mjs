@@ -23,6 +23,7 @@
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { buildBackend, VAULT_DB_PATH } from "../vault-backend.mjs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
@@ -40,6 +41,20 @@ const DAYTONA_IMAGE    = process.env.DAYTONA_IMAGE;
 const VAULT_URL        = process.env.VAULT_URL;
 const VAULT_PROXY_TOKEN = process.env.VAULT_PROXY_TOKEN;
 const SANDBOX_PROVIDER_ENV = (process.env.SANDBOX_PROVIDER || "").toLowerCase();
+
+// Vault backend — reads secrets stored by VaultPlugin and injects at provision time.
+// Graceful: if better-sqlite3 isn't installed yet, vault injection is silently skipped.
+let _vaultBackend = null;
+try {
+  _vaultBackend = buildBackend(TOKEN, VAULT_DB_PATH);
+} catch (e) {
+  console.error(`[sandbox-mcp] vault unavailable: ${e.message}`);
+}
+
+async function getVaultEnvs() {
+  if (!_vaultBackend) return {};
+  try { return await _vaultBackend.getAll(); } catch { return {}; }
+}
 
 const SANDBOX_TIMEOUT_MS = 1_800_000; // 30 min idle keepalive
 const EXECUTE_TIMEOUT_MS = 180_000;   // 3 min per command
@@ -90,10 +105,11 @@ class E2bProvider extends SandboxProvider {
 
   async create(name) {
     const { Sandbox } = await import("e2b");
+    const vaultEnvs = await getVaultEnvs();
     const sandbox = await Sandbox.create(this._template, {
       apiKey: this._apiKey,
       timeoutMs: SANDBOX_TIMEOUT_MS,
-      envs: this._buildEnvs(),
+      envs: { ...this._buildEnvs(), ...vaultEnvs },
     });
     return { id: sandbox.sandboxId, display: `${sandbox.sandboxId} (${this._template})` };
   }
@@ -175,7 +191,8 @@ class DaytonaProvider extends SandboxProvider {
 
   async create(_name) {
     const daytona = await this._getClient();
-    const envVars = this._buildEnvVars();
+    const vaultEnvs = await getVaultEnvs();
+    const envVars = { ...this._buildEnvVars(), ...vaultEnvs };
     const opts = { envVars, autoStopInterval: 0 };
     const sandbox = this._image
       ? await daytona.create({ ...opts, image: this._image }, { timeout: 120 })
