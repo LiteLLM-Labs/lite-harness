@@ -95,6 +95,7 @@ to autofill the highlighted command.
 | `/loop <interval> <prompt>` | Run a prompt on a repeating interval (`30s`, `5m`, `1h`, `daily`, `weekly`). Also `/loop list`, `/loop status <id>`, `/loop stop <id>` |
 | `/vault KEY=VALUE` | Store a secret injected into sandboxes (also `list` / `delete` / `clear`) |
 | `/clear` | Delete current session and start a fresh one |
+| `/resume` | Pick a previous session to continue |
 | `/help` | List available commands |
 | `exit` / `quit` / `\q` | Exit the CLI |
 | `Ctrl+C` | Exit the CLI |
