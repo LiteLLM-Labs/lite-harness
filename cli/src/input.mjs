@@ -66,7 +66,7 @@ export function boxedPrompt(history) {
         const pad = " ".repeat(Math.max(0, w - ln.length));
         return `${GRAY}│${R} ${txt}${pad} ${GRAY}│${R}`;
       });
-      const hint = `  ${GRAY}↵ send  ·  ⇧↵ newline  ·  /clear  ·  exit${R}`;
+      const hint = `  ${GRAY}↵ send  ·  ⇧↵ newline  ·  / for commands  ·  exit${R}`;
       out([top, ...body, bot, hint].join("\n"));
 
       lastRows = rows.length + 3; // top + rows + bottom + hint
