@@ -1,11 +1,11 @@
 /**
- * Session store — SQLite persistence for cc/copilot/codex sessions.
+ * Session store — SQLite persistence for cc/copilot/codex/opencode sessions.
  *
  * Schema (tables created by loop-store.mjs initDb):
  *
  *   sessions (
  *     id             TEXT PRIMARY KEY,
- *     harness        TEXT NOT NULL,     -- "cc" | "github-copilot" | "codex"
+ *     harness        TEXT NOT NULL,     -- "cc" | "github-copilot" | "codex" | "opencode"
  *     title          TEXT NOT NULL,
  *     created_at     INTEGER NOT NULL,
  *     updated_at     INTEGER,
@@ -104,11 +104,74 @@ export function updateSdkSessionId(sessionId, sdkSessionId) {
 }
 
 /**
+ * Batch-upsert a snapshot of messages for an opencode session.
+ * Called on session.idle — idempotent via INSERT OR IGNORE on message id.
+ *
+ * @param {string} sessionId  Our session id (not the opencode child id)
+ * @param {{ info: object, parts: object[] }[]} messages
+ */
+export function saveOcMessages(sessionId, messages) {
+  try {
+    const db = getDb();
+    const ins = db.prepare(
+      `INSERT OR IGNORE INTO session_messages (id, session_id, seq, info_json, parts_json) VALUES (?, ?, ?, ?, ?)`,
+    );
+    const upd = db.prepare(`UPDATE sessions SET updated_at = ? WHERE id = ?`);
+    db.transaction(() => {
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        ins.run(m.info.id, sessionId, i, JSON.stringify(m.info), JSON.stringify(m.parts));
+      }
+      if (messages.length > 0) {
+        const last = messages[messages.length - 1];
+        const ts = last.info.time?.completed ?? last.info.time?.created ?? Date.now();
+        upd.run(ts, sessionId);
+      }
+    })();
+  } catch (e) {
+    log("saveOcMessages error:", e.message);
+  }
+}
+
+/**
+ * Store the opencode child session id after rehydration.
+ * Reuses the sdk_session_id column (opencode-specific meaning).
+ *
+ * @param {string} sessionId   Our session id
+ * @param {string} childSid    New opencode child session id
+ */
+export function setOcSessionChildId(sessionId, childSid) {
+  try {
+    getDb()
+      .prepare(`UPDATE sessions SET sdk_session_id = ? WHERE id = ?`)
+      .run(childSid, sessionId);
+  } catch (e) {
+    log("setOcSessionChildId error:", e.message);
+  }
+}
+
+/**
+ * Return all opencode session rows for listing and remap hydration.
+ *
+ * @returns {{ id: string, title: string, created_at: number, updated_at: number|null, sdk_session_id: string|null }[]}
+ */
+export function loadOcSessions() {
+  try {
+    return getDb()
+      .prepare(`SELECT id, title, created_at, updated_at, sdk_session_id FROM sessions WHERE harness = 'opencode' ORDER BY created_at ASC`)
+      .all();
+  } catch (e) {
+    log("loadOcSessions error:", e.message);
+    return [];
+  }
+}
+
+/**
  * Load all persisted cc/copilot/codex sessions and their message histories,
  * returning three Maps keyed by session id ready to be merged into the
  * in-process session Maps on startup.
  *
- * Opencode sessions are not stored here (opencode owns its own DB).
+ * Opencode sessions are handled separately via loadOcSessions() + ocSidRemap.
  *
  * @returns {{ cc: Map, copilot: Map, codex: Map }}
  */

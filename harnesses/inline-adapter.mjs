@@ -36,6 +36,10 @@ import {
   appendMessage,
   deleteMessage,
   updateSdkSessionId,
+  saveOcMessages,
+  setOcSessionChildId,
+  loadOcSessions,
+  loadMessages,
 } from "./session-store.mjs";
 
 const PORT = Number(process.env.PORT || 4096);
@@ -184,14 +188,27 @@ const copilotGlobalBus = new Set(); // SSE response writers
 const codexSessions = new Map(); // id → {id, title, time, history, busSubscribers, activeProcess}
 const codexGlobalBus = new Set(); // SSE response writers
 
+// Opencode session remap: ourId → current opencode child session id (differs after rehydration).
+const ocSidRemap = new Map();        // ourId → childSid
+const ocSidRemapReverse = new Map(); // childSid → ourId
+
 // Hydrate persisted sessions from SQLite into the in-process Maps.
 {
   const { cc, copilot, codex } = hydrateFromDb();
   for (const [id, s] of cc) { ccSessions.set(id, s); sessionHarness.set(id, "cc"); }
   for (const [id, s] of copilot) { copilotSessions.set(id, s); sessionHarness.set(id, "github-copilot"); }
   for (const [id, s] of codex) { codexSessions.set(id, s); sessionHarness.set(id, "codex"); }
-  const total = cc.size + copilot.size + codex.size;
-  if (total > 0) log(`hydrated ${total} session(s) from db (cc=${cc.size} copilot=${copilot.size} codex=${codex.size})`);
+  // Opencode sessions: restore sessionHarness + remap (rehydrated sessions have sdk_session_id set)
+  const ocRows = loadOcSessions();
+  for (const row of ocRows) {
+    sessionHarness.set(row.id, "opencode");
+    if (row.sdk_session_id && row.sdk_session_id !== row.id) {
+      ocSidRemap.set(row.id, row.sdk_session_id);
+      ocSidRemapReverse.set(row.sdk_session_id, row.id);
+    }
+  }
+  const total = cc.size + copilot.size + codex.size + ocRows.length;
+  if (total > 0) log(`hydrated ${total} session(s) from db (cc=${cc.size} copilot=${copilot.size} codex=${codex.size} opencode=${ocRows.length})`);
 }
 
 // Token cache for GitHub Copilot native mode (tokens expire ~30 min)
@@ -676,6 +693,96 @@ function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
 }
 
+// ── Opencode persistence helpers ─────────────────────────────────────────────
+
+// Fetch messages from the opencode child and save to our DB (idempotent).
+async function snapshotOcMessages(ourSid) {
+  const childSid = ocSidRemap.get(ourSid) ?? ourSid;
+  return new Promise((resolve) => {
+    http.get(`${UP}/session/${encodeURIComponent(childSid)}/message`, (r) => {
+      let d = ""; r.on("data", c => d += c);
+      r.on("end", () => {
+        try { const msgs = JSON.parse(d); if (Array.isArray(msgs)) saveOcMessages(ourSid, msgs); } catch {}
+        resolve();
+      });
+    }).on("error", resolve);
+  });
+}
+
+// Translate opencode child session IDs in an SSE chunk to our session IDs.
+// Needed after rehydration: child uses a new ID but the client expects the original.
+function translateOcChunk(chunk) {
+  if (!ocSidRemapReverse.size) return chunk;
+  const text = chunk.toString("utf8");
+  let modified = false;
+  const lines = text.split("\n").map(line => {
+    if (!line.startsWith("data: ")) return line;
+    try {
+      const ev = JSON.parse(line.slice(6));
+      let changed = false;
+      if (ev.properties?.sessionID) {
+        const our = ocSidRemapReverse.get(ev.properties.sessionID);
+        if (our) { ev.properties.sessionID = our; changed = true; }
+      }
+      if (ev.properties?.part?.sessionID) {
+        const our = ocSidRemapReverse.get(ev.properties.part.sessionID);
+        if (our) { ev.properties.part.sessionID = our; changed = true; }
+      }
+      if (changed) { modified = true; return `data: ${JSON.stringify(ev)}`; }
+    } catch {}
+    return line;
+  });
+  return modified ? Buffer.from(lines.join("\n"), "utf8") : chunk;
+}
+
+// Ensure the opencode child still has this session. If not, create a fresh
+// child session and inject prior history as a preamble in the first user message.
+// Returns { childSid, preamble } — preamble is non-null only when we just rehydrated.
+async function ensureOcChildAlive(ourSid) {
+  const currentChildSid = ocSidRemap.get(ourSid) ?? ourSid;
+
+  const alive = await new Promise((resolve) => {
+    http.get(`${UP}/session/${encodeURIComponent(currentChildSid)}`, (r) => {
+      r.resume(); resolve(r.statusCode === 200);
+    }).on("error", () => resolve(false));
+  });
+  if (alive) return { childSid: currentChildSid, preamble: null };
+
+  log(`opencode session lost, rehydrating ourSid=${ourSid}`);
+
+  // Create new child session
+  const newChildSid = await new Promise((resolve) => {
+    const body = JSON.stringify({ title: "Resumed session" });
+    const req = http.request(UP + "/session", { method: "POST", headers: { "content-type": "application/json" } }, (r) => {
+      let d = ""; r.on("data", c => d += c);
+      r.on("end", () => { try { resolve(JSON.parse(d).id); } catch { resolve(null); } });
+    });
+    req.on("error", () => resolve(null));
+    req.end(body);
+  });
+  if (!newChildSid) { log(`rehydrate: could not create child session`); return { childSid: currentChildSid, preamble: null }; }
+
+  // Build preamble from saved history
+  let preamble = null;
+  const messages = loadMessages(ourSid);
+  if (messages.length > 0) {
+    const lines = messages.map(r => {
+      const text = JSON.parse(r.parts_json || "[]").filter(p => p.type === "text").map(p => p.text).join("\n").trim();
+      const role = JSON.parse(r.info_json || "{}").role === "assistant" ? "Assistant" : "User";
+      return text ? `${role}: ${text}` : null;
+    }).filter(Boolean);
+    if (lines.length) preamble = `<previous_session_history>\n${lines.join("\n\n")}\n</previous_session_history>`;
+  }
+
+  // Update maps + DB
+  ocSidRemap.set(ourSid, newChildSid);
+  ocSidRemapReverse.set(newChildSid, ourSid);
+  setOcSessionChildId(ourSid, newChildSid);
+  log(`opencode rehydrated ourSid=${ourSid} → newChildSid=${newChildSid} history=${messages.length}msg`);
+
+  return { childSid: newChildSid, preamble };
+}
+
 // Parse SSE chunks from the opencode event stream.
 // - Clears pending turn on session.idle (turn complete).
 // - Updates lastEventAt on ANY event — so the stuck watchdog only fires when
@@ -696,6 +803,8 @@ function tapOcSseChunk(chunk) {
       if (!sid || !ocPendingTurns.has(sid)) continue;
       if (ev.type === "session.idle") {
         ocPendingTurns.delete(sid);
+        const ourSid = ocSidRemapReverse.get(sid) ?? sid;
+        snapshotOcMessages(ourSid).catch(() => {});
       } else {
         const entry = ocPendingTurns.get(sid);
         let toolInFlight = entry.toolInFlight ?? false;
@@ -909,7 +1018,10 @@ const server = http.createServer(async (req, res) => {
       upRes.on("end", () => {
         try {
           const parsed = JSON.parse(respData);
-          if (parsed.id) sessionHarness.set(parsed.id, "opencode");
+          if (parsed.id) {
+            sessionHarness.set(parsed.id, "opencode");
+            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now() });
+          }
         } catch {}
         res.writeHead(upRes.statusCode || 200, upRes.headers);
         res.end(respData);
@@ -934,6 +1046,14 @@ const server = http.createServer(async (req, res) => {
       sessionHarness.set(s.id, "opencode");
       return { ...s, harness: "opencode" };
     });
+    // Merge in DB-persisted opencode sessions not currently known to the child.
+    const liveOcIds = new Set(tagged.map(s => s.id));
+    const dbOcExtra = loadOcSessions()
+      .filter(r => !liveOcIds.has(r.id))
+      .map(r => {
+        sessionHarness.set(r.id, "opencode");
+        return { id: r.id, title: r.title, time: { created: r.created_at, ...(r.updated_at ? { updated: r.updated_at } : {}) }, harness: "opencode" };
+      });
     const ccList = [...ccSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, harness: "claude-code",
     }));
@@ -943,7 +1063,7 @@ const server = http.createServer(async (req, res) => {
     const codexList = [...codexSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, harness: "codex",
     }));
-    const all = [...tagged, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(all));
     return;
@@ -1100,6 +1220,21 @@ const server = http.createServer(async (req, res) => {
 
     if (p.endsWith("/prompt_async") && sid) {
       const now = Date.now();
+      if (sessionHarness.get(sid) === "opencode") {
+        const { childSid, preamble } = await ensureOcChildAlive(sid);
+        if (preamble) {
+          try {
+            const b = JSON.parse(forwardBody);
+            const userText = (b.parts || []).filter(pt => pt.type === "text").map(pt => pt.text).join("\n");
+            b.parts = [{ type: "text", text: `${preamble}\n\nPlease continue the conversation. User message: ${userText}` }];
+            forwardBody = JSON.stringify(b);
+          } catch {}
+        }
+        const childPath = childSid !== sid ? p.replace(`/session/${sid}/`, `/session/${childSid}/`) : p;
+        ocPendingTurns.set(childSid, { startedAt: now, lastEventAt: now });
+        forward(req.method, childPath, url.search, Buffer.from(forwardBody), res, p);
+        return;
+      }
       ocPendingTurns.set(sid, { startedAt: now, lastEventAt: now });
     }
     forward(req.method, p, url.search, Buffer.from(forwardBody), res, p);
@@ -1130,7 +1265,20 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(cs.history));
       return;
     }
-    // opencode sessions fall through to the transparent passthrough below
+    // opencode: try child, fall back to our DB for lost sessions
+    if (sessionHarness.get(sid) === "opencode") {
+      const childSid = ocSidRemap.get(sid) ?? sid;
+      const childMsgs = await new Promise((resolve) => {
+        http.get(`${UP}/session/${encodeURIComponent(childSid)}/message`, (r) => {
+          let d = ""; r.on("data", c => d += c);
+          r.on("end", () => { try { resolve(r.statusCode === 200 ? JSON.parse(d) : null); } catch { resolve(null); } });
+        }).on("error", () => resolve(null));
+      });
+      const msgs = childMsgs ?? loadMessages(sid).map(r => ({ info: JSON.parse(r.info_json), parts: JSON.parse(r.parts_json) }));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(msgs));
+      return;
+    }
   }
 
   if (req.method === "GET" && p === "/event") {
@@ -1150,7 +1298,7 @@ const server = http.createServer(async (req, res) => {
     pluginGlobalBus.add(pluginPush);
 
     const ocReq = http.get(UP + "/event", (ocRes) => {
-      ocRes.on("data", (chunk) => { tapOcSseChunk(chunk); try { res.write(chunk); } catch {} });
+      ocRes.on("data", (chunk) => { tapOcSseChunk(chunk); try { res.write(translateOcChunk(chunk)); } catch {} });
       ocRes.on("end", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); codexGlobalBus.delete(codexPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
     });
     ocReq.on("error", () => { ccGlobalBus.delete(ccPush); copilotGlobalBus.delete(copilotPush); codexGlobalBus.delete(codexPush); pluginGlobalBus.delete(pluginPush); try { res.end(); } catch {} });
