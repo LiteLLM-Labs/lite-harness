@@ -9,6 +9,7 @@ import { makeRenderer } from "../renderer.mjs";
 import { boxedPrompt, EXIT } from "../input.mjs";
 import { sessionPicker } from "../session-picker.mjs";
 import { SLASH_COMMANDS } from "../slash-commands.mjs";
+import { buildAgentDef } from "../agent-build.mjs";
 
 export async function chat(harnessName, flags) {
   const config = loadConfig();
@@ -150,6 +151,41 @@ export async function chat(harnessName, flags) {
     }
   }
 
+  // ── /agent — CLI-driven interview, then one deterministic save to the server ──
+  async function runAgentBuild(seed) {
+    const ask = async (q) => {
+      process.stdout.write(`  ${CYAN}${q}${R}\n`);
+      const a = await boxedPrompt(history);
+      if (a === EXIT) return null;
+      const v = a.trim();
+      return v.toLowerCase() === "cancel" ? null : v;
+    };
+    const cancelled = () => process.stdout.write(`  ${GRAY}cancelled${R}\n\n`);
+
+    let task = (seed || "").trim();
+    if (!task) {
+      task = await ask("What should this agent do?");
+      if (!task) return cancelled();
+    } else {
+      process.stdout.write(`  ${GRAY}task:${R} ${task}\n`);
+    }
+    const cadence = await ask('How often should it run?  (e.g. 1h, daily, weekly, or "none" for on-demand)');
+    if (cadence === null) return cancelled();
+    const name = await ask("Short name? (Enter to auto-name)");
+    if (name === null) return cancelled();
+
+    let def;
+    try {
+      def = buildAgentDef({ task, cadence: cadence || "none", name, model });
+    } catch (e) {
+      process.stdout.write(`  ${RED}✗ ${e.message}${R}\n\n`);
+      return;
+    }
+    process.stdout.write(`  ${GRAY}creating ${def.name}…${R}\n`);
+    await sendAndWait(`/agent save ${JSON.stringify(def)}`);
+    process.stdout.write("\n");
+  }
+
   // ── Input loop ──────────────────────────────────────────────────────────────
   const history = [];
 
@@ -223,6 +259,12 @@ export async function chat(harnessName, flags) {
           process.stdout.write(`  ${GRAY}(could not load history: ${e.message})${R}\n\n`);
         }
       }
+      continue;
+    }
+
+    // /agent (build) is a CLI-driven interview; list/status/stop/save pass through.
+    if (text === "/agent" || (text.startsWith("/agent ") && !/^\/agent\s+(list|status|stop|save|help)\b/i.test(text))) {
+      await runAgentBuild(text === "/agent" ? "" : text.slice(7).trim());
       continue;
     }
 
