@@ -28,6 +28,14 @@ import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
+import { initDb } from "./loop-store.mjs";
+import {
+  hydrateFromDb,
+  persistSession,
+  appendMessage,
+  deleteMessage,
+  updateSdkSessionId,
+} from "./session-store.mjs";
 
 const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
@@ -56,6 +64,10 @@ if (process.env.LITELLM_API_KEY) {
 const MASTER_KEY = process.env.MASTER_KEY || "";
 const LOOP_DB_PATH = process.env.LOOP_DB_PATH ||
   path.join(process.env.HOME || "/home/sandbox", ".local", "share", "opencode", "loops.db");
+
+// Initialize DB synchronously so session hydration runs before any request.
+// LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
+initDb(LOOP_DB_PATH);
 
 // Plugin registry — handles /vault, /help, and future slash commands at the
 // adapter level before any harness sees the message.
@@ -170,6 +182,16 @@ const copilotGlobalBus = new Set(); // SSE response writers
 const codexSessions = new Map(); // id → {id, title, time, history, busSubscribers, activeProcess}
 const codexGlobalBus = new Set(); // SSE response writers
 
+// Hydrate persisted sessions from SQLite into the in-process Maps.
+{
+  const { cc, copilot, codex } = hydrateFromDb();
+  for (const [id, s] of cc) { ccSessions.set(id, s); sessionHarness.set(id, "cc"); }
+  for (const [id, s] of copilot) { copilotSessions.set(id, s); sessionHarness.set(id, "github-copilot"); }
+  for (const [id, s] of codex) { codexSessions.set(id, s); sessionHarness.set(id, "codex"); }
+  const total = cc.size + copilot.size + codex.size;
+  if (total > 0) log(`hydrated ${total} session(s) from db (cc=${cc.size} copilot=${copilot.size} codex=${codex.size})`);
+}
+
 // Token cache for GitHub Copilot native mode (tokens expire ~30 min)
 let _copilotToken = null;
 let _copilotTokenExpiry = 0;
@@ -234,6 +256,7 @@ async function copilotRunTurn(s, userText, modelId) {
   const userPart = { id: `${userMsgId}_p0`, messageID: userMsgId, type: "text", text: userText };
   const userMsg = { info: { id: userMsgId, role: "user", time: { created: startedAt, completed: startedAt } }, parts: [userPart] };
   s.history.push(userMsg);
+  appendMessage(s.id, userMsg, s.history.length - 1);
   copilotEmit(s.id, "message.updated", { info: userMsg.info });
   copilotEmit(s.id, "message.part.updated", { messageID: userMsgId, part: userPart });
 
@@ -296,6 +319,7 @@ async function copilotRunTurn(s, userText, modelId) {
   const textPart = { id: partID, messageID: asstMsgId, type: "text", text: totalText };
   const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "github-copilot", modelID: model, ...(lastError ? { error: lastError } : { finish: "stop" }) };
   s.history.push({ info: fullInfo, parts: [textPart] });
+  appendMessage(s.id, { info: fullInfo, parts: [textPart] }, s.history.length - 1);
   s.time.updated = completedAt;
   copilotEmit(s.id, "message.updated", { info: fullInfo });
   copilotEmit(s.id, "session.idle", {});
@@ -329,6 +353,7 @@ async function codexRunTurn(s, userText) {
   const userPart = { id: `${userMsgId}_p0`, messageID: userMsgId, type: "text", text: userText };
   const userMsg = { info: { id: userMsgId, role: "user", time: { created: startedAt, completed: startedAt } }, parts: [userPart] };
   s.history.push(userMsg);
+  appendMessage(s.id, userMsg, s.history.length - 1);
   codexEmit(s.id, "message.updated", { info: userMsg.info });
   codexEmit(s.id, "message.part.updated", { messageID: userMsgId, part: userPart });
 
@@ -388,6 +413,7 @@ async function codexRunTurn(s, userText) {
   const textPart = { id: partID, messageID: asstMsgId, type: "text", text: totalText };
   const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "codex", modelID: "codex", ...(lastError ? { error: lastError } : { finish: "stop" }) };
   s.history.push({ info: fullInfo, parts: [textPart] });
+  appendMessage(s.id, { info: fullInfo, parts: [textPart] }, s.history.length - 1);
   s.time.updated = completedAt;
   codexEmit(s.id, "message.updated", { info: fullInfo });
   codexEmit(s.id, "session.idle", {});
@@ -483,6 +509,7 @@ async function ccRunTurn(s, userText, modelId) {
   const userPart = { id: `${userMsgId}_p0`, messageID: userMsgId, type: "text", text: userText };
   const userMsg = { info: { id: userMsgId, role: "user", time: { created: startedAt, completed: startedAt } }, parts: [userPart] };
   s.history.push(userMsg);
+  appendMessage(s.id, userMsg, s.history.length - 1);
   ccEmit(s.id, "message.updated", { info: userMsg.info });
   ccEmit(s.id, "message.part.updated", { messageID: userMsgId, part: userPart });
 
@@ -509,7 +536,7 @@ async function ccRunTurn(s, userText, modelId) {
         if (e.error) lastError = e.error;
         if (e.cost !== undefined) totalCost = e.cost;
         if (e.usage) usage = e.usage;
-        if (e.sdk_session_id && !s.sdkSessionId) s.sdkSessionId = e.sdk_session_id;
+        if (e.sdk_session_id && !s.sdkSessionId) { s.sdkSessionId = e.sdk_session_id; updateSdkSessionId(s.id, e.sdk_session_id); }
       });
     }
   } catch (err) {
@@ -520,6 +547,7 @@ async function ccRunTurn(s, userText, modelId) {
       if (s.sdkSessionId && msg.includes("Blocked")) {
         log(`cc stale session retry id=${s.id}`);
         s.sdkSessionId = null;
+        deleteMessage(userMsg.info.id);
         s.history.pop();
         s.abortController = null;
         return ccRunTurn(s, userText, modelId);
@@ -531,6 +559,7 @@ async function ccRunTurn(s, userText, modelId) {
   const completedAt = Date.now();
   const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "claude-code", modelID: modelId, tokens: usage, cost: totalCost, ...(lastError ? { error: lastError } : { finish: "stop" }) };
   s.history.push({ info: fullInfo, parts });
+  appendMessage(s.id, { info: fullInfo, parts }, s.history.length - 1);
   s.time.updated = completedAt;
   ccEmit(s.id, "message.updated", { info: fullInfo });
   ccEmit(s.id, "session.idle", {});
@@ -823,6 +852,7 @@ const server = http.createServer(async (req, res) => {
       const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set() };
       copilotSessions.set(id, s);
       sessionHarness.set(id, "github-copilot");
+      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now });
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "github-copilot" }));
@@ -840,6 +870,7 @@ const server = http.createServer(async (req, res) => {
       const s = { id, title: body.title || "New session", time: { created: now }, history: [], busSubscribers: new Set(), activeProcess: null };
       codexSessions.set(id, s);
       sessionHarness.set(id, "codex");
+      persistSession({ id, harness: "codex", title: s.title, createdAt: now });
       log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "codex" }));
@@ -857,6 +888,7 @@ const server = http.createServer(async (req, res) => {
       const s = { id, title: body.title || "New session", time: { created: now }, harness: "claude-code", sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set() };
       ccSessions.set(id, s);
       sessionHarness.set(id, "cc");
+      persistSession({ id, harness: "cc", title: s.title, createdAt: now });
       log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, harness: "claude-code" }));
