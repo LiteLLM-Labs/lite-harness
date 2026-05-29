@@ -33,8 +33,6 @@ export function sessionPicker(sessions) {
       if (rendered > 0) {
         out(up(rendered));
         out("\x1b[0J"); // erase from cursor to end of screen
-      } else {
-        out("\n"); // start on fresh line after the input box
       }
       const lines = [];
       lines.push(`  ${BOLD}${WHITE}Sessions${R}  ${DIM}↑↓ select  ·  Enter open  ·  Esc cancel${R}`);
@@ -50,7 +48,8 @@ export function sessionPicker(sessions) {
       }
       lines.push("");
       out(lines.join("\n"));
-      rendered = lines.length;
+      // join("\n") with trailing "" emits lines.length-1 actual newlines → that's the cursor displacement
+      rendered = lines.length - 1;
     }
 
     function cleanup() {
