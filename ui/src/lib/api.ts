@@ -148,6 +148,10 @@ export async function sendMessage(opts: {
   }
 }
 
+export async function abortSession(id: string): Promise<void> {
+  await req(`/session/${encodeURIComponent(id)}/abort`, { method: "POST" });
+}
+
 export async function listModels(): Promise<string[]> {
   const res = await req("/v1/models");
   if (!res.ok) return [];

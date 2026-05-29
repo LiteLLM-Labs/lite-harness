@@ -488,7 +488,9 @@ const HEALTH_INTERVAL_MS = 30_000;
 const MSG_TAIL_CHARS = 200;
 const STUCK_TIMEOUT_MS = Number(process.env.STUCK_TIMEOUT_MS || 120_000);
 
-// sid → startedAt (ms): tracks in-flight opencode turns for stuck-turn detection.
+// sid → { startedAt, lastEventAt } — only abort when SILENT for STUCK_TIMEOUT_MS,
+// not when total elapsed > STUCK_TIMEOUT_MS. Actively-working turns emit events
+// frequently; lastEventAt resets on every SSE event so long-running agents survive.
 const ocPendingTurns = new Map();
 
 let draining = false;
@@ -537,18 +539,34 @@ function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
 }
 
-// Parse SSE chunks from the opencode event stream, clearing pending turns when
-// session.idle fires so the stuck-turn watchdog doesn't false-positive.
+// Parse SSE chunks from the opencode event stream.
+// - Clears pending turn on session.idle (turn complete).
+// - Updates lastEventAt on ANY event — so the stuck watchdog only fires when
+//   the session has been truly silent, not merely slow.
+// - Tracks toolInFlight: MCP tools can take minutes with no SSE events; the
+//   watchdog uses a 10-minute timeout instead of STUCK_TIMEOUT_MS when a tool
+//   is actively executing so it doesn't abort a legitimate long-running call.
 function tapOcSseChunk(chunk) {
   const text = chunk.toString("utf8");
-  if (!text.includes("session.idle")) return;
+  const now = Date.now();
   for (const line of text.split("\n")) {
     if (!line.startsWith("data: ")) continue;
     try {
       const ev = JSON.parse(line.slice(6));
+      // session.idle and most events use properties.sessionID directly.
+      // message.part.updated embeds sessionID inside properties.part.sessionID.
+      const sid = ev.properties?.sessionID ?? ev.properties?.part?.sessionID;
+      if (!sid || !ocPendingTurns.has(sid)) continue;
       if (ev.type === "session.idle") {
-        const sid = ev.properties?.sessionID;
-        if (sid) ocPendingTurns.delete(sid);
+        ocPendingTurns.delete(sid);
+      } else {
+        const entry = ocPendingTurns.get(sid);
+        let toolInFlight = entry.toolInFlight ?? false;
+        if (ev.type === "message.part.updated" && ev.properties?.part?.type === "tool") {
+          const status = ev.properties.part.state?.status;
+          toolInFlight = status === "running";
+        }
+        ocPendingTurns.set(sid, { ...entry, lastEventAt: now, toolInFlight });
       }
     } catch {}
   }
@@ -894,7 +912,10 @@ const server = http.createServer(async (req, res) => {
       }
     } catch {}
 
-    if (p.endsWith("/prompt_async") && sid) ocPendingTurns.set(sid, Date.now());
+    if (p.endsWith("/prompt_async") && sid) {
+      const now = Date.now();
+      ocPendingTurns.set(sid, { startedAt: now, lastEventAt: now });
+    }
     forward(req.method, p, url.search, Buffer.from(forwardBody), res, p);
     return;
   }
@@ -1034,11 +1055,17 @@ waitChild().then((ok) => {
     } else {
       log(`child health FAIL (${UP}): ${probe.err || "no response"} | restarts=${restartCount}`);
     }
-    // Auto-abort opencode turns stuck longer than STUCK_TIMEOUT_MS.
+    // Auto-abort opencode turns that have been SILENT for STUCK_TIMEOUT_MS.
+    // Actively working turns emit SSE events; lastEventAt resets on each one.
+    // Exception: if a tool call is in flight, tolerate up to 10 minutes of
+    // silence — MCP tools like push_files can take several minutes with no
+    // SSE events between tool-start and tool-result.
+    const TOOL_STUCK_TIMEOUT_MS = 600_000;
     const now = Date.now();
-    for (const [sid, startedAt] of ocPendingTurns) {
-      if (now - startedAt > STUCK_TIMEOUT_MS) {
-        log(`auto-abort stuck turn: sid=${sid} stuck=${Math.round((now - startedAt) / 1000)}s`);
+    for (const [sid, { lastEventAt, startedAt, toolInFlight }] of ocPendingTurns) {
+      const timeout = toolInFlight ? TOOL_STUCK_TIMEOUT_MS : STUCK_TIMEOUT_MS;
+      if (now - lastEventAt > timeout) {
+        log(`auto-abort stuck turn: sid=${sid} silent=${Math.round((now - lastEventAt) / 1000)}s total=${Math.round((now - startedAt) / 1000)}s toolInFlight=${!!toolInFlight}`);
         ocPendingTurns.delete(sid);
         const ar = http.request(`${UP}/session/${sid}/abort`, { method: "POST" }, (r) => {
           r.resume();
