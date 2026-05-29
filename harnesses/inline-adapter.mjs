@@ -449,6 +449,10 @@ async function codexRunTurn(s, userText) {
       "-c", `model_providers.litellm.base_url=${litellmBase.replace(/\/+$/, "")}`,
       "-c", `model_providers.litellm.env_key=LITELLM_API_KEY`,
       "-c", `model_provider=litellm`,
+      // Inject the platform MCP server so codex sessions can call save_agent.
+      // Uses the same -c override mechanism as the model config above.
+      // TOML path matches what `codex mcp add --url` writes: [mcp_servers.<name>] / url = "..."
+      "-c", `mcp_servers.platform.url="${PLATFORM_MCP_URL}"`,
       "--approval-mode", "full-auto",
       "--quiet",
       fullPrompt,
