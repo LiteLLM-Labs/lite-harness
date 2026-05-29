@@ -21,3 +21,13 @@ export function matchSlash(query) {
   if (hits.length === 1 && hits[0].name === query) return [];
   return hits;
 }
+
+// The leading "/command" token to highlight in the input line, or null.
+// Matches a known command exactly ("/loop 5m x" → "/loop") or while it's still
+// being typed as a prefix ("/lo" → "/lo"). Unknown tokens stay unhighlighted.
+export function commandToken(query) {
+  const m = query.match(/^\/\S*/);
+  if (!m) return null;
+  const t = m[0];
+  return SLASH_COMMANDS.some((c) => c.name === t || c.name.startsWith(t)) ? t : null;
+}
