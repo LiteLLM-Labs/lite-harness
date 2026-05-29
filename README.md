@@ -41,7 +41,7 @@ lite opencode
   Got 42 new stargazers. Drafting DMs...
 ```
 
-Supported agents: `opencode` `claude-code` `github-copilot` `codex`
+Supported agents: `opencode` `claude-code` `github-copilot` `codex` — [full CLI docs](cli/README.md)
 
 ## setup
 
