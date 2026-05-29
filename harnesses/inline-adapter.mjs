@@ -753,8 +753,18 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   if (p === "/health") {
+    let dbDebug = {};
+    try {
+      const { getDb } = await import("./loop-store.mjs");
+      const db = getDb();
+      const sessionCount = db.prepare("SELECT COUNT(*) as n FROM sessions").get().n;
+      const msgCount = db.prepare("SELECT COUNT(*) as n FROM session_messages").get().n;
+      dbDebug = { dbOk: true, sessions: sessionCount, messages: msgCount, dbPath: LOOP_DB_PATH };
+    } catch (e) {
+      dbDebug = { dbOk: false, dbError: e.message, dbPath: LOOP_DB_PATH };
+    }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ harness: "inline", ok: true, draining, inFlight, restartCount, ui: UI_DIST_EXISTS }));
+    res.end(JSON.stringify({ harness: "inline", ok: true, draining, inFlight, restartCount, ui: UI_DIST_EXISTS, ...dbDebug }));
     return;
   }
 
