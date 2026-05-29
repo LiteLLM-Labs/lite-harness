@@ -36,7 +36,7 @@ export async function chat(harnessName, flags) {
     `${GRAY}server${R}    ${client.shortUrl}`,
     `${GRAY}session${R}   ${currentSid.slice(0, 16)}`,
     "",
-    `${DIM}/clear to reset history  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
+    `${DIM}/help for commands  ·  Esc to interrupt  ·  Ctrl+C to quit${R}`,
   ], { color: BLUE }));
 
   // ── Event handling ────────────────────────────────────────────────────────────
@@ -162,6 +162,18 @@ export async function chat(harnessName, flags) {
     // In a TTY the submitted box stays on screen as scrollback; only the
     // non-TTY (piped) path needs the prompt echoed back.
     if (!process.stdin.isTTY) process.stdout.write(`  ${BLUE}❯${R} ${text}\n`);
+
+    if (text === "/" || text === "/help") {
+      process.stdout.write([
+        "",
+        `  ${BOLD}${WHITE}Slash commands${R}`,
+        `  ${CYAN}/clear${R}   ${GRAY}reset session history${R}`,
+        `  ${CYAN}/help${R}    ${GRAY}show this command list${R}`,
+        `  ${CYAN}exit${R}     ${GRAY}quit lite-harness${R}`,
+        "",
+      ].join("\n"));
+      continue;
+    }
 
     if (text === "/clear") {
       try { await clearSession(); } catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`); }
