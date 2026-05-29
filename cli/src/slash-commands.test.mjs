@@ -8,6 +8,15 @@ test("/loop is a registered command", () => {
   assert.ok(SLASH_COMMANDS.some((c) => c.name === "/loop"));
 });
 
+test("/agent is a registered command", () => {
+  assert.ok(SLASH_COMMANDS.some((c) => c.name === "/agent"));
+});
+
+test("/a prefix filters to /agent", () => {
+  assert.deepEqual(names("/a"), ["/agent"]);
+  assert.deepEqual(names("/agent"), []); // complete → closes so Enter sends
+});
+
 test("bare slash opens the full menu", () => {
   assert.deepEqual(names("/"), SLASH_COMMANDS.map((c) => c.name));
 });
