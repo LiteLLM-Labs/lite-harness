@@ -102,7 +102,7 @@ export async function chat(harnessName, flags) {
     currentSid = s.id;
     resetTurn();
     idleResolve = null;
-    process.stdout.write(`\n  ${GREEN}✓ Session cleared${R}  ${GRAY}${currentSid.slice(0, 12)}${R}\n`);
+    process.stdout.write("\x1b[2J\x1b[H"); // clear screen, cursor to top
   }
 
   function quit() {
