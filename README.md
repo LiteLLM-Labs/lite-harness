@@ -13,11 +13,9 @@ Run Claude Code/Codex/OpenCode on a sandbox in autopilot.
 
 lite login  # point at your server, save master key
 
-# run claude-code to monitor CI and fix bugs
 lite claude-code
 ❯ monitor CI every hour and fix any bugs
 
-# run opencode to dm github stargazers daily
 lite opencode
 ❯ dm github stargazers daily
 ```
