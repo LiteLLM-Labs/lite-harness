@@ -221,6 +221,23 @@ async function getCopilotEndpoint() {
   return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
 }
 
+// OpenAI-format tool definition for save_agent, injected into every copilot request.
+const SAVE_AGENT_TOOL = {
+  type: "function",
+  function: {
+    name: "save_agent",
+    description: "Save this session as a reusable named agent that can be launched from the CLI with `lite <agent_name>`",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string" },
+        system_prompt: { type: "string" },
+      },
+      required: ["agent_name", "system_prompt"],
+    },
+  },
+};
+
 async function copilotRunTurn(s, userText, modelId) {
   const startedAt = Date.now();
 
@@ -252,42 +269,122 @@ async function copilotRunTurn(s, userText, modelId) {
   const model = modelId || process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
   try {
     const endpoint = await getCopilotEndpoint();
-    const resp = await fetch(endpoint.url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${endpoint.key}`,
-        "Content-Type": "application/json",
-        ...endpoint.extraHeaders,
-      },
-      body: JSON.stringify({ model, messages, stream: true }),
-    });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
-    }
-    // Parse SSE stream
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
+
+    // Agentic loop: re-run if model calls a tool (e.g. save_agent).
+    // On each iteration we stream text deltas; if a tool_call fires we
+    // execute it and append tool messages, then loop for the next reply.
+    let loopMessages = [...messages];
+    let toolCallsThisTurn = 0;
+    const MAX_TOOL_LOOPS = 5;
+
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const payload = line.slice(6).trim();
-        if (payload === "[DONE]") break;
-        try {
-          const chunk = JSON.parse(payload);
-          const delta = chunk.choices?.[0]?.delta?.content ?? "";
-          if (delta) {
-            totalText += delta;
-            copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta });
-          }
-        } catch {}
+      const resp = await fetch(endpoint.url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${endpoint.key}`,
+          "Content-Type": "application/json",
+          ...endpoint.extraHeaders,
+        },
+        body: JSON.stringify({ model, messages: loopMessages, tools: [SAVE_AGENT_TOOL], stream: true }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
       }
+
+      // Parse SSE stream, accumulating both text deltas and tool_call deltas.
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      // tool_calls are streamed in chunks; accumulate by index.
+      const toolCallAccum = {}; // index → { id, name, argumentsRaw }
+      let finishReason = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") { finishReason = finishReason ?? "stop"; break; }
+          try {
+            const chunk = JSON.parse(payload);
+            const choice = chunk.choices?.[0];
+            if (!choice) continue;
+            if (choice.finish_reason) finishReason = choice.finish_reason;
+            const delta = choice.delta;
+            if (!delta) continue;
+            // Accumulate text content
+            if (delta.content) {
+              totalText += delta.content;
+              copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta: delta.content });
+            }
+            // Accumulate tool_calls deltas
+            if (Array.isArray(delta.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                if (!toolCallAccum[idx]) toolCallAccum[idx] = { id: "", name: "", argumentsRaw: "" };
+                if (tc.id) toolCallAccum[idx].id += tc.id;
+                if (tc.function?.name) toolCallAccum[idx].name += tc.function.name;
+                if (tc.function?.arguments) toolCallAccum[idx].argumentsRaw += tc.function.arguments;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      const pendingToolCalls = Object.values(toolCallAccum);
+
+      // If the model did NOT call any tool, the turn is done.
+      if (pendingToolCalls.length === 0 || finishReason !== "tool_calls" || toolCallsThisTurn >= MAX_TOOL_LOOPS) break;
+
+      // Build the assistant message with tool_calls for the next loop iteration.
+      const assistantMsg = {
+        role: "assistant",
+        content: totalText || null,
+        tool_calls: pendingToolCalls.map(tc => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.name, arguments: tc.argumentsRaw },
+        })),
+      };
+      loopMessages.push(assistantMsg);
+
+      // Execute each tool call and append tool result messages.
+      for (const tc of pendingToolCalls) {
+        let toolResult = "";
+        try {
+          let args = {};
+          try { args = JSON.parse(tc.argumentsRaw); } catch {}
+          if (tc.name === "save_agent") {
+            log(`copilot tool call: save_agent agent_name=${args.agent_name}`);
+            const mcpResp = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(MASTER_KEY ? { "Authorization": `Bearer ${MASTER_KEY}` } : {}) },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "save_agent", arguments: args } }),
+            });
+            const mcpJson = await mcpResp.json();
+            const resultContent = mcpJson?.result?.content;
+            if (Array.isArray(resultContent)) {
+              toolResult = resultContent.map(c => c.text ?? JSON.stringify(c)).join("\n");
+            } else {
+              toolResult = JSON.stringify(mcpJson?.result ?? mcpJson);
+            }
+            log(`copilot save_agent result: ${toolResult.slice(0, 200)}`);
+          } else {
+            toolResult = `Unknown tool: ${tc.name}`;
+          }
+        } catch (toolErr) {
+          toolResult = `Tool error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`;
+          log(`copilot tool error: ${toolResult}`);
+        }
+        loopMessages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
+      }
+
+      toolCallsThisTurn++;
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1285,11 +1382,16 @@ if (ocWorkdir) {
   }
 }
 
+// Start HTTP server BEFORE opencode so platform MCP is reachable when
+// opencode connects to it during startup (opencode pings MCP servers on init).
+server.listen(PORT, "0.0.0.0", () => {
+  log(`adapter listening :${PORT} (platform MCP ready)`);
+});
+
 startChild();
 waitChild().then((ok) => {
   if (!ok) { log("opencode serve never became ready"); process.exit(1); }
-  log(`listening :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
-  server.listen(PORT, "0.0.0.0");
+  log(`opencode ready :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
 
   const healthTimer = setInterval(async () => {
     const probe = await probeChild();
