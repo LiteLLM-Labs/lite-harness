@@ -195,7 +195,29 @@ export async function chat(harnessName, flags) {
         currentSid = picked.id;
         resetTurn();
         idleResolve = null;
-        process.stdout.write(`  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
+        process.stdout.write(`\n  ${GREEN}✓ Resumed${R}  ${GRAY}${picked.title || picked.id}  ${picked.id.slice(0, 14)}${R}\n\n`);
+        try {
+          const msgs = await client.listMessages(currentSid);
+          for (const msg of msgs) {
+            const role = msg.info?.role;
+            if (role === "user") {
+              const text = msg.parts?.find(p => p.type === "text")?.text ?? "";
+              if (text) process.stdout.write(`  ${BLUE}❯${R} ${text}\n\n`);
+            } else if (role === "assistant") {
+              for (const part of msg.parts ?? []) {
+                if (part.type === "text" && part.text) {
+                  renderer.text(part.text);
+                } else if (part.type === "tool" && part.tool) {
+                  renderer.tool(part.tool, part.state);
+                }
+              }
+              renderer.finish();
+              process.stdout.write("\n");
+            }
+          }
+        } catch (e) {
+          process.stdout.write(`  ${GRAY}(could not load history: ${e.message})${R}\n\n`);
+        }
       }
       continue;
     }
