@@ -159,7 +159,9 @@ export async function chat(harnessName, flags) {
     if (text === "exit" || text === "quit" || text === "\\q") quit();
 
     history.push(text);
-    process.stdout.write(`  ${BLUE}❯${R} ${text}\n`); // echo as scrollback
+    // In a TTY the submitted box stays on screen as scrollback; only the
+    // non-TTY (piped) path needs the prompt echoed back.
+    if (!process.stdin.isTTY) process.stdout.write(`  ${BLUE}❯${R} ${text}\n`);
 
     if (text === "/clear") {
       try { await clearSession(); } catch (e) { process.stdout.write(`  ${RED}✗ ${e.message}${R}\n`); }

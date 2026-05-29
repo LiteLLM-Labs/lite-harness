@@ -18,6 +18,7 @@ export const SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","
 export const cols = () => process.stdout.columns || 80;
 export const visibleLen = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").length;
 export const up = (n) => (n > 0 ? `\x1b[${n}A` : "");
+export const down = (n) => (n > 0 ? `\x1b[${n}B` : "");
 
 // Rounded box that fills the terminal width. `lines` may contain ANSI codes;
 // width is computed on the visible length so padding stays aligned.
