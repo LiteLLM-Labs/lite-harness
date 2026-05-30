@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertCircle, Copy, RotateCcw, Check } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, Copy, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { PendingApproval } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 function toFieldLabel(key: string): string {
   return key
@@ -66,41 +67,39 @@ export function ToolApprovalPanel({ approval, onAccept, onReject, busy }: ToolAp
   };
 
   return (
-    <div className="my-4 rounded-xl border border-amber-500/30 bg-amber-500/[0.03] p-1">
-      {/* Header — tool name + copy */}
-      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
-        <AlertCircle className="size-5 text-amber-500" />
-        <span className="text-lg font-semibold tracking-tight">{approval.tool}</span>
-        <Button variant="outline" size="sm" onClick={copyName} className="ml-1">
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          {copied ? "Copied" : "Copy"}
-        </Button>
-        <span className="ml-auto text-xs text-muted-foreground">awaiting approval</span>
+    <section className="rounded-lg border border-amber-500/25 bg-card">
+      <div className="flex flex-col gap-3 border-b border-amber-500/20 bg-amber-500/[0.04] p-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-amber-500/25 bg-amber-500/10 text-amber-300">
+            <ShieldAlert className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">{approval.tool}</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Review and edit arguments before allowing this tool call.
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-300">
+            <AlertCircle className="size-3" />
+            Awaiting approval
+          </span>
+          <Button variant="outline" size="sm" onClick={copyName}>
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
       </div>
 
-      <div className="rounded-lg border border-border/60 bg-background/40 p-4">
-        <div className="mb-3 text-sm font-semibold">Edit/Accept</div>
-
-        {keys.length === 0 ? (
-          <p className="text-sm text-muted-foreground">This action takes no arguments.</p>
-        ) : (
-          <div className="space-y-3">
-            {keys.map((k) => (
-              <div key={k} className="space-y-1.5">
-                <label className="text-sm text-muted-foreground">{toFieldLabel(k)}</label>
-                <textarea
-                  value={fields[k]}
-                  onChange={(e) => setFields((f) => ({ ...f, [k]: e.target.value }))}
-                  rows={fields[k].includes("\n") ? Math.min(fields[k].split("\n").length, 8) : 1}
-                  className="w-full resize-y rounded-lg border border-input bg-input/30 px-3 py-2 font-mono text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  disabled={busy}
-                />
-              </div>
-            ))}
+      <div className="p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Arguments</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Changes are returned to the agent exactly as approved.
+            </div>
           </div>
-        )}
-
-        <div className="mt-4 flex items-center justify-end gap-2">
           <Button
             variant="ghost"
             size="sm"
@@ -110,24 +109,55 @@ export function ToolApprovalPanel({ approval, onAccept, onReject, busy }: ToolAp
             <RotateCcw className="size-3.5" />
             Reset
           </Button>
+        </div>
+
+        {keys.length === 0 ? (
+          <div className="rounded-md border border-border bg-muted/30 px-3 py-6 text-center text-sm text-muted-foreground">
+            This action takes no arguments.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {keys.map((k) => (
+              <div key={k} className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">{toFieldLabel(k)}</label>
+                <textarea
+                  value={fields[k]}
+                  onChange={(e) => setFields((f) => ({ ...f, [k]: e.target.value }))}
+                  rows={fields[k].includes("\n") ? Math.min(fields[k].split("\n").length, 8) : 1}
+                  className={cn(
+                    "w-full resize-y rounded-md border border-input bg-input/30 px-3 py-2 font-mono text-sm outline-none transition-colors",
+                    "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60",
+                  )}
+                  disabled={busy}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
           <Button size="sm" onClick={() => onAccept(approval.id, buildArgs())} disabled={busy}>
+            <CheckCircle2 className="size-3.5" />
             Accept
           </Button>
         </div>
 
-        {/* Reject path */}
-        <div className="my-4 flex items-center gap-3">
-          <div className="h-px flex-1 bg-border/60" />
-          <span className="text-xs text-muted-foreground">Or tell the agent what it did wrong</span>
-          <div className="h-px flex-1 bg-border/60" />
+        <div className="my-4 border-t border-border" />
+
+        <div className="mb-2 flex items-center gap-2">
+          <XCircle className="size-4 text-destructive" />
+          <div>
+            <div className="text-sm font-semibold">Reject with feedback</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">The agent receives this text and can adjust its next step.</div>
+          </div>
         </div>
 
         <textarea
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
           rows={2}
-          placeholder="Feedback returned to the agent on reject…"
-          className="w-full resize-y rounded-lg border border-input bg-input/30 px-3 py-2 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          placeholder="Explain what needs to change before this action is allowed."
+          className="w-full resize-y rounded-md border border-input bg-input/30 px-3 py-2 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={busy}
         />
 
@@ -142,6 +172,6 @@ export function ToolApprovalPanel({ approval, onAccept, onReject, busy }: ToolAp
           </Button>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
