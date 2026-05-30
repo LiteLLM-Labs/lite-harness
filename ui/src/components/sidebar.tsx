@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Puzzle, Bot } from "lucide-react";
+import { Plus, Trash2, Puzzle, Bot, Inbox } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { readHarness } from "@/lib/use-harness";
-import { createSession, deleteSession, listSessions } from "@/lib/api";
+import { createSession, deleteSession, listSessions, listInbox } from "@/lib/api";
 import type { OpencodeSession } from "@/lib/types";
 
 function timeAgo(ts?: number): string {
@@ -27,6 +27,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   const [sessions, setSessions] = useState<OpencodeSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [inboxCount, setInboxCount] = useState(0);
   const load = async () => {
     try {
       const list = await listSessions();
@@ -42,6 +43,17 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, []);
+
+  // Poll the needs-attention count for the unread badge.
+  useEffect(() => {
+    const loadCount = () =>
+      listInbox("attention")
+        .then((items) => setInboxCount(items.length))
+        .catch(() => {});
+    loadCount();
+    const t = setInterval(loadCount, 5000);
+    return () => clearInterval(t);
+  }, [pathname]);
 
   const onNew = async () => {
     setCreating(true);
@@ -85,6 +97,20 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         >
           <Plus className="size-4" />
           New session
+        </Button>
+        <Button
+          onClick={() => router.push("/inbox/")}
+          variant={pathname?.startsWith("/inbox") ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          size="sm"
+        >
+          <Inbox className="size-4" />
+          Inbox
+          {inboxCount > 0 && (
+            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
+              {inboxCount}
+            </span>
+          )}
         </Button>
         <Button
           onClick={() => router.push("/agents/")}
