@@ -2228,6 +2228,13 @@ const server = http.createServer(async (req, res) => {
     pluginGlobalBus.add(runEventListener);
     if (runHarness === "opencode") ocGlobalBus.add(runEventListener);
 
+    // Always inject agent identity so the agent can call persist_file
+    resolvedPrompt +=
+      `\n\n---\nAgent context:\n  agent_id: ${agentId}\n` +
+      `  run_id: ${runId}\n` +
+      `  To persist files you create in the sandbox back to the platform, call the\n` +
+      `  persist_file MCP tool with your agent_id and the file path + content.\n---`;
+
     // Provision sandbox and write agent files if any exist
     const agentFiles = listAgentFiles(agentId);
     if (agentFiles.length > 0) {
@@ -2249,7 +2256,8 @@ const server = http.createServer(async (req, res) => {
         resolvedPrompt +=
           `\n\n---\nSandbox provisioned (${sbProvider.providerName}). ID: ${sbId}.\n` +
           `Files written to /workspace/:\n${fileList}\n` +
-          `Use sandbox tools to execute them.\n---`;
+          `Use sandbox tools to execute them. After editing any file, call persist_file\n` +
+          `to save changes so they survive sandbox teardown.\n---`;
       } catch (e) {
         updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `sandbox setup failed: ${e.message}` });
         res.writeHead(503, { "content-type": "application/json" });
