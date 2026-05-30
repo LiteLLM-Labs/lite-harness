@@ -65,8 +65,14 @@ MODELS_JSON=$(
 # returned; it's only the placeholder until the client sends a modelID.
 BOOT_MODEL=$(printf '%s' "$MODELS_JSON" | jq -r 'keys[0] // ""')
 if [ -z "$BOOT_MODEL" ]; then
+  if [ "${LITE_HARNESS_SMOKE:-}" = "1" ] && [ -n "${LITELLM_DEFAULT_MODEL:-}" ]; then
+    BOOT_MODEL="$LITELLM_DEFAULT_MODEL"
+    MODELS_JSON=$(jq -nc --arg id "$BOOT_MODEL" '{($id): {}}')
+    echo "[entrypoint] smoke mode: using fallback model ${BOOT_MODEL}"
+  else
   echo "[entrypoint] FATAL: gateway returned no models at ${BASE}/models — check LITELLM_API_BASE/KEY" >&2
   exit 1
+  fi
 fi
 echo "[entrypoint] registered models: $(printf '%s' "$MODELS_JSON" | jq -r 'keys | join(", ")')"
 # Sandbox tools: when E2B is configured, mount the bundled stdio MCP that
