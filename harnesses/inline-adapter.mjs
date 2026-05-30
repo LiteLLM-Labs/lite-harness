@@ -1836,33 +1836,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── GET /api/capabilities ────────────────────────────────────────────────────
-  if (req.method === "GET" && p === "/api/capabilities") {
-    const vaultPlugin = pluginRegistry.getPlugin("vault");
-    const loopPlugin = pluginRegistry.getPlugin("loop");
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({
-      harnesses: [{ name: "claude-code", version: "1.0" }],
-      mcp_servers: [],
-      vault: { available: !!(vaultPlugin && vaultPlugin.backend) },
-      scheduler: { available: !!loopPlugin, min_interval_minutes: 1 },
-      sandbox: {
-        provider: process.env.E2B_API_KEY ? "e2b" : null,
-        pip_install: true,
-        outbound_network: true,
-        persistent_storage: false,
-        max_runtime_minutes: 30,
-      },
-      files: (() => {
-        const { error } = buildDirectProvider();
-        return error
-          ? { available: false, reason: "no sandbox provider configured" }
-          : { available: true, ...FILE_LIMITS, sandbox_required: true };
-      })(),
-    }));
-    return;
-  }
-
   // ── Vault HTTP endpoints ──────────────────────────────────────────────────────
   const _vaultUserMatch = p.match(/^\/api\/vault\/([^/]+)$/);
   const _vaultKeyMatch  = p.match(/^\/api\/vault\/([^/]+)\/([^/]+)$/);
