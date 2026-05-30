@@ -53,7 +53,17 @@ function ChatInner() {
     if (!sid) return;
     try {
       const list = await getMessages(sid);
-      setMessages(list);
+      // The backend only persists an assistant message once its turn completes,
+      // so GET /message omits the in-progress (streaming) assistant turn. A blind
+      // setMessages(list) here would wipe the shell created by the message.updated
+      // event and drop every subsequent message.part.delta. Merge instead: keep any
+      // locally-known messages the server hasn't persisted yet so streaming survives.
+      setMessages((prev) => {
+        if (!prev) return list;
+        const serverIds = new Set(list.map((m) => m.info.id));
+        const inflight = prev.filter((m) => !serverIds.has(m.info.id));
+        return [...list, ...inflight];
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
