@@ -8,12 +8,12 @@
  * SQLite persistence (createAgentRun, getAgentRun, etc.) lives in loop-store.mjs.
  */
 
-// runId → { events: string[], listeners: Set<(line: string) => void> }
+// runId → { events: string[], listeners: Set<(line: string) => void>, sandboxProvider: any|null, sandboxId: string|null }
 const _runBuffers = new Map();
 
 export function initRunBuffer(runId) {
   if (!_runBuffers.has(runId)) {
-    _runBuffers.set(runId, { events: [], listeners: new Set() });
+    _runBuffers.set(runId, { events: [], listeners: new Set(), sandboxProvider: null, sandboxId: null });
   }
 }
 
@@ -46,4 +46,19 @@ export function getRunEventBuffer(runId) {
 /** Free memory for a run (call after the run is archived). */
 export function clearRunBuffer(runId) {
   _runBuffers.delete(runId);
+}
+
+/** Store the sandbox provider + id for a run (for teardown on completion). */
+export function setRunSandbox(runId, provider, sandboxId) {
+  initRunBuffer(runId);
+  const buf = _runBuffers.get(runId);
+  buf.sandboxProvider = provider;
+  buf.sandboxId = sandboxId;
+}
+
+/** Retrieve the sandbox provider + id for a run, or nulls if not set. */
+export function getRunSandbox(runId) {
+  const buf = _runBuffers.get(runId);
+  if (!buf) return { provider: null, sandboxId: null };
+  return { provider: buf.sandboxProvider ?? null, sandboxId: buf.sandboxId ?? null };
 }
