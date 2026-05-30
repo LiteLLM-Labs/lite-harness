@@ -58,6 +58,7 @@ export interface Agent {
   prompt?: string;
   description?: string;
   cron?: string | null;
+  timezone?: string | null;
   status?: string;
   owner_id?: string | null;
   /** IDs of DB-backed skills attached to this agent (agents.skill_ids). */

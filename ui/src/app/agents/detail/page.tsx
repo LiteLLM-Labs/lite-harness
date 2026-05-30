@@ -33,6 +33,7 @@ import {
   listSessions,
   storeMemory,
 } from "@/lib/api";
+import { scheduleLabel } from "@/lib/schedule";
 import type { Agent, Memory, OpencodeSession } from "@/lib/types";
 
 function timeAgo(ms: number): string {
@@ -355,6 +356,18 @@ function AgentDetail() {
                           <dd className="font-mono text-xs">{String(agent.owner_id)}</dd>
                         </>
                       )}
+
+                      <dt className="font-medium text-muted-foreground">Run schedule</dt>
+                      <dd className="flex flex-col gap-1">
+                        <span className="font-mono text-xs">
+                          {scheduleLabel(agent.cron, agent.timezone)}
+                        </span>
+                        {agent.cron && (
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            {String(agent.cron)}
+                          </span>
+                        )}
+                      </dd>
 
                       {agent.prompt && (
                         <>
