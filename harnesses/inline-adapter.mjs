@@ -185,7 +185,14 @@ async function callPromptAsync(sessionId, prompt) {
     return codexRunTurn(cs, prompt);
   }
   // opencode — send via HTTP to the child process
-  const body = JSON.stringify({ parts: [{ type: "text", text: prompt }] });
+  // Include pinned model so the child doesn't fall back to anthropic/* (the boot_model
+  // from /v1/models which resolves to an unavailable model on this account).
+  const pinnedProvider = process.env.PROVIDER_NAME || "litellm";
+  const pinnedModel = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
+  const body = JSON.stringify({
+    parts: [{ type: "text", text: prompt }],
+    model: { providerID: pinnedProvider, modelID: pinnedModel },
+  });
   return new Promise((resolve, reject) => {
     const req = http.request(
       `${UP}/session/${sessionId}/prompt_async`,
