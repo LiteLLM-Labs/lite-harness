@@ -2169,7 +2169,7 @@ const server = http.createServer(async (req, res) => {
             res.on("end", () => { try { resolve(JSON.parse(data)); } catch { reject(new Error("bad json from child")); } });
           });
           r.on("error", reject);
-          r.end(JSON.stringify({ title: `agent-run-${agentId}` }));
+          r.end(JSON.stringify({ title: `agent-run-${agentId}`, model: agentDef.model || undefined }));
         });
         runSid = ocSessResp.id;
       } catch (e) {
