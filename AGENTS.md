@@ -1,5 +1,8 @@
 # AGENTS.md — Agent Inbox
 
+> Follow the repo-wide [`/CODING_STANDARDS.md`](./CODING_STANDARDS.md) — the rules below
+> are the Inbox-specific detail on top of it.
+
 How agents talk to a human and how that surfaces in the UI's **Inbox**.
 
 Agents on lite-harness reach a human through two platform MCP tools. Both are
@@ -64,7 +67,7 @@ human ──HTTP──▶ /api/inbox, /api/approvals/:id/{accept,reject}, /api/i
 
 | File                                | Responsibility                                            |
 | ----------------------------------- | --------------------------------------------------------- |
-| `mcp/tools.mjs`                     | Tool definitions (`request_human_approval`, `file_issue`).|
+| `mcp/tools.mjs` + `mcp/tools/`      | Registration barrel + one file per tool (`tools/human-approval.mjs`, `tools/file-issue.mjs`). See `mcp/AGENTS.md`. |
 | `mcp/approvals.mjs`                 | In-memory blocking approval promises + lifecycle events.  |
 | `mcp/issues.mjs`                    | Issue id + sink (non-blocking).                           |
 | `harnesses/inbox-store.mjs`         | SQLite CRUD over `inbox_items`.                           |
@@ -86,9 +89,10 @@ human ──HTTP──▶ /api/inbox, /api/approvals/:id/{accept,reject}, /api/i
 
 ## Extending
 
-- **New agent→human tool:** add it in `mcp/tools.mjs`. If it needs persistence,
-  route it through `inbox-store` via a sink (see `issues.mjs`) rather than
-  importing the DB into `mcp/`.
+- **New agent→human tool:** add a file under `mcp/tools/` and one import line to
+  the `mcp/tools.mjs` barrel (never define tools in the barrel). If it needs
+  persistence, route it through `inbox-store` via a sink (see `issues.mjs`)
+  rather than importing the DB into `mcp/`.
 - **New inbox route:** add it to `inbox-service.handleInboxRoute` — keep HTTP
   surface out of `inline-adapter.mjs`.
 - **New file under `harnesses/` or `mcp/`:** add a `COPY` line to the Dockerfile

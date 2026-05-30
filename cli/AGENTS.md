@@ -1,5 +1,8 @@
 # AGENTS.md — `lite` CLI
 
+> Follow the repo-wide [`/CODING_STANDARDS.md`](../CODING_STANDARDS.md) — the rules below
+> are the CLI-specific detail on top of it.
+
 Rules for working in this folder. Keep it organized; don't grow one big file.
 
 ## Structure
