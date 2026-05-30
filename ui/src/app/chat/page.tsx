@@ -44,6 +44,7 @@ function ChatInner() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const eventBufferRef = useRef<Frame[]>([]);
   const [sessionHarness, setSessionHarness] = useState<string>("opencode");
+  const [sessionTitle, setSessionTitle] = useState<string>("");
   const [savedAgents, setSavedAgents] = useState<{ id: string; name: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
@@ -75,6 +76,7 @@ function ChatInner() {
     getSession(sid).then(s => {
       const a = s.agent ?? s.harness;
       if (a) setSessionHarness(a);
+      if (s.title) setSessionTitle(s.title);
     }).catch(() => {});
   }, [sid]);
 
