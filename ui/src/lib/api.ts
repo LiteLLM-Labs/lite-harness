@@ -165,6 +165,40 @@ export async function listModels(): Promise<string[]> {
   return items.map((m) => m.id).filter(Boolean);
 }
 
+export interface PendingApproval {
+  id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  createdAt: number;
+}
+
+export async function listApprovals(): Promise<PendingApproval[]> {
+  const res = await req("/api/approvals");
+  const data = await jsonOrThrow<{ approvals: PendingApproval[] }>(res);
+  return data.approvals ?? [];
+}
+
+export async function acceptApproval(
+  id: string,
+  args?: Record<string, unknown>,
+): Promise<void> {
+  const res = await req(`/api/approvals/${encodeURIComponent(id)}/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(args ? { arguments: args } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
+export async function rejectApproval(id: string, feedback?: string): Promise<void> {
+  const res = await req(`/api/approvals/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(feedback ? { feedback } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
 export function subscribeEvents(opts: {
   sessionId: string;
   onEvent: (ev: unknown) => void;
