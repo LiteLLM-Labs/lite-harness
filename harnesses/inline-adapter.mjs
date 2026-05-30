@@ -29,7 +29,7 @@ import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
-import { initDb as initAgentDb, getAgent, listAgents, deleteAgent } from "../mcp/agents/store.mjs";
+import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSavedAgents, deleteAgent as deleteSavedAgent } from "../mcp/agents/store.mjs";
 import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
@@ -105,6 +105,7 @@ function authOk(req, urlObj) {
 // Per-session harness tag. opencode sessions exist in the child's DB;
 // cc sessions live entirely in-process.
 const sessionAgent = new Map(); // id → "opencode" | "cc"
+const sessionHarness = sessionAgent; // alias — same map, two names from merged branches
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -1152,7 +1153,7 @@ async function buildCapabilities() {
     available: true,
     min_interval_minutes: Number(process.env.SCHEDULER_MIN_INTERVAL_MINUTES ?? 1),
     cron_supported: true,
-    manual_trigger: false,
+    manual_trigger: true,
   };
 
   let sandbox = null;
@@ -1170,7 +1171,17 @@ async function buildCapabilities() {
     vault,
     scheduler,
     ...(sandbox && { sandbox }),
-    agents: {},
+    agents: {
+      create:   "POST /api/agents",
+      list:     "GET /api/agents?owner_id={uid}",
+      get:      "GET /api/agents/{id}",
+      update:   "PATCH /api/agents/{id}",
+      delete:   "DELETE /api/agents/{id}",
+      trigger:  "POST /api/agents/{id}/run",
+      pause:    "POST /api/agents/{id}/pause",
+      resume:   "POST /api/agents/{id}/resume",
+      runs:     "GET /api/agents/{id}/runs",
+    },
   };
 }
 
@@ -1326,14 +1337,14 @@ const server = http.createServer(async (req, res) => {
   if (p === "/agents" && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(listAgents()));
+    res.end(JSON.stringify(listSavedAgents()));
     return;
   }
 
   const agentRouteMatch = p.match(/^\/agents\/([^/]+)$/);
   if (agentRouteMatch && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    const a = getAgent(decodeURIComponent(agentRouteMatch[1]));
+    const a = getSavedAgent(decodeURIComponent(agentRouteMatch[1]));
     if (!a) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(a));
@@ -1342,7 +1353,7 @@ const server = http.createServer(async (req, res) => {
 
   if (agentRouteMatch && req.method === "DELETE") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    deleteAgent(decodeURIComponent(agentRouteMatch[1]));
+    deleteSavedAgent(decodeURIComponent(agentRouteMatch[1]));
     res.writeHead(204); res.end();
     return;
   }
@@ -1376,7 +1387,7 @@ const server = http.createServer(async (req, res) => {
 
     if (!builtin) {
       let savedAgent = null;
-      try { savedAgent = getAgent(agentParam); } catch {}
+      try { savedAgent = getSavedAgent(agentParam); } catch {}
       if (!savedAgent) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
