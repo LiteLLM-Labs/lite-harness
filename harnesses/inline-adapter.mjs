@@ -2122,6 +2122,19 @@ const server = http.createServer(async (req, res) => {
         resolvedPrompt = await resolveTemplates(
           resolvedPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend
         );
+        // Prepend vault secrets as explicit env exports so Claude Code sets them
+        // in the sandbox before running any scripts.
+        if (agentDef.vault_keys && agentDef.vault_keys.length > 0) {
+          const ownerId = agentDef.owner_id || "default";
+          const exports = [];
+          for (const k of agentDef.vault_keys) {
+            const v = await vaultPlugin.backend.get(`${ownerId}:${k}`);
+            if (v !== null) exports.push(`export ${k}="${v.replace(/"/g, '\\"')}"`);
+          }
+          if (exports.length > 0) {
+            resolvedPrompt = `Before running any code or scripts, set these environment variables in your sandbox shell:\n\`\`\`sh\n${exports.join("\n")}\n\`\`\`\n\n${resolvedPrompt}`;
+          }
+        }
       }
     } catch (e) {
       res.writeHead(422, { "content-type": "application/json" });
