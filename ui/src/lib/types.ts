@@ -61,6 +61,7 @@ export interface Agent {
   status?: string;
   owner_id?: string | null;
   skills?: string[];
+  vault_keys?: string[];
   created_at?: number;
   [k: string]: unknown;
 }
