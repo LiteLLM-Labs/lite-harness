@@ -14,7 +14,7 @@ jobs:
       - name: Fail if unexpected files exist at repo root
         run: |
           ALLOWED_FILES="Dockerfile README.md VISION.md AGENTS.md start-local.sh .gitignore"
-          ALLOWED_DIRS=".github cli docs harnesses mcp ui"
+          ALLOWED_DIRS=".github .githooks cli docs harnesses mcp ui"
 
           fail=0
           for entry in $(ls -A .); do
