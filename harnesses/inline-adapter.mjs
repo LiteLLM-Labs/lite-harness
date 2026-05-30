@@ -30,6 +30,7 @@ import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
 import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSavedAgents, deleteAgent as deleteSavedAgent } from "../mcp/agents/store.mjs";
+import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
@@ -194,6 +195,20 @@ pluginRegistry.setup({
   isSessionActive: (sid) =>
     ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionAgent.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
+
+// Push human-in-the-loop approval lifecycle events to every connected /event
+// client (CLI and web UI), reusing the plugin SSE bus. Envelope matches the
+// shape clients already parse: { id, type, properties }.
+setApprovalBroadcaster((event) => {
+  const { type, ...rest } = event;
+  const envelope = {
+    id: `evt_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    type,
+    properties: rest,
+  };
+  const line = `data: ${JSON.stringify(envelope)}\n\n`;
+  for (const cb of pluginGlobalBus) { try { cb(line); } catch {} }
+});
 
 // Returns true if a plugin handled the message (response already sent).
 async function tryPlugin(text, sid, harness, res) {
@@ -1282,6 +1297,40 @@ const server = http.createServer(async (req, res) => {
     try { mcpBody = JSON.parse(raw || "{}"); } catch {}
     await handleMcpMessage(mcpBody, sessionId);
     res.writeHead(202); res.end();
+    return;
+  }
+
+  // Human-in-the-loop approvals — list pending tool-call approvals.
+  if (p === "/api/approvals" && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ approvals: listPending() }));
+    return;
+  }
+
+  // Accept a pending approval, optionally with human-edited arguments.
+  const _approvalAcceptMatch = p.match(/^\/api\/approvals\/([^/]+)\/accept$/);
+  if (_approvalAcceptMatch && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const ok = acceptApproval(_approvalAcceptMatch[1], body.arguments);
+    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
+    return;
+  }
+
+  // Reject a pending approval, optionally with feedback returned to the agent.
+  const _approvalRejectMatch = p.match(/^\/api\/approvals\/([^/]+)\/reject$/);
+  if (_approvalRejectMatch && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const ok = rejectApproval(_approvalRejectMatch[1], body.feedback);
+    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
     return;
   }
 
