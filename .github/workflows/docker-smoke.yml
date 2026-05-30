@@ -1,0 +1,63 @@
+name: Docker smoke test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: lite-harness:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — server starts and /health returns 200
+        run: |
+          # Start container with dummy env vars (no real credentials needed to boot)
+          docker run -d --name smoke \
+            -p 10000:10000 \
+            -e LITELLM_API_BASE=https://api.anthropic.com \
+            -e LITELLM_API_KEY=test-key \
+            -e MASTER_KEY=smoke-test \
+            -e PORT=10000 \
+            lite-harness:smoke
+
+          # Wait up to 60s for /health to respond
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:10000/health 2>/dev/null || echo 000)
+            if [ "$STATUS" = "200" ]; then
+              echo "Server healthy after ${i}s"
+              curl -s http://localhost:10000/health
+              docker stop smoke
+              exit 0
+            fi
+            # Fail fast if container already exited
+            if ! docker ps -q --filter name=smoke | grep -q .; then
+              echo "Container exited early — crash at startup"
+              docker logs smoke
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Timed out waiting for /health"
+          docker logs smoke
+          docker stop smoke
+          exit 1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs smoke 2>/dev/null || true
