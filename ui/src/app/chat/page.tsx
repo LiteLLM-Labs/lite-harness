@@ -250,6 +250,9 @@ function ChatInner() {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
+            {sessionTitle && (
+              <span className="text-sm font-medium" title={sessionTitle}>{sessionTitle}</span>
+            )}
             <span className="text-xs font-mono text-muted-foreground">{shortSid}</span>
             {sessionStatus === "busy" ? (
               <button
