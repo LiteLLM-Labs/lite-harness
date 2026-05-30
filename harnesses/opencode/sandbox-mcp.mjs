@@ -47,8 +47,9 @@ const SANDBOX_PROVIDER_ENV = (process.env.SANDBOX_PROVIDER || "").toLowerCase();
 let _vaultBackend = null;
 try {
   _vaultBackend = buildBackend(TOKEN, VAULT_DB_PATH);
+  console.error(`[sandbox-mcp] vault ready: ${VAULT_DB_PATH} token=${TOKEN ? "set" : "unset"}`);
 } catch (e) {
-  console.error(`[sandbox-mcp] vault unavailable: ${e.message}`);
+  console.error(`[sandbox-mcp] vault unavailable (${VAULT_DB_PATH}): ${e.message}`);
 }
 
 async function getVaultEnvs() {
