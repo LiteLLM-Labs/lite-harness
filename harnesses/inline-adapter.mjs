@@ -119,6 +119,11 @@ function authOk(req, urlObj) {
   return false;
 }
 
+function isSlackIngressRoute(pathname) {
+  return /^\/host-oauth-callback\/[^/]+$/.test(pathname) ||
+    /^\/api\/agents\/[^/]+\/slack\/(?:events|interactivity)$/.test(pathname);
+}
+
 function firstHeaderValue(value) {
   if (Array.isArray(value)) return value[0];
   if (typeof value !== "string") return "";
@@ -1676,7 +1681,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (!authOk(req, url)) {
+  if (!isSlackIngressRoute(p) && !authOk(req, url)) {
     res.writeHead(401, {
       "content-type": "application/json",
       "www-authenticate": "Bearer",
