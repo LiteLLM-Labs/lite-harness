@@ -32,14 +32,24 @@ registerTool(
         agent_id: AGENT_ID_PROP,
         key: { type: "string", description: "Short, stable identifier for this note (e.g. 'user_timezone', 'icp')." },
         value: { type: "string", description: "The content to remember. Can be multi-line." },
+        always_on: {
+          type: "boolean",
+          description:
+            "When true, mark this memory as critical so the human memory UI can keep it pinned as always-on context. Use sparingly for hard rules and durable preferences.",
+        },
       },
       required: ["agent_id", "key", "value"],
     },
   },
-  async ({ agent_id, key, value }) => {
+  async ({ agent_id, key, value, always_on }) => {
     if (!agent_id) throw new Error("agent_id is required");
-    const row = storeMemory({ agentId: agent_id, key, value: String(value ?? "") });
-    return { ok: true, key: row.key, updated_at: row.updated_at };
+    const row = storeMemory({
+      agentId: agent_id,
+      key,
+      value: String(value ?? ""),
+      alwaysOn: typeof always_on === "boolean" ? always_on : undefined,
+    });
+    return { ok: true, key: row.key, always_on: Boolean(row.always_on), updated_at: row.updated_at };
   },
 );
 
@@ -60,7 +70,7 @@ registerTool(
     if (!agent_id) throw new Error("agent_id is required");
     const row = getMemory(agent_id, key);
     return row
-      ? { found: true, key: row.key, value: row.value, updated_at: row.updated_at }
+      ? { found: true, key: row.key, value: row.value, always_on: Boolean(row.always_on), updated_at: row.updated_at }
       : { found: false };
   },
 );
@@ -81,7 +91,12 @@ registerTool(
     const rows = listMemory(agent_id);
     return {
       count: rows.length,
-      memories: rows.map((r) => ({ key: r.key, value: r.value, updated_at: r.updated_at })),
+      memories: rows.map((r) => ({
+        key: r.key,
+        value: r.value,
+        always_on: Boolean(r.always_on),
+        updated_at: r.updated_at,
+      })),
     };
   },
 );

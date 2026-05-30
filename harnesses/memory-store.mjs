@@ -17,6 +17,7 @@
  *     agent_id    TEXT NOT NULL
  *     key         TEXT NOT NULL     -- unique per agent_id
  *     value       TEXT NOT NULL
+ *     always_on   INTEGER NOT NULL  -- included unconditionally in future context
  *     created_at  INTEGER NOT NULL  -- epoch ms
  *     updated_at  INTEGER NOT NULL  -- epoch ms
  *   )
@@ -35,21 +36,27 @@ function generateId() {
  * (agent_id, key) its value and updated_at are refreshed; otherwise a new row
  * is inserted. Returns the resulting row.
  *
- * @param {{ agentId: string, key: string, value: string }} opts
+ * @param {{ agentId: string, key: string, value: string, alwaysOn?: boolean }} opts
  * @returns {object}
  */
-export function storeMemory({ agentId, key, value }) {
+export function storeMemory({ agentId, key, value, alwaysOn }) {
   const now = Date.now();
+  const existing = getMemory(agentId, key);
+  const nextAlwaysOn =
+    typeof alwaysOn === "boolean" ? (alwaysOn ? 1 : 0) : Number(existing?.always_on ?? 0);
   // Single atomic upsert keyed on the (agent_id, key) UNIQUE constraint: insert
   // a new note, or overwrite the value/updated_at of the existing one in place.
   getDb()
     .prepare(
-      `INSERT INTO agent_memories (id, agent_id, key, value, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO agent_memories (id, agent_id, key, value, always_on, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(agent_id, key)
-       DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+       DO UPDATE SET
+         value = excluded.value,
+         always_on = excluded.always_on,
+         updated_at = excluded.updated_at`,
     )
-    .run(generateId(), agentId, key, value, now, now);
+    .run(generateId(), agentId, key, value, nextAlwaysOn, now, now);
   return getMemory(agentId, key);
 }
 

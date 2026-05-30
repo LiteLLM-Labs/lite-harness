@@ -140,11 +140,13 @@ function initMemorySchema(db) {
       agent_id    TEXT NOT NULL,
       key         TEXT NOT NULL,
       value       TEXT NOT NULL,
+      always_on   INTEGER NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL,
       UNIQUE (agent_id, key)
     )
   `);
+  try { db.exec("ALTER TABLE agent_memories ADD COLUMN always_on INTEGER NOT NULL DEFAULT 0"); } catch {}
   // Listing an agent's memory is the hot path — index the scope column.
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories(agent_id)"); } catch {}
 }
