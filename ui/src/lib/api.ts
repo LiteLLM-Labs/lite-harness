@@ -293,6 +293,13 @@ export function subscribeEvents(opts: {
 // ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
 // listAgents() above reads the saved-agents store (/agents). These write/edit
 // against the richer /api/agents endpoints.
+export async function listApiAgents(): Promise<Agent[]> {
+  const res = await req("/api/agents");
+  const data = await jsonOrThrow<{ agents?: Agent[] } | Agent[]>(res);
+  const list = Array.isArray(data) ? data : (data.agents ?? []);
+  return [...list].sort((x, y) => (y.created_at ?? 0) - (x.created_at ?? 0));
+}
+
 export async function createAgent(
   input: { name: string; owner_id: string } & Partial<Agent>,
 ): Promise<Agent> {

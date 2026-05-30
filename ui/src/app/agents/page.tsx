@@ -18,7 +18,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
-  listAgents,
+  listApiAgents,
   createAgent,
   updateAgent,
   deleteAgent,
@@ -47,7 +47,7 @@ export default function AgentsPage() {
 
   const load = async () => {
     try {
-      setAgents((await listAgents()) as Agent[]);
+      setAgents(await listApiAgents());
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
