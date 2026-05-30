@@ -33,7 +33,8 @@ import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSav
 import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { initDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
 import {
@@ -2051,6 +2052,29 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     updateAgent(agentId, { status: "active" });
+
+    // Wire up cron loop if agent has a schedule but no loop yet.
+    if (existing.cron && !existing.loop_id) {
+      try {
+        const tz = existing.timezone || "UTC";
+        const job = new Cron(existing.cron, { timezone: tz, paused: true });
+        const nextRun = job.nextRun();
+        const nextRunAt = nextRun ? nextRun.getTime() : Date.now() + 60_000;
+        const agentPrompt = existing.prompt || existing.system || "";
+        const loop = createLoop({
+          sessionId: existing.session_id,
+          prompt: agentPrompt,
+          cronExpr: existing.cron,
+          tz,
+          nextRunAt,
+        });
+        setAgentLoop(agentId, loop.id);
+        log(`[resume] created loop ${loop.id} for agent ${agentId} cron=${existing.cron} tz=${tz}`);
+      } catch (e) {
+        log(`[resume] failed to create loop for agent ${agentId}:`, e.message);
+      }
+    }
+
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ id: agentId, status: "active" }));
     return;
