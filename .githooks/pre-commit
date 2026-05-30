@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Pre-commit: run unit tests before every commit.
+# Fast (~2s). Catches regressions before they land anywhere.
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+# Only run if relevant files changed
+CHANGED=$(git diff --cached --name-only)
+if ! echo "$CHANGED" | grep -qE '^(mcp/|harnesses/).*\.(mjs|js)$'; then
+  exit 0
+fi
+
+echo "[pre-commit] running unit tests..."
+
+# Install deps if node_modules missing (first clone / after clean)
+if [ ! -d harnesses/node_modules ]; then
+  echo "[pre-commit] installing harness deps..."
+  npm install --no-audit --no-fund --prefix harnesses --silent
+fi
+
+node --test mcp/sandbox.test.mjs mcp/approvals.test.mjs harnesses/agent-plugin.test.mjs
+echo "[pre-commit] tests passed"

@@ -50,10 +50,10 @@ export function Composer({
     : "Add a follow up";
 
   return (
-    <div className="border-t border-border bg-background">
-      <div className="max-w-3xl mx-auto px-4 py-3">
+    <div className="border-t border-border bg-background/95 backdrop-blur">
+      <div className="mx-auto max-w-5xl px-6 py-4">
         <div className="relative">
-          <div className="border rounded-xl shadow-sm bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring focus-within:border-ring transition-all border-border">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm transition-all focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -61,10 +61,10 @@ export function Composer({
               placeholder={placeholder}
               disabled={sending}
               rows={1}
-              className="w-full p-4 outline-none resize-none text-[15px] placeholder:text-muted-foreground bg-transparent"
+              className="min-h-14 w-full resize-none bg-transparent px-4 pt-4 text-[15px] outline-none placeholder:text-muted-foreground"
             />
             <div className="flex items-center justify-between px-4 pb-3 text-xs text-muted-foreground">
-              <span className="mono flex items-center gap-2">
+              <span className="mono flex min-w-0 items-center gap-2 truncate">
                 {error ? (
                   <span className="text-red-600">{error}</span>
                 ) : (
@@ -76,7 +76,7 @@ export function Composer({
                   type="button"
                   onClick={() => void handleSend()}
                   disabled={!canSend}
-                  className="bg-foreground text-background p-1.5 rounded-full hover:bg-foreground/90 transition-colors disabled:opacity-30 disabled:hover:bg-foreground"
+                  className="rounded-full bg-foreground p-1.5 text-background transition-colors hover:bg-foreground/90 disabled:opacity-30 disabled:hover:bg-foreground"
                   aria-label="Send"
                   title="Send (Enter)"
                 >
