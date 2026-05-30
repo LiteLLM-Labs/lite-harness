@@ -1,6 +1,7 @@
 import { registerTool } from "./server.mjs";
 import { saveAgent } from "./agents/store.mjs";
 import { requestApproval } from "./approvals.mjs";
+import { fileIssue } from "./issues.mjs";
 import { registerSandboxTools } from "./sandbox.mjs";
 import { upsertAgentFile, listAgentFiles, deleteAgentFile } from "../harnesses/agent-file-store.mjs";
 
@@ -124,12 +125,38 @@ registerTool(
       required: ["action"],
     },
   },
-  async ({ action, arguments: actionArgs }) => {
-    const outcome = await requestApproval(action, actionArgs || {});
+  async ({ action, arguments: actionArgs }, ctx) => {
+    const outcome = await requestApproval(action, actionArgs || {}, { session: ctx?.session });
     if (outcome.decision === "accept") {
       return { approved: true, arguments: outcome.args || {} };
     }
     return { approved: false, feedback: outcome.feedback || "" };
+  }
+);
+
+registerTool(
+  {
+    name: "file_issue",
+    description:
+      "File an informational issue into the human inbox — something a human should see or act on later (a blocker, a question, a result worth surfacing). Unlike request_human_approval this does NOT block: it returns immediately and the human reviews it on their own time. Use request_human_approval instead when you must pause for a yes/no before acting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Short one-line summary shown in the inbox list (e.g. 'Pylon API key missing', 'Deploy blocked on failing test').",
+        },
+        body: {
+          type: "string",
+          description: "Full details for the human — what happened, what you need, any context or links. Markdown is rendered.",
+        },
+      },
+      required: ["title"],
+    },
+  },
+  async ({ title, body }, ctx) => {
+    const id = fileIssue({ title, body, session: ctx?.session });
+    return { issue_id: id, filed: true };
   }
 );
 
