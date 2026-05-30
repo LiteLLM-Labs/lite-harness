@@ -57,6 +57,20 @@ function initSessionSchema(db) {
   `);
 }
 
+function initAgentFilesSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_files (
+      agent_id   TEXT NOT NULL,
+      path       TEXT NOT NULL,
+      content    TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (agent_id, path)
+    )
+  `);
+}
+
 function initAgentSchema(db) {
   // Columns name/model/system/tools mirror the Anthropic Managed Agents
   // request body (POST /v1/agents); `cadence` is the only field we add on top.
@@ -90,6 +104,7 @@ function initAgentSchema(db) {
     "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'paused'",
     "ALTER TABLE agents ADD COLUMN description TEXT",
     "ALTER TABLE agents ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude-code'",
+    "ALTER TABLE agents ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'",
   ];
   for (const sql of _newAgentCols) {
     try { db.exec(sql); } catch {}
@@ -161,6 +176,9 @@ export function initDb(dbPath) {
   try { _db.exec("ALTER TABLE loops ADD COLUMN tz TEXT"); } catch {}
   initSessionSchema(_db);
   initAgentSchema(_db);
+  initAgentFilesSchema(_db);
+  // Migrate sandbox_id onto agent_runs if not present
+  try { _db.exec("ALTER TABLE agent_runs ADD COLUMN sandbox_id TEXT"); } catch {}
   try { _db.exec("ALTER TABLE sessions ADD COLUMN tz TEXT"); } catch {}
 
   return _db;

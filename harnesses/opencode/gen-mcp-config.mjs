@@ -54,7 +54,8 @@ if (sandboxActive) {
       ...(process.env.LAP_AUTH_TOKEN  && { LAP_AUTH_TOKEN:  process.env.LAP_AUTH_TOKEN }),
       ...(process.env.MASTER_KEY      && { MASTER_KEY:      process.env.MASTER_KEY }),
       ...(process.env.SESSION_ID      && { SESSION_ID:      process.env.SESSION_ID }),
-      // Vault
+      // Vault — pass explicit path so subprocess doesn't have to compute it from HOME
+      VAULT_DB_PATH: process.env.VAULT_DB_PATH || `${process.env.HOME || "/home/sandbox"}/.local/share/lite-harness/vault.db`,
       ...(process.env.VAULT_URL         && { VAULT_URL:         process.env.VAULT_URL }),
       ...(process.env.VAULT_PROXY_TOKEN && { VAULT_PROXY_TOKEN: process.env.VAULT_PROXY_TOKEN }),
     },

@@ -1,4 +1,4 @@
-import type { HarnessMessage, OpencodeSession } from "./types";
+import type { Agent, HarnessMessage, OpencodeSession, Skill } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -93,9 +93,10 @@ export async function createSession(title?: string, agent?: string): Promise<Ope
   return jsonOrThrow<OpencodeSession>(res);
 }
 
-export async function listAgents(): Promise<{ id: string; name: string; base_agent: string; created_at: number }[]> {
-  const res = await req("/agents");
-  return jsonOrThrow(res);
+export async function listAgents(): Promise<Agent[]> {
+  const res = await req("/api/agents");
+  const data = await jsonOrThrow<{ agents: Agent[] }>(res);
+  return data.agents;
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -165,6 +166,130 @@ export async function listModels(): Promise<string[]> {
   return items.map((m) => m.id).filter(Boolean);
 }
 
+export interface PendingApproval {
+  id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  createdAt: number;
+}
+
+export async function listApprovals(): Promise<PendingApproval[]> {
+  const res = await req("/api/approvals");
+  const data = await jsonOrThrow<{ approvals: PendingApproval[] }>(res);
+  return data.approvals ?? [];
+}
+
+export async function acceptApproval(
+  id: string,
+  args?: Record<string, unknown>,
+): Promise<void> {
+  const res = await req(`/api/approvals/${encodeURIComponent(id)}/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(args ? { arguments: args } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
+export async function rejectApproval(id: string, feedback?: string): Promise<void> {
+  const res = await req(`/api/approvals/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(feedback ? { feedback } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
+// ── Integrations / vault ──────────────────────────────────────────────────────
+// API keys are stored in the harness's encrypted vault via /api/vault/:userId.
+// When the backend vault is unreachable (e.g. running the UI standalone via
+// `next dev`), we transparently fall back to sessionStorage so the flow still
+// works. Per project policy, secrets only ever touch sessionStorage — never
+// localStorage.
+
+const VAULT_USER = "default";
+const VAULT_FALLBACK_PREFIX = "lite-harness-integration:";
+
+function fallbackSet(key: string, value: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(VAULT_FALLBACK_PREFIX + key, value);
+  } catch {
+    /* noop */
+  }
+}
+
+function fallbackDelete(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(VAULT_FALLBACK_PREFIX + key);
+  } catch {
+    /* noop */
+  }
+}
+
+function fallbackList(): string[] {
+  if (typeof window === "undefined") return [];
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const k = window.sessionStorage.key(i);
+      if (k?.startsWith(VAULT_FALLBACK_PREFIX)) {
+        keys.push(k.slice(VAULT_FALLBACK_PREFIX.length));
+      }
+    }
+  } catch {
+    /* noop */
+  }
+  return keys;
+}
+
+/** Store an integration's API key. Returns the storage backend that took it. */
+export async function saveIntegrationKey(
+  envKey: string,
+  value: string,
+): Promise<"vault" | "session"> {
+  try {
+    const res = await req(`/api/vault/${VAULT_USER}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key: envKey, value }),
+    });
+    if (res.ok) return "vault";
+  } catch {
+    /* fall through to sessionStorage */
+  }
+  fallbackSet(envKey, value);
+  return "session";
+}
+
+/** Remove a stored integration key from both vault and sessionStorage. */
+export async function deleteIntegrationKey(envKey: string): Promise<void> {
+  try {
+    await req(`/api/vault/${VAULT_USER}/${encodeURIComponent(envKey)}`, {
+      method: "DELETE",
+    });
+  } catch {
+    /* noop */
+  }
+  fallbackDelete(envKey);
+}
+
+/** List the env-key names that currently have a stored value. */
+export async function listIntegrationKeys(): Promise<string[]> {
+  const keys = new Set<string>(fallbackList());
+  try {
+    const res = await req(`/api/vault/${VAULT_USER}`);
+    if (res.ok) {
+      const data = (await res.json()) as { keys?: { key: string }[] };
+      for (const k of data.keys ?? []) keys.add(k.key);
+    }
+  } catch {
+    /* vault unavailable — sessionStorage only */
+  }
+  return [...keys];
+}
+
 export function subscribeEvents(opts: {
   sessionId: string;
   onEvent: (ev: unknown) => void;
@@ -198,4 +323,36 @@ export function subscribeEvents(opts: {
       /* noop */
     }
   };
+}
+
+// ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
+export async function createAgent(
+  input: { name: string; owner_id: string } & Partial<Agent>,
+): Promise<Agent> {
+  const res = await req("/api/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function updateAgent(id: string, fields: Partial<Agent>): Promise<Agent> {
+  const res = await req(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── Skills catalog (/api/skills) ────────────────────────────────────────────
+export async function listSkills(): Promise<Skill[]> {
+  const res = await req("/api/skills");
+  const data = await jsonOrThrow<{ skills: Skill[] }>(res);
+  return data.skills;
 }

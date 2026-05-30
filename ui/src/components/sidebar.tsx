@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Puzzle, Bot } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { readHarness } from "@/lib/use-harness";
@@ -22,6 +23,7 @@ function timeAgo(ts?: number): string {
 
 export function Sidebar({ activeId }: { activeId?: string | null }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [sessions, setSessions] = useState<OpencodeSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -74,7 +76,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         <SettingsDialog />
       </div>
 
-      <div className="px-3 py-3 border-b border-border">
+      <div className="px-3 py-3 border-b border-border space-y-2">
         <Button
           onClick={onNew}
           disabled={creating}
@@ -83,6 +85,24 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         >
           <Plus className="size-4" />
           New session
+        </Button>
+        <Button
+          onClick={() => router.push("/agents/")}
+          variant={pathname?.startsWith("/agents") ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          size="sm"
+        >
+          <Bot className="size-4" />
+          Agents
+        </Button>
+        <Button
+          onClick={() => router.push("/integrations/")}
+          variant={pathname?.startsWith("/integrations") ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          size="sm"
+        >
+          <Puzzle className="size-4" />
+          Integrations
         </Button>
       </div>
 
