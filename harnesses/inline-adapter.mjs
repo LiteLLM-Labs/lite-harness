@@ -23,7 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { PluginRegistry, createEmitter } from "./plugin-registry.mjs";
 import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
@@ -118,12 +118,30 @@ function authOk(req, urlObj) {
   return false;
 }
 
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0];
+  if (typeof value !== "string") return "";
+  return value.split(",")[0]?.trim() || "";
+}
+
+function externalOrigin(req) {
+  const host = firstHeaderValue(req.headers["x-forwarded-host"]) || firstHeaderValue(req.headers.host) || `localhost:${PORT}`;
+  let proto = firstHeaderValue(req.headers["x-forwarded-proto"]);
+  if (!proto) {
+    proto = host.includes("localhost") || host.startsWith("127.0.0.1") || host.startsWith("[::1]")
+      ? "http"
+      : "https";
+  }
+  return `${proto}://${host}`;
+}
+
 // Per-session harness tag. opencode sessions exist in the child's DB;
 // cc sessions live entirely in-process.
 const sessionAgent = new Map(); // id → "opencode" | "cc"
 const sessionHarness = sessionAgent; // alias — same map, two names from merged branches
 const sessionSystemPrompt = new Map(); // sid -> system prompt for opencode agents (applied on first turn)
 const ocSysPromptDelivered = new Set();
+const slackEventIds = new Set();
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -176,13 +194,198 @@ function composeAgentSystem(agentSystem, attachedSkills, allSkills) {
 // must be scoped by agent_id — we hand the agent its id here so it can pass it.
 function memoryPromptNote(agentId) {
   if (!agentId) return "";
+  let alwaysOnBlock = "";
+  try {
+    const alwaysOn = listMemory(agentId).filter((m) => Number(m.always_on) === 1);
+    if (alwaysOn.length > 0) {
+      alwaysOnBlock =
+        `\n\nAlways-on memories loaded for this session:\n` +
+        alwaysOn.map((m) => `- ${m.key}: ${m.value}`).join("\n");
+    }
+  } catch {}
   return (
     `\n\n---\n\n## Your memory\nYour agent_id is "${agentId}". You have a durable memory ` +
     `(key→value notes) that persists across sessions and scheduled runs. Pass this exact ` +
-    `agent_id to the memory tools: memory_list (recall everything — do this at the start of a ` +
-    `task), memory_get (read one key), memory_store (save/overwrite a key), memory_delete ` +
-    `(forget a key). Use memory to remember facts, preferences, and decisions worth keeping.`
+      `agent_id to the memory tools: memory_list (recall everything — do this at the start of a ` +
+      `task), memory_get (read one key), memory_store (save/overwrite a key), memory_delete ` +
+      `(forget a key). Use memory to remember facts, preferences, and decisions worth keeping.` +
+      alwaysOnBlock
   );
+}
+
+function agentRunHarness(agentDef) {
+  return agentDef.harness === "claude-code"
+    ? "cc"
+    : agentDef.harness === "github-copilot"
+      ? "github-copilot"
+      : agentDef.harness === "codex"
+        ? "codex"
+        : "opencode";
+}
+
+function latestAssistantText(session) {
+  const messages = Array.isArray(session?.history) ? session.history : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.info?.role !== "assistant") continue;
+    const text = (msg.parts || [])
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function verifySlackSignature(req, rawBody, signingSecret) {
+  if (!signingSecret) return true;
+  const timestamp = firstHeaderValue(req.headers["x-slack-request-timestamp"]);
+  const signature = firstHeaderValue(req.headers["x-slack-signature"]);
+  if (!timestamp || !signature) return false;
+  const age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+  if (!Number.isFinite(age) || age > 60 * 5) return false;
+  const expected = `v0=${createHmac("sha256", signingSecret).update(`v0:${timestamp}:${rawBody}`).digest("hex")}`;
+  try {
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signature);
+    return a.length === b.length && timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+async function slackApi(method, token, payload) {
+  const resp = await fetch(`https://slack.com/api/${method}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(payload),
+  });
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok || body.ok === false) {
+    throw new Error(body.error || `slack_${method}_${resp.status}`);
+  }
+  return body;
+}
+
+async function liteLlmChat(messages, model) {
+  const base = process.env.LITELLM_API_BASE?.replace(/\/+$/, "");
+  const key = process.env.LITELLM_API_KEY;
+  if (!base || !key) throw new Error("litellm_env_missing");
+  const url = `${base.endsWith("/v1") ? base : `${base}/v1`}/chat/completions`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error("litellm_timeout")), 45_000);
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: model || process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6",
+        messages,
+        temperature: 0.2,
+        max_tokens: 500,
+      }),
+      signal: ac.signal,
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(body?.error?.message || body?.message || `litellm_http_${resp.status}`);
+    const text = body?.choices?.[0]?.message?.content;
+    if (!text || typeof text !== "string") throw new Error("litellm_empty_reply");
+    return text.trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runAgentForSlack(agentDef, slackEvent) {
+  const vaultPlugin = pluginRegistry.getPlugin("vault");
+  const mergedConfig = agentDef.config || {};
+  let agentPrompt = agentDef.prompt || agentDef.system || "";
+  if (vaultPlugin?.backend) {
+    agentPrompt = await resolveTemplates(agentPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend);
+  }
+  agentPrompt += skillsPromptNote(agentDef.skills);
+
+  const userText = slackEvent.text || "";
+  const threadTs = slackEvent.thread_ts || slackEvent.ts;
+  const slackPrompt = `${agentPrompt}
+
+Slack message received for this agent.
+
+Workspace team: ${slackEvent.team || "unknown"}
+Channel: ${slackEvent.channel || "unknown"}
+Thread timestamp: ${threadTs || "unknown"}
+User: ${slackEvent.user || "unknown"}
+Message:
+${userText}
+
+Write the exact reply to send back in Slack. Return only the Slack message text.`;
+
+  const directText = await liteLlmChat([
+    { role: "system", content: agentPrompt || "You are a helpful Slack agent." },
+    { role: "user", content: slackPrompt },
+  ], process.env.LITELLM_DEFAULT_MODEL || agentDef.model);
+
+  const runRecord = createAgentRun({
+    agentId: agentDef.id,
+    sessionId: `slack_direct_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    configOverrides: { slack: { channel: slackEvent.channel, user: slackEvent.user, ts: slackEvent.ts, direct_litellm: true } },
+  });
+  updateAgentRun(runRecord.id, { status: "completed", finishedAt: Date.now() });
+  return { runId: runRecord.id, text: directText };
+}
+
+async function handleSlackEventAsync(agentId, body) {
+  const agentDef = getAgent(agentId);
+  if (!agentDef) return;
+  const config = agentDef.config && typeof agentDef.config === "object" ? agentDef.config : {};
+  const slack = config.slack && typeof config.slack === "object" ? config.slack : {};
+  const event = body.event || {};
+  if (!event || event.bot_id || event.subtype === "bot_message") return;
+  const isMention = event.type === "app_mention";
+  const isMessage = event.type === "message" && ["im", "mpim"].includes(event.channel_type);
+  if (!isMention && !isMessage) return;
+
+  const vaultPlugin = pluginRegistry.getPlugin("vault");
+  const tokenKey = slack.bot_token_key;
+  const botToken = vaultPlugin?.backend && tokenKey
+    ? await vaultPlugin.backend.get(`default:${tokenKey}`)
+    : null;
+  if (!botToken) {
+    log(`[slack] missing bot token for agent ${agentId}`);
+    return;
+  }
+
+  try {
+    await slackApi("reactions.add", botToken, {
+      channel: event.channel,
+      timestamp: event.ts,
+      name: "eyes",
+    }).catch(() => {});
+    const result = await runAgentForSlack(agentDef, { ...event, team: body.team_id });
+    await slackApi("chat.postMessage", botToken, {
+      channel: event.channel,
+      text: result.text.slice(0, 39000),
+      thread_ts: event.thread_ts || event.ts,
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+  } catch (e) {
+    log(`[slack] failed to process event for ${agentId}:`, e instanceof Error ? e.message : String(e));
+    await slackApi("chat.postMessage", botToken, {
+      channel: event.channel,
+      text: `I hit an error while running the agent: ${e instanceof Error ? e.message : String(e)}`,
+      thread_ts: event.thread_ts || event.ts,
+      unfurl_links: false,
+      unfurl_media: false,
+    }).catch(() => {});
+  }
 }
 
 // Load the claude-code SDK from ./claude-code/node_modules/ relative to this
@@ -2120,6 +2323,167 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Slack custom app callback/webhook endpoints ───────────────────────────────
+  const _slackOauthCallbackMatch = p.match(/^\/host-oauth-callback\/([^/]+)$/);
+  const _agentSlackEventsMatch = p.match(/^\/api\/agents\/([^/]+)\/slack\/events$/);
+  const _agentSlackInteractivityMatch = p.match(/^\/api\/agents\/([^/]+)\/slack\/interactivity$/);
+
+  if (_slackOauthCallbackMatch && req.method === "GET") {
+    const providerId = decodeURIComponent(_slackOauthCallbackMatch[1]);
+    const agentId = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const found = agentId
+      ? getAgent(agentId)
+      : listAgents().find((ag) => ag.config?.slack?.provider_id === providerId);
+    let oauthOk = false;
+    let oauthMessage = "Slack sent the OAuth callback to Lite Agents.";
+    if (found) {
+      const config = found.config && typeof found.config === "object" ? found.config : {};
+      const slack = config.slack && typeof config.slack === "object" ? config.slack : {};
+      const nextSlack = {
+        ...slack,
+        provider_id: providerId,
+        slack_team_id: url.searchParams.get("team") || slack.slack_team_id || null,
+      };
+      if (code) {
+        const vaultPlugin = pluginRegistry.getPlugin("vault");
+        const clientSecretKey = slack.client_secret_key;
+        const clientSecret = vaultPlugin?.backend && clientSecretKey
+          ? await vaultPlugin.backend.get(`default:${clientSecretKey}`)
+          : null;
+        if (!slack.client_id || !clientSecret) {
+          nextSlack.status = "oauth_failed";
+          nextSlack.oauth_error = "missing_client_credentials";
+          oauthMessage = "Slack OAuth failed because the app credentials are not saved.";
+        } else {
+          try {
+            const redirectUri = `${externalOrigin(req)}/host-oauth-callback/${encodeURIComponent(providerId)}`;
+            const tokenRes = await fetch("https://slack.com/api/oauth.v2.access", {
+              method: "POST",
+              headers: { "content-type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({
+                client_id: slack.client_id,
+                client_secret: clientSecret,
+                code,
+                redirect_uri: redirectUri,
+              }),
+            });
+            const tokenBody = await tokenRes.json().catch(() => ({}));
+            if (tokenBody.ok && tokenBody.access_token) {
+              const botTokenKey = `SLACK_${found.id}_BOT_TOKEN`;
+              await vaultPlugin.backend.set(`default:${botTokenKey}`, tokenBody.access_token);
+              nextSlack.status = "connected";
+              nextSlack.oauth_error = null;
+              nextSlack.bot_token_key = botTokenKey;
+              nextSlack.slack_team_id = tokenBody.team?.id || nextSlack.slack_team_id || null;
+              nextSlack.slack_team_name = tokenBody.team?.name || nextSlack.slack_team_name || null;
+              nextSlack.bot_user_id = tokenBody.bot_user_id || nextSlack.bot_user_id || null;
+              nextSlack.authed_user_id = tokenBody.authed_user?.id || nextSlack.authed_user_id || null;
+              oauthOk = true;
+              oauthMessage = `${found.name} is now connected to Lite Agents.`;
+            } else {
+              nextSlack.status = "oauth_failed";
+              nextSlack.oauth_error = tokenBody.error || `http_${tokenRes.status}`;
+              oauthMessage = `Slack OAuth failed: ${nextSlack.oauth_error}`;
+            }
+          } catch (e) {
+            nextSlack.status = "oauth_failed";
+            nextSlack.oauth_error = e instanceof Error ? e.message : String(e);
+            oauthMessage = `Slack OAuth failed: ${nextSlack.oauth_error}`;
+          }
+        }
+      } else {
+        nextSlack.status = slack.status || "credentials_saved";
+      }
+      updateAgent(found.id, { config: { ...config, slack: nextSlack } });
+    }
+    const safeMessage = oauthMessage.replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[ch]));
+    const returnPath = found
+      ? `/agents/?slack_agent=${encodeURIComponent(found.id)}&slack_status=${oauthOk ? "connected" : "failed"}`
+      : "/agents/";
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slack connected</title>
+    <meta http-equiv="refresh" content="1.5; url=${returnPath}" />
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eef6fb; color: #0f172a; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { width: min(680px, calc(100vw - 48px)); border: 1px solid #dbe4ee; border-radius: 12px; background: #fff; padding: 48px; text-align: center; box-sizing: border-box; }
+      h1 { margin: 0 0 12px; font-size: 28px; line-height: 1.2; }
+      p { margin: 0; color: #475569; font-size: 16px; line-height: 1.5; }
+      a { color: #0f172a; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${oauthOk ? "Authentication successful" : "Authentication failed"}</h1>
+      <p>${found ? safeMessage : "Slack sent the OAuth callback to Lite Agents."}</p>
+      <p>${oauthOk ? "Redirecting back to Lite Agents..." : "Redirecting back so you can check the saved Slack credentials."}</p>
+      <p><a href="${returnPath}">Return now</a></p>
+    </main>
+    <script>
+      setTimeout(() => { window.location.href = ${JSON.stringify(returnPath)}; }, 1200);
+    </script>
+  </body>
+</html>`);
+    return;
+  }
+
+  if (_agentSlackEventsMatch && req.method === "POST") {
+    const agentId = decodeURIComponent(_agentSlackEventsMatch[1]);
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const agentDef = getAgent(agentId);
+    const slack = agentDef?.config?.slack && typeof agentDef.config.slack === "object" ? agentDef.config.slack : {};
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    const signingSecret = vaultPlugin?.backend && slack.signing_secret_key
+      ? await vaultPlugin.backend.get(`default:${slack.signing_secret_key}`)
+      : null;
+    if (!verifySlackSignature(req, raw, signingSecret)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_slack_signature" }));
+      return;
+    }
+    if (body.challenge) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ challenge: body.challenge }));
+      return;
+    }
+    if (body.event_id) {
+      if (slackEventIds.has(body.event_id)) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, duplicate: true }));
+        return;
+      }
+      slackEventIds.add(body.event_id);
+      setTimeout(() => slackEventIds.delete(body.event_id), 10 * 60 * 1000).unref?.();
+    }
+    setImmediate(() => {
+      handleSlackEventAsync(agentId, body).catch((e) => {
+        log(`[slack] async handler failed for ${agentId}:`, e instanceof Error ? e.message : String(e));
+      });
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (_agentSlackInteractivityMatch && req.method === "POST") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // ── Agent CRUD + run routes ───────────────────────────────────────────────────
   const _agentRunLogsMatch = p.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/logs$/);
   const _agentRunsMatch    = p.match(/^\/api\/agents\/([^/]+)\/runs$/);
@@ -2147,13 +2511,18 @@ const server = http.createServer(async (req, res) => {
     if (!getAgent(agentId)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
     const raw = await readBody(req);
     let b = {}; try { b = JSON.parse(raw || "{}"); } catch {}
-    const { key, value } = b;
+    const { key, value, always_on } = b;
     if (!key || value == null) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "key and value required" }));
       return;
     }
-    const row = storeMemory({ agentId, key: String(key), value: String(value) });
+    const row = storeMemory({
+      agentId,
+      key: String(key),
+      value: String(value),
+      alwaysOn: typeof always_on === "boolean" ? always_on : undefined,
+    });
     res.writeHead(201, { "content-type": "application/json" });
     res.end(JSON.stringify(row));
     return;

@@ -84,6 +84,7 @@ export interface Memory {
   agent_id: string;
   key: string;
   value: string;
+  always_on?: boolean | number;
   created_at: number;
   updated_at: number;
 }
