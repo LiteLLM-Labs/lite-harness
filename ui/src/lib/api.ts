@@ -165,6 +165,96 @@ export async function listModels(): Promise<string[]> {
   return items.map((m) => m.id).filter(Boolean);
 }
 
+// ── Integrations / vault ──────────────────────────────────────────────────────
+// API keys are stored in the harness's encrypted vault via /api/vault/:userId.
+// When the backend vault is unreachable (e.g. running the UI standalone via
+// `next dev`), we transparently fall back to sessionStorage so the flow still
+// works. Per project policy, secrets only ever touch sessionStorage — never
+// localStorage.
+
+const VAULT_USER = "default";
+const VAULT_FALLBACK_PREFIX = "lite-harness-integration:";
+
+function fallbackSet(key: string, value: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(VAULT_FALLBACK_PREFIX + key, value);
+  } catch {
+    /* noop */
+  }
+}
+
+function fallbackDelete(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(VAULT_FALLBACK_PREFIX + key);
+  } catch {
+    /* noop */
+  }
+}
+
+function fallbackList(): string[] {
+  if (typeof window === "undefined") return [];
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const k = window.sessionStorage.key(i);
+      if (k?.startsWith(VAULT_FALLBACK_PREFIX)) {
+        keys.push(k.slice(VAULT_FALLBACK_PREFIX.length));
+      }
+    }
+  } catch {
+    /* noop */
+  }
+  return keys;
+}
+
+/** Store an integration's API key. Returns the storage backend that took it. */
+export async function saveIntegrationKey(
+  envKey: string,
+  value: string,
+): Promise<"vault" | "session"> {
+  try {
+    const res = await req(`/api/vault/${VAULT_USER}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key: envKey, value }),
+    });
+    if (res.ok) return "vault";
+  } catch {
+    /* fall through to sessionStorage */
+  }
+  fallbackSet(envKey, value);
+  return "session";
+}
+
+/** Remove a stored integration key from both vault and sessionStorage. */
+export async function deleteIntegrationKey(envKey: string): Promise<void> {
+  try {
+    await req(`/api/vault/${VAULT_USER}/${encodeURIComponent(envKey)}`, {
+      method: "DELETE",
+    });
+  } catch {
+    /* noop */
+  }
+  fallbackDelete(envKey);
+}
+
+/** List the env-key names that currently have a stored value. */
+export async function listIntegrationKeys(): Promise<string[]> {
+  const keys = new Set<string>(fallbackList());
+  try {
+    const res = await req(`/api/vault/${VAULT_USER}`);
+    if (res.ok) {
+      const data = (await res.json()) as { keys?: { key: string }[] };
+      for (const k of data.keys ?? []) keys.add(k.key);
+    }
+  } catch {
+    /* vault unavailable — sessionStorage only */
+  }
+  return [...keys];
+}
+
 export function subscribeEvents(opts: {
   sessionId: string;
   onEvent: (ev: unknown) => void;
