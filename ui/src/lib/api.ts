@@ -465,11 +465,12 @@ export async function storeMemory(
   agentId: string,
   key: string,
   value: string,
+  alwaysOn?: boolean,
 ): Promise<Memory> {
   const res = await req(`/api/agents/${encodeURIComponent(agentId)}/memory`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ key, value }),
+    body: JSON.stringify({ key, value, ...(typeof alwaysOn === "boolean" ? { always_on: alwaysOn } : {}) }),
   });
   return jsonOrThrow<Memory>(res);
 }
