@@ -62,6 +62,7 @@ export function createAgent({
   status = 'paused',
   description = null,
   harness = 'claude-code',
+  skills = [],
 }) {
   const id = generateId();
   const now = Date.now();
@@ -71,8 +72,8 @@ export function createAgent({
       `INSERT INTO agents (
         id, name, model, system, tools, cadence, interval_seconds, session_id, loop_id, created_at,
         prompt, cron, timezone, vault_keys, setup_commands, max_runtime_minutes,
-        on_failure, config, owner_id, status, description, harness
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        on_failure, config, owner_id, status, description, harness, skills
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -97,6 +98,7 @@ export function createAgent({
       status,
       description ?? null,
       harness,
+      JSON.stringify(Array.isArray(skills) ? skills : []),
     );
 
   return getAgent(id);
@@ -131,14 +133,14 @@ export function updateAgent(id, fields) {
   const allowed = [
     'name', 'model', 'system', 'tools', 'cadence', 'interval_seconds', 'loop_id',
     'status', 'prompt', 'cron', 'timezone', 'vault_keys', 'setup_commands',
-    'max_runtime_minutes', 'on_failure', 'config', 'owner_id', 'description', 'harness',
+    'max_runtime_minutes', 'on_failure', 'config', 'owner_id', 'description', 'harness', 'skills',
   ];
   const setClauses = [];
   const vals = [];
   for (const [k, v] of Object.entries(fields)) {
     if (!allowed.includes(k)) continue;
     setClauses.push(`${k} = ?`);
-    if (['tools', 'vault_keys', 'setup_commands', 'config'].includes(k) && typeof v !== 'string') {
+    if (['tools', 'vault_keys', 'setup_commands', 'config', 'skills'].includes(k) && typeof v !== 'string') {
       vals.push(JSON.stringify(v));
     } else {
       vals.push(v ?? null);
@@ -178,9 +180,11 @@ function hydrate(row) {
   let vault_keys = [];
   let setup_commands = [];
   let config = {};
+  let skills = [];
   try { tools = JSON.parse(row.tools); } catch {}
   try { vault_keys = JSON.parse(row.vault_keys || '[]'); } catch {}
   try { setup_commands = JSON.parse(row.setup_commands || '[]'); } catch {}
   try { config = JSON.parse(row.config || '{}'); } catch {}
-  return { ...row, tools, vault_keys, setup_commands, config };
+  try { skills = JSON.parse(row.skills || '[]'); } catch {}
+  return { ...row, tools, vault_keys, setup_commands, config, skills };
 }

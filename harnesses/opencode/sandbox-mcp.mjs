@@ -37,12 +37,22 @@ let _vaultBackend = null;
 try {
   _vaultBackend = buildBackend(config.token, VAULT_DB_PATH);
 } catch (e) {
-  console.error(`[sandbox-mcp] vault unavailable: ${e.message}`);
+  console.error(`[sandbox-mcp] vault unavailable (${VAULT_DB_PATH}): ${e.message}`);
 }
 
 const getVaultEnvs = async () => {
   if (!_vaultBackend) return {};
-  try { return await _vaultBackend.getAll(); } catch { return {}; }
+  try {
+    const all = await _vaultBackend.getAll();
+    // Vault stores keys as "owner_id:KEY_NAME". Strip the prefix so env vars
+    // are available as plain KEY_NAME inside the sandbox.
+    const out = {};
+    for (const [k, v] of Object.entries(all)) {
+      const colon = k.indexOf(":");
+      out[colon >= 0 ? k.slice(colon + 1) : k] = v;
+    }
+    return out;
+  } catch { return {}; }
 };
 
 const MODE = config.platformMode ? "platform" : (provider?.providerName ?? "none");

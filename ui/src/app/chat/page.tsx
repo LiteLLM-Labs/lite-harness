@@ -44,6 +44,7 @@ function ChatInner() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const eventBufferRef = useRef<Frame[]>([]);
   const [sessionHarness, setSessionHarness] = useState<string>("opencode");
+  const [sessionTitle, setSessionTitle] = useState<string>("");
   const [savedAgents, setSavedAgents] = useState<{ id: string; name: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
@@ -52,7 +53,17 @@ function ChatInner() {
     if (!sid) return;
     try {
       const list = await getMessages(sid);
-      setMessages(list);
+      // The backend only persists an assistant message once its turn completes,
+      // so GET /message omits the in-progress (streaming) assistant turn. A blind
+      // setMessages(list) here would wipe the shell created by the message.updated
+      // event and drop every subsequent message.part.delta. Merge instead: keep any
+      // locally-known messages the server hasn't persisted yet so streaming survives.
+      setMessages((prev) => {
+        if (!prev) return list;
+        const serverIds = new Set(list.map((m) => m.info.id));
+        const inflight = prev.filter((m) => !serverIds.has(m.info.id));
+        return [...list, ...inflight];
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -75,6 +86,7 @@ function ChatInner() {
     getSession(sid).then(s => {
       const a = s.agent ?? s.harness;
       if (a) setSessionHarness(a);
+      if (s.title) setSessionTitle(s.title);
     }).catch(() => {});
   }, [sid]);
 
@@ -250,6 +262,9 @@ function ChatInner() {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
+            {sessionTitle && (
+              <span className="text-sm font-medium" title={sessionTitle}>{sessionTitle}</span>
+            )}
             <span className="text-xs font-mono text-muted-foreground">{shortSid}</span>
             {sessionStatus === "busy" ? (
               <button

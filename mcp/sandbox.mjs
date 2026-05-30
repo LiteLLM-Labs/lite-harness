@@ -24,6 +24,7 @@ export class SandboxProvider {
   async execute(_id, _cmd) { throw new Error("not implemented"); }
   async readFile(_id, _path) { throw new Error("not implemented"); }
   async readBase64(_id, _path) { throw new Error("not implemented"); }
+  async writeFile(_id, _path, _content) { throw new Error("not implemented"); }
   async terminate(_id) {}
 }
 
@@ -89,6 +90,13 @@ export class E2bProvider extends SandboxProvider {
     await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
     const bytes = await sandbox.files.read(path, { format: "bytes" });
     return Buffer.from(bytes).toString("base64");
+  }
+
+  async writeFile(id, path, content) {
+    const { Sandbox } = await import("e2b");
+    const sandbox = await Sandbox.connect(id, { apiKey: this._apiKey });
+    await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
+    await sandbox.files.write(path, content);
   }
 
   async terminate(id) {
@@ -178,6 +186,12 @@ export class DaytonaProvider extends SandboxProvider {
     const sandbox = await daytona.get(id);
     const buf = await sandbox.fs.downloadFile(path);
     return buf.toString("base64");
+  }
+
+  async writeFile(id, path, content) {
+    const daytona = await this._getClient();
+    const sandbox = await daytona.get(id);
+    await sandbox.fs.uploadFile(path, Buffer.from(content, "utf-8"));
   }
 
   async terminate(id) {
@@ -526,7 +540,16 @@ function getSingleton() {
 
   const getVaultEnvs = async () => {
     if (!_vaultBackend) return {};
-    try { return await _vaultBackend.getAll(); } catch { return {}; }
+    try {
+      const all = await _vaultBackend.getAll();
+      // Strip "owner_id:" prefix so env vars arrive as plain KEY_NAME inside the sandbox.
+      const out = {};
+      for (const [k, v] of Object.entries(all)) {
+        const colon = k.indexOf(":");
+        out[colon >= 0 ? k.slice(colon + 1) : k] = v;
+      }
+      return out;
+    } catch { return {}; }
   };
 
   _singleton = createHandlers({ config, state, provider, providerError, getVaultEnvs });
