@@ -12,13 +12,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ModelSelect } from "@/components/model-select";
+import { ScheduleEditor } from "@/components/schedule-editor";
 import { getAgent, updateAgent, listModels } from "@/lib/api";
+import { DEFAULT_TIMEZONE } from "@/lib/schedule";
 
 interface FormState {
   name: string;
   description: string;
   prompt: string;
   model: string;
+  cron: string;
+  timezone: string;
 }
 
 function AgentEdit() {
@@ -26,7 +30,14 @@ function AgentEdit() {
   const searchParams = useSearchParams();
   const id = decodeURIComponent(searchParams.get("id") ?? "");
 
-  const [form, setForm] = useState<FormState>({ name: "", description: "", prompt: "", model: "" });
+  const [form, setForm] = useState<FormState>({
+    name: "",
+    description: "",
+    prompt: "",
+    model: "",
+    cron: "",
+    timezone: DEFAULT_TIMEZONE,
+  });
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -38,7 +49,14 @@ function AgentEdit() {
     (async () => {
       try {
         const [ag, modelList] = await Promise.all([getAgent(id), listModels()]);
-        setForm({ name: ag.name ?? "", description: ag.description ?? "", prompt: ag.prompt ?? "", model: ag.model ?? "" });
+        setForm({
+          name: ag.name ?? "",
+          description: ag.description ?? "",
+          prompt: ag.prompt ?? "",
+          model: ag.model ?? "",
+          cron: ag.cron ?? "",
+          timezone: ag.timezone ?? DEFAULT_TIMEZONE,
+        });
         setModels(modelList);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -53,10 +71,13 @@ function AgentEdit() {
     setFormError(null);
     try {
       if (!form.name.trim()) throw new Error("Name is required");
+      const cron = form.cron.trim();
       await updateAgent(id, {
         name: form.name,
         description: form.description,
         prompt: form.prompt,
+        cron: cron || null,
+        timezone: form.timezone.trim() || "UTC",
         ...(form.model ? { model: form.model } : {}),
       });
       router.push(`/agents/detail/?id=${encodeURIComponent(id)}`);
@@ -107,7 +128,15 @@ function AgentEdit() {
                     <Textarea id="ag-prompt" value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })}
                       className="font-mono text-xs min-h-[320px] resize-y" placeholder="You are a meticulous security reviewer…" />
                   </div>
-                  {formError && <p className="text-sm text-destructive">{formError}</p>}
+                  <ScheduleEditor
+                    cron={form.cron}
+                    timezone={form.timezone}
+                    onChange={(next) => setForm({ ...form, ...next })}
+                  />
+
+                  {formError && (
+                    <p className="text-sm text-destructive">{formError}</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 pt-2">
                   <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
