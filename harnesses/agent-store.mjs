@@ -50,14 +50,29 @@ export function createAgent({
   intervalSeconds = null,
   sessionId,
   loopId = null,
+  prompt = null,
+  cron = null,
+  timezone = 'UTC',
+  vault_keys = [],
+  setup_commands = [],
+  max_runtime_minutes = 30,
+  on_failure = 'pause_and_notify',
+  config = {},
+  owner_id = null,
+  status = 'paused',
+  description = null,
+  harness = 'claude-code',
 }) {
   const id = generateId();
   const now = Date.now();
 
   getDb()
     .prepare(
-      `INSERT INTO agents (id, name, model, system, tools, cadence, interval_seconds, session_id, loop_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agents (
+        id, name, model, system, tools, cadence, interval_seconds, session_id, loop_id, created_at,
+        prompt, cron, timezone, vault_keys, setup_commands, max_runtime_minutes,
+        on_failure, config, owner_id, status, description, harness
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -70,6 +85,18 @@ export function createAgent({
       sessionId,
       loopId ?? null,
       now,
+      prompt ?? null,
+      cron ?? null,
+      timezone,
+      JSON.stringify(Array.isArray(vault_keys) ? vault_keys : []),
+      JSON.stringify(Array.isArray(setup_commands) ? setup_commands : []),
+      max_runtime_minutes,
+      on_failure,
+      JSON.stringify(typeof config === 'object' ? config : {}),
+      owner_id ?? null,
+      status,
+      description ?? null,
+      harness,
     );
 
   return getAgent(id);
@@ -95,15 +122,44 @@ export function deleteAgent(id) {
 }
 
 /**
- * Return all agent rows ordered by created_at ascending (`tools` parsed).
+ * Update allowed fields on an existing agent row.
  *
+ * @param {string} id
+ * @param {object} fields
+ */
+export function updateAgent(id, fields) {
+  const allowed = [
+    'name', 'model', 'system', 'tools', 'cadence', 'interval_seconds', 'loop_id',
+    'status', 'prompt', 'cron', 'timezone', 'vault_keys', 'setup_commands',
+    'max_runtime_minutes', 'on_failure', 'config', 'owner_id', 'description', 'harness',
+  ];
+  const setClauses = [];
+  const vals = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (!allowed.includes(k)) continue;
+    setClauses.push(`${k} = ?`);
+    if (['tools', 'vault_keys', 'setup_commands', 'config'].includes(k) && typeof v !== 'string') {
+      vals.push(JSON.stringify(v));
+    } else {
+      vals.push(v ?? null);
+    }
+  }
+  if (!setClauses.length) return;
+  vals.push(id);
+  getDb().prepare(`UPDATE agents SET ${setClauses.join(', ')} WHERE id = ?`).run(...vals);
+}
+
+/**
+ * Return all agent rows ordered by created_at ascending (JSON columns parsed).
+ *
+ * @param {string} [ownerId]
  * @returns {object[]}
  */
-export function listAgents() {
-  return getDb()
-    .prepare("SELECT * FROM agents ORDER BY created_at ASC")
-    .all()
-    .map(hydrate);
+export function listAgents(ownerId) {
+  const rows = ownerId
+    ? getDb().prepare("SELECT * FROM agents WHERE owner_id = ? ORDER BY created_at ASC").all(ownerId)
+    : getDb().prepare("SELECT * FROM agents ORDER BY created_at ASC").all();
+  return rows.map(hydrate);
 }
 
 /**
@@ -119,8 +175,12 @@ export function getAgent(id) {
 
 function hydrate(row) {
   let tools = [];
-  try {
-    tools = JSON.parse(row.tools);
-  } catch {}
-  return { ...row, tools };
+  let vault_keys = [];
+  let setup_commands = [];
+  let config = {};
+  try { tools = JSON.parse(row.tools); } catch {}
+  try { vault_keys = JSON.parse(row.vault_keys || '[]'); } catch {}
+  try { setup_commands = JSON.parse(row.setup_commands || '[]'); } catch {}
+  try { config = JSON.parse(row.config || '{}'); } catch {}
+  return { ...row, tools, vault_keys, setup_commands, config };
 }

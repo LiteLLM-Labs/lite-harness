@@ -29,7 +29,9 @@ import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb } from "./loop-store.mjs";
+import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
+import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
 import {
   hydrateFromDb,
   persistSession,
@@ -98,6 +100,24 @@ function authOk(req, urlObj) {
 const sessionHarness = new Map(); // id → "opencode" | "cc"
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
+
+// Resolve {{vault.KEY}} and {{config.KEY}} placeholders in agent prompts.
+async function resolveTemplates(prompt, userId, config, vaultBackend) {
+  if (!prompt) return prompt;
+  let result = prompt;
+  const vaultMatches = [...result.matchAll(/\{\{vault\.([A-Za-z0-9_]+)\}\}/g)];
+  for (const [placeholder, key] of vaultMatches) {
+    const val = await vaultBackend.get(`${userId}:${key}`);
+    if (val === null) throw new Error(`vault key missing: ${key}`);
+    result = result.split(placeholder).join(val);
+  }
+  const configMatches = [...result.matchAll(/\{\{config\.([A-Za-z0-9_]+)\}\}/g)];
+  for (const [placeholder, key] of configMatches) {
+    if (!(key in config)) throw new Error(`config key missing: ${key}`);
+    result = result.split(placeholder).join(String(config[key]));
+  }
+  return result;
+}
 
 // Load the claude-code SDK from ./claude-code/node_modules/ relative to this
 // file. In Docker the adapter lives at /opt/lap/inline-adapter.mjs and the SDK
@@ -1410,6 +1430,402 @@ const server = http.createServer(async (req, res) => {
     // opencode: clear pending tracking and forward to child
     ocPendingTurns.delete(sid);
     forward("POST", p, "", null, res, p);
+    return;
+  }
+
+  // ── GET /api/capabilities ────────────────────────────────────────────────────
+  if (req.method === "GET" && p === "/api/capabilities") {
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    const loopPlugin = pluginRegistry.getPlugin("loop");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      harnesses: [{ name: "claude-code", version: "1.0" }],
+      mcp_servers: [],
+      vault: { available: !!(vaultPlugin && vaultPlugin.backend) },
+      scheduler: { available: !!loopPlugin, min_interval_minutes: 1 },
+      sandbox: {
+        provider: process.env.E2B_API_KEY ? "e2b" : null,
+        pip_install: true,
+        outbound_network: true,
+        persistent_storage: false,
+        max_runtime_minutes: 30,
+      },
+    }));
+    return;
+  }
+
+  // ── Vault HTTP endpoints ──────────────────────────────────────────────────────
+  const _vaultUserMatch = p.match(/^\/api\/vault\/([^/]+)$/);
+  const _vaultKeyMatch  = p.match(/^\/api\/vault\/([^/]+)\/([^/]+)$/);
+
+  if (_vaultUserMatch && req.method === "POST") {
+    const userId = _vaultUserMatch[1];
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const { key, value } = body;
+    if (!key || value === undefined) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "key and value required" }));
+      return;
+    }
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault not available" }));
+      return;
+    }
+    await vaultPlugin.backend.set(`${userId}:${key}`, value);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, key }));
+    return;
+  }
+
+  if (_vaultUserMatch && req.method === "GET") {
+    const userId = _vaultUserMatch[1];
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault not available" }));
+      return;
+    }
+    const prefix = `${userId}:`;
+    const all = await vaultPlugin.backend.list();
+    const keys = all
+      .filter(r => r.key.startsWith(prefix))
+      .map(r => ({ key: r.key.slice(prefix.length), updated_at: r.updatedAt }));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ keys }));
+    return;
+  }
+
+  if (_vaultKeyMatch && req.method === "DELETE") {
+    const userId = _vaultKeyMatch[1];
+    const key    = _vaultKeyMatch[2];
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault not available" }));
+      return;
+    }
+    await vaultPlugin.backend.delete(`${userId}:${key}`);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── Agent CRUD + run routes ───────────────────────────────────────────────────
+  const _agentRunLogsMatch = p.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/logs$/);
+  const _agentRunsMatch    = p.match(/^\/api\/agents\/([^/]+)\/runs$/);
+  const _agentRunMatch     = p.match(/^\/api\/agents\/([^/]+)\/run$/);
+  const _agentPauseMatch   = p.match(/^\/api\/agents\/([^/]+)\/pause$/);
+  const _agentResumeMatch  = p.match(/^\/api\/agents\/([^/]+)\/resume$/);
+  const _agentIdMatch      = p.match(/^\/api\/agents\/([^/]+)$/);
+  const _agentsMatch       = p === "/api/agents";
+
+  if (_agentsMatch && req.method === "POST") {
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const {
+      name, owner_id, description,
+      harness: agentHarness = "claude-code",
+      prompt, schedule,
+      vault_keys = [], setup_commands = [],
+      max_runtime_minutes = 30,
+      on_failure = "pause_and_notify",
+      config = {},
+      model = "claude-sonnet-4-6",
+      system = "",
+    } = body;
+    if (!name || !owner_id) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "name and owner_id required" }));
+      return;
+    }
+    // Validate vault_keys exist before accepting the agent
+    if (vault_keys.length > 0) {
+      const vaultPlugin = pluginRegistry.getPlugin("vault");
+      if (vaultPlugin && vaultPlugin.backend) {
+        const missing = [];
+        for (const k of vault_keys) {
+          const v = await vaultPlugin.backend.get(`${owner_id}:${k}`);
+          if (v === null) missing.push(k);
+        }
+        if (missing.length > 0) {
+          res.writeHead(422, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "vault keys missing", missing }));
+          return;
+        }
+      }
+    }
+    // Create an ephemeral builder session so the agent has a session_id
+    const builderSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const builderNow = Date.now();
+    ccSessions.set(builderSid, {
+      id: builderSid, title: `agent-builder-${name}`,
+      time: { created: builderNow }, harness: "claude-code",
+      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+    });
+    sessionHarness.set(builderSid, "cc");
+    persistSession({ id: builderSid, harness: "cc", title: `agent-builder-${name}`, createdAt: builderNow });
+
+    const newAgent = createAgent({
+      name, model, system: system || prompt || "", tools: [],
+      cadence: schedule ? schedule.cron : null, intervalSeconds: null,
+      sessionId: builderSid, loopId: null,
+      prompt: prompt || null,
+      cron: schedule ? schedule.cron : null,
+      timezone: schedule ? (schedule.timezone || "UTC") : "UTC",
+      vault_keys, setup_commands, max_runtime_minutes, on_failure,
+      config, owner_id, status: "paused", description: description || null,
+      harness: agentHarness,
+    });
+    const host = req.headers.host || "localhost";
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: newAgent.id,
+      name: newAgent.name,
+      owner_id: newAgent.owner_id,
+      status: newAgent.status || "paused",
+      url: `https://${host}/agents/${newAgent.id}`,
+      schedule: schedule ? { cron: schedule.cron, timezone: schedule.timezone || "UTC" } : null,
+      created_at: newAgent.created_at,
+    }));
+    return;
+  }
+
+  if (_agentsMatch && req.method === "GET") {
+    const ownerId = url.searchParams.get("owner_id");
+    const agents = listAgents(ownerId || undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ agents }));
+    return;
+  }
+
+  if (_agentIdMatch && req.method === "GET") {
+    const agentId = _agentIdMatch[1];
+    const found = getAgent(agentId);
+    if (!found) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(found));
+    return;
+  }
+
+  if (_agentIdMatch && req.method === "PATCH") {
+    const agentId = _agentIdMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    const raw = await readBody(req);
+    let fields = {};
+    try { fields = JSON.parse(raw || "{}"); } catch {}
+    updateAgent(agentId, fields);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(getAgent(agentId)));
+    return;
+  }
+
+  if (_agentIdMatch && req.method === "DELETE") {
+    const agentId = _agentIdMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    deleteAgent(agentId);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (_agentPauseMatch && req.method === "POST") {
+    const agentId = _agentPauseMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    updateAgent(agentId, { status: "paused" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: agentId, status: "paused" }));
+    return;
+  }
+
+  if (_agentResumeMatch && req.method === "POST") {
+    const agentId = _agentResumeMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    updateAgent(agentId, { status: "active" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: agentId, status: "active" }));
+    return;
+  }
+
+  // ── POST /api/agents/:id/run ──────────────────────────────────────────────────
+  if (_agentRunMatch && req.method === "POST") {
+    const agentId = _agentRunMatch[1];
+    const agentDef = getAgent(agentId);
+    if (!agentDef) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "agent not found" }));
+      return;
+    }
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const configOverrides = body.config_overrides || {};
+
+    // Validate vault_keys exist before burning sandbox time
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (agentDef.vault_keys && agentDef.vault_keys.length > 0) {
+      if (!vaultPlugin || !vaultPlugin.backend) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "vault not available" }));
+        return;
+      }
+      const missing = [];
+      for (const k of agentDef.vault_keys) {
+        const v = await vaultPlugin.backend.get(`${agentDef.owner_id}:${k}`);
+        if (v === null) missing.push(k);
+      }
+      if (missing.length > 0) {
+        res.writeHead(422, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "vault keys missing", missing }));
+        return;
+      }
+    }
+
+    // Resolve prompt templates ({{vault.X}} and {{config.X}})
+    const mergedConfig = Object.assign({}, agentDef.config || {}, configOverrides);
+    let resolvedPrompt = agentDef.prompt || agentDef.system || "";
+    try {
+      if (vaultPlugin && vaultPlugin.backend) {
+        resolvedPrompt = await resolveTemplates(
+          resolvedPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend
+        );
+      }
+    } catch (e) {
+      res.writeHead(422, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e.message }));
+      return;
+    }
+
+    // Create ephemeral cc session for this run
+    if (!ccQuery) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "claude-code SDK not available" }));
+      return;
+    }
+    const runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const runNow = Date.now();
+    ccSessions.set(runSid, {
+      id: runSid, title: `agent-run-${agentId}`,
+      time: { created: runNow }, harness: "claude-code",
+      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+    });
+    sessionHarness.set(runSid, "cc");
+    persistSession({ id: runSid, harness: "cc", title: `agent-run-${agentId}`, createdAt: runNow });
+
+    const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
+    const runId = runRecord.id;
+    initRunBuffer(runId);
+
+    // Listen on the global SSE bus to track run completion and buffer events
+    const runEventListener = (line) => {
+      try {
+        const m = line.match(/^data: (.+)\n/);
+        if (!m) return;
+        const evt = JSON.parse(m[1]);
+        if (evt.properties && evt.properties.sessionID !== runSid) return;
+        bufferRunEvent(runId, line);
+        if (evt.type === "session.idle") {
+          updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
+          ccGlobalBus.delete(runEventListener);
+          pluginGlobalBus.delete(runEventListener);
+        } else if (evt.type === "session.error") {
+          const errMsg = (evt.properties && evt.properties.error && evt.properties.error.message) || "unknown error";
+          updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: errMsg });
+          if (agentDef.on_failure === "pause_and_notify") {
+            updateAgent(agentId, { status: "paused" });
+          }
+          ccGlobalBus.delete(runEventListener);
+          pluginGlobalBus.delete(runEventListener);
+        }
+      } catch {}
+    };
+    ccGlobalBus.add(runEventListener);
+    pluginGlobalBus.add(runEventListener);
+
+    // Fire prompt async — non-blocking
+    callPromptAsync(runSid, resolvedPrompt).catch((e) => {
+      log(`run ${runId} error: ${e.message}`);
+      updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: e.message });
+      ccGlobalBus.delete(runEventListener);
+      pluginGlobalBus.delete(runEventListener);
+    });
+
+    const host = req.headers.host || "localhost";
+    res.writeHead(202, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      run_id: runId,
+      agent_id: agentId,
+      status: "starting",
+      logs_url: `https://${host}/api/agents/${agentId}/runs/${runId}/logs`,
+    }));
+    return;
+  }
+
+  // ── GET /api/agents/:id/runs/:runId/logs (SSE stream) ────────────────────────
+  if (_agentRunLogsMatch && req.method === "GET") {
+    const agentId = _agentRunLogsMatch[1];
+    const runId   = _agentRunLogsMatch[2];
+    const runRec = getAgentRun(runId);
+    if (!runRec || runRec.agent_id !== agentId) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "run not found" }));
+      return;
+    }
+    const terminal = ["completed", "failed", "timed_out", "cancelled"];
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    if (terminal.includes(runRec.status)) {
+      // Run already done — flush buffered events and close
+      const buffered = getRunEventBuffer(runId) || [];
+      for (const line of buffered) { try { res.write(line); } catch {} }
+      res.end();
+      return;
+    }
+    // Live stream: subscribe to run's event buffer
+    const liveListener = (line) => { try { res.write(line); } catch {} };
+    subscribeRunEvents(runId, liveListener);
+    req.on("close", () => unsubscribeRunEvents(runId, liveListener));
+    return;
+  }
+
+  // ── GET /api/agents/:id/runs ──────────────────────────────────────────────────
+  if (_agentRunsMatch && req.method === "GET") {
+    const agentId = _agentRunsMatch[1];
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "10", 10), 100);
+    const runs = listAgentRuns(agentId, limit);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ runs }));
     return;
   }
 
