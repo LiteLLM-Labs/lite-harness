@@ -1,4 +1,4 @@
-import type { Agent, HarnessMessage, OpencodeSession, Skill } from "./types";
+import type { Agent, HarnessMessage, Memory, OpencodeSession, Skill } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -405,4 +405,33 @@ export async function listSkills(): Promise<Skill[]> {
   const res = await req("/api/skills");
   const data = await jsonOrThrow<{ skills: Skill[] }>(res);
   return data.skills ?? [];
+}
+
+// ── Agent memory (/api/agents/:id/memory) ─────────────────────────────────────
+// The same per-agent key→value notes the agent reads & writes via its memory_*
+// tools. Surfaced here so the UI can show and curate what an agent remembers.
+export async function listMemory(agentId: string): Promise<Memory[]> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}/memory`);
+  const data = await jsonOrThrow<{ memories: Memory[] }>(res);
+  return data.memories ?? [];
+}
+
+export async function storeMemory(
+  agentId: string,
+  key: string,
+  value: string,
+): Promise<Memory> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}/memory`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ key, value }),
+  });
+  return jsonOrThrow<Memory>(res);
+}
+
+export async function deleteMemory(agentId: string, key: string): Promise<void> {
+  await req(
+    `/api/agents/${encodeURIComponent(agentId)}/memory/${encodeURIComponent(key)}`,
+    { method: "DELETE" },
+  );
 }
