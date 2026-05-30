@@ -36,7 +36,9 @@ import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
 import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
-import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
+import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer, setRunSandbox, getRunSandbox } from "./agent-run-store.mjs";
+import { buildDirectProvider } from "./sandbox-provider.mjs";
+import { upsertAgentFile, listAgentFiles, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS } from "./agent-file-store.mjs";
 import {
   hydrateFromDb,
   persistSession,
@@ -1259,11 +1261,17 @@ async function buildCapabilities() {
     sandbox = { provider: "daytona", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
   }
 
+  const { error: sbError } = buildDirectProvider();
+  const files = sbError
+    ? { available: false, reason: "no sandbox provider configured" }
+    : { available: true, ...FILE_LIMITS, sandbox_required: true };
+
   return {
     harnesses,
     mcp_servers,
     vault,
     scheduler,
+    files,
     ...(sandbox && { sandbox }),
     agents: {
       create:   "POST /api/agents",
@@ -1938,27 +1946,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── GET /api/capabilities ────────────────────────────────────────────────────
-  if (req.method === "GET" && p === "/api/capabilities") {
-    const vaultPlugin = pluginRegistry.getPlugin("vault");
-    const loopPlugin = pluginRegistry.getPlugin("loop");
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({
-      harnesses: [{ name: "claude-code", version: "1.0" }],
-      mcp_servers: [],
-      vault: { available: !!(vaultPlugin && vaultPlugin.backend) },
-      scheduler: { available: !!loopPlugin, min_interval_minutes: 1 },
-      sandbox: {
-        provider: process.env.E2B_API_KEY ? "e2b" : null,
-        pip_install: true,
-        outbound_network: true,
-        persistent_storage: false,
-        max_runtime_minutes: 30,
-      },
-    }));
-    return;
-  }
-
   // ── Vault HTTP endpoints ──────────────────────────────────────────────────────
   const _vaultUserMatch = p.match(/^\/api\/vault\/([^/]+)$/);
   const _vaultKeyMatch  = p.match(/^\/api\/vault\/([^/]+)\/([^/]+)$/);
@@ -2335,12 +2322,16 @@ const server = http.createServer(async (req, res) => {
         bufferRunEvent(runId, line);
         if (evt.type === "session.idle") {
           updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
+          const { provider: _sbP, sandboxId: _sbId } = getRunSandbox(runId);
+          if (_sbP && _sbId) _sbP.terminate(_sbId).catch(() => {});
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
           ocGlobalBus.delete(runEventListener);
         } else if (evt.type === "session.error") {
           const errMsg = (evt.properties && evt.properties.error && evt.properties.error.message) || "unknown error";
           updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: errMsg });
+          const { provider: _sbP2, sandboxId: _sbId2 } = getRunSandbox(runId);
+          if (_sbP2 && _sbId2) _sbP2.terminate(_sbId2).catch(() => {});
           if (agentDef.on_failure === "pause_and_notify") {
             updateAgent(agentId, { status: "paused" });
           }
@@ -2353,6 +2344,44 @@ const server = http.createServer(async (req, res) => {
     ccGlobalBus.add(runEventListener);
     pluginGlobalBus.add(runEventListener);
     if (runHarness === "opencode") ocGlobalBus.add(runEventListener);
+
+    // Always inject agent identity so the agent can call persist_file
+    resolvedPrompt +=
+      `\n\n---\nAgent context:\n  agent_id: ${agentId}\n` +
+      `  run_id: ${runId}\n` +
+      `  To persist files you create in the sandbox back to the platform, call the\n` +
+      `  persist_file MCP tool with your agent_id and the file path + content.\n---`;
+
+    // Provision sandbox and write agent files if any exist
+    const agentFiles = listAgentFiles(agentId);
+    if (agentFiles.length > 0) {
+      const { provider: sbProvider, error: sbError } = buildDirectProvider();
+      if (sbError) {
+        updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `sandbox not configured: ${sbError}` });
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `sandbox not configured: ${sbError}` }));
+        return;
+      }
+      try {
+        const { id: sbId } = await sbProvider.create(`agent-run-${runId}`);
+        setRunSandbox(runId, sbProvider, sbId);
+        updateAgentRun(runId, { sandboxId: sbId });
+        for (const file of agentFiles) {
+          await sbProvider.writeFile(sbId, `/workspace/${file.path}`, file.content);
+        }
+        const fileList = agentFiles.map(f => `  - /workspace/${f.path}`).join("\n");
+        resolvedPrompt +=
+          `\n\n---\nSandbox provisioned (${sbProvider.providerName}). ID: ${sbId}.\n` +
+          `Files written to /workspace/:\n${fileList}\n` +
+          `Use sandbox tools to execute them. After editing any file, call persist_file\n` +
+          `to save changes so they survive sandbox teardown.\n---`;
+      } catch (e) {
+        updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `sandbox setup failed: ${e.message}` });
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `sandbox setup failed: ${e.message}` }));
+        return;
+      }
+    }
 
     // Fire prompt async — non-blocking
     callPromptAsync(runSid, resolvedPrompt).catch((e) => {
@@ -2412,6 +2441,83 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ runs }));
     return;
+  }
+
+  // ── Agent file endpoints ──────────────────────────────────────────────────────
+  // PUT /api/agents/:id/files/* — upsert a file (wildcard path after /files/)
+  // GET /api/agents/:id/files   — list files (no content)
+  // GET /api/agents/:id/files/* — fetch single file with content
+  // DELETE /api/agents/:id/files/* — delete single file
+  // DELETE /api/agents/:id/files   — delete all files for agent
+  const _agentFilePrefixMatch = p.match(/^\/api\/agents\/([^/]+)\/files(\/.*)?$/);
+  if (_agentFilePrefixMatch) {
+    const agentId  = _agentFilePrefixMatch[1];
+    const fileSuffix = _agentFilePrefixMatch[2]; // "/path/to/file.py" or undefined
+    const filePath = fileSuffix ? decodeURIComponent(fileSuffix.slice(1)) : null; // strip leading /
+
+    const agentExists = getAgent(agentId);
+    if (!agentExists) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "agent not found" }));
+      return;
+    }
+
+    if (req.method === "PUT" && filePath) {
+      const raw = await readBody(req);
+      let content;
+      const ct = (req.headers["content-type"] || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        try { content = JSON.parse(raw).content; } catch {}
+      }
+      if (content === undefined) content = raw; // raw text fallback
+      if (!content && content !== "") {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "content required" }));
+        return;
+      }
+      try {
+        const file = upsertAgentFile(agentId, filePath, content);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, path: file.path, size_bytes: file.size_bytes }));
+      } catch (e) {
+        res.writeHead(e.status || 400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && !filePath) {
+      const files = listAgentFiles(agentId);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ files }));
+      return;
+    }
+
+    if (req.method === "GET" && filePath) {
+      const file = getAgentFile(agentId, filePath);
+      if (!file) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "file not found" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end(file.content);
+      return;
+    }
+
+    if (req.method === "DELETE" && filePath) {
+      deleteAgentFile(agentId, filePath);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (req.method === "DELETE" && !filePath) {
+      deleteAllAgentFiles(agentId);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
   }
 
   // Everything else (/event, /session/:id/*, ...) — transparent passthrough.
