@@ -90,6 +90,7 @@ function initAgentSchema(db) {
     "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'paused'",
     "ALTER TABLE agents ADD COLUMN description TEXT",
     "ALTER TABLE agents ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude-code'",
+    "ALTER TABLE agents ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'",
   ];
   for (const sql of _newAgentCols) {
     try { db.exec(sql); } catch {}
