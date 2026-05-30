@@ -1,4 +1,4 @@
-import type { HarnessMessage, OpencodeSession } from "./types";
+import type { Agent, HarnessMessage, OpencodeSession } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -322,4 +322,31 @@ export function subscribeEvents(opts: {
       /* noop */
     }
   };
+}
+
+// ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
+// listAgents() above reads the saved-agents store (/agents). These write/edit
+// against the richer /api/agents endpoints.
+export async function createAgent(
+  input: { name: string; owner_id: string } & Partial<Agent>,
+): Promise<Agent> {
+  const res = await req("/api/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function updateAgent(id: string, fields: Partial<Agent>): Promise<Agent> {
+  const res = await req(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
