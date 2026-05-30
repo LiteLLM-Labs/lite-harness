@@ -1138,7 +1138,7 @@ async function buildCapabilities() {
     available: true,
     min_interval_minutes: Number(process.env.SCHEDULER_MIN_INTERVAL_MINUTES ?? 1),
     cron_supported: true,
-    manual_trigger: false,
+    manual_trigger: true,
   };
 
   let sandbox = null;
@@ -1156,7 +1156,17 @@ async function buildCapabilities() {
     vault,
     scheduler,
     ...(sandbox && { sandbox }),
-    agents: {},
+    agents: {
+      create:   "POST /api/agents",
+      list:     "GET /api/agents?owner_id={uid}",
+      get:      "GET /api/agents/{id}",
+      update:   "PATCH /api/agents/{id}",
+      delete:   "DELETE /api/agents/{id}",
+      trigger:  "POST /api/agents/{id}/run",
+      pause:    "POST /api/agents/{id}/pause",
+      resume:   "POST /api/agents/{id}/resume",
+      runs:     "GET /api/agents/{id}/runs",
+    },
   };
 }
 
