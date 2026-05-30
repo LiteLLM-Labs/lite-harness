@@ -175,6 +175,7 @@ COPY --chown=sandbox:sandbox harnesses/agent-plugin.mjs /opt/lap/agent-plugin.mj
 COPY --chown=sandbox:sandbox mcp/index.mjs /opt/mcp/index.mjs
 COPY --chown=sandbox:sandbox mcp/server.mjs /opt/mcp/server.mjs
 COPY --chown=sandbox:sandbox mcp/tools.mjs /opt/mcp/tools.mjs
+COPY --chown=sandbox:sandbox mcp/approvals.mjs /opt/mcp/approvals.mjs
 COPY --chown=sandbox:sandbox mcp/agents/store.mjs /opt/mcp/agents/store.mjs
 
 RUN ln -s /opt/lap /opt/harnesses
