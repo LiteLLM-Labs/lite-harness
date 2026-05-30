@@ -63,7 +63,10 @@ const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "s
 // provider config from opencode.json (explicit baseURL/apiKey), not env vars.
 // ---------------------------------------------------------------------------
 if (process.env.LITELLM_API_BASE) {
-  process.env.ANTHROPIC_BASE_URL = process.env.LITELLM_API_BASE.replace(/\/+$/, "");
+  // The Anthropic/claude-code SDK appends "/v1/messages" to ANTHROPIC_BASE_URL, so
+  // strip any trailing "/v1" from LITELLM_API_BASE to avoid a doubled "/v1/v1/messages"
+  // (which the gateway 404s). opencode keeps the "/v1" base via opencode.json.
+  process.env.ANTHROPIC_BASE_URL = process.env.LITELLM_API_BASE.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 if (process.env.LITELLM_API_KEY) {
   process.env.ANTHROPIC_API_KEY = process.env.LITELLM_API_KEY;
