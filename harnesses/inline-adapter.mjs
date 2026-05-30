@@ -187,7 +187,14 @@ async function callPromptAsync(sessionId, prompt) {
     return codexRunTurn(cs, prompt);
   }
   // opencode — send via HTTP to the child process
-  const body = JSON.stringify({ parts: [{ type: "text", text: prompt }] });
+  // Include pinned model so the child doesn't fall back to anthropic/* (the boot_model
+  // from /v1/models which resolves to an unavailable model on this account).
+  const pinnedProvider = process.env.PROVIDER_NAME || "litellm";
+  const pinnedModel = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
+  const body = JSON.stringify({
+    parts: [{ type: "text", text: prompt }],
+    model: { providerID: pinnedProvider, modelID: pinnedModel },
+  });
   return new Promise((resolve, reject) => {
     const req = http.request(
       `${UP}/session/${sessionId}/prompt_async`,
@@ -853,6 +860,66 @@ function materializeSkills(files) {
   return written;
 }
 
+// Pull `name:` / `description:` out of a SKILL.md YAML frontmatter block.
+// Handles inline values and folded/literal block scalars (`>`/`|`), where the
+// value continues on following indented lines.
+function parseSkillFrontmatter(md) {
+  const m = md.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!m) return {};
+  const lines = m[1].split("\n");
+  const out = {};
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^(name|description):\s*(.*?)\s*$/);
+    if (!kv) continue;
+    const key = kv[1];
+    let val = kv[2];
+    if (val === ">" || val === "|" || val === ">-" || val === "|-") {
+      // Block scalar: gather subsequent indented lines, join on spaces.
+      const block = [];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
+        block.push(lines[++i].trim());
+      }
+      val = block.join(" ");
+    } else {
+      val = val.replace(/^["']|["']$/g, "");
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+// List the skills available on this server (the shared ~/.claude/skills catalog).
+// Returns [{ slug, name, description }] sorted by slug.
+function listPlatformSkills() {
+  let entries = [];
+  try { entries = fs.readdirSync(SKILLS_ROOT, { withFileTypes: true }); } catch { return []; }
+  const skills = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const slug = e.name;
+    const skillMd = path.join(SKILLS_ROOT, slug, "SKILL.md");
+    let meta = {};
+    try { meta = parseSkillFrontmatter(fs.readFileSync(skillMd, "utf8")); } catch { continue; }
+    skills.push({ slug, name: meta.name || slug, description: meta.description || "" });
+  }
+  return skills.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+// Build a system-prompt note describing the skills attached to an agent so the
+// model knows they exist and when to invoke them. Returns "" if none resolve.
+function skillsPromptNote(slugs) {
+  if (!Array.isArray(slugs) || slugs.length === 0) return "";
+  const catalog = new Map(listPlatformSkills().map((s) => [s.slug, s]));
+  const lines = [];
+  for (const slug of slugs) {
+    const s = catalog.get(slug);
+    if (!s) continue;
+    lines.push(`- ${s.slug}: ${s.description || s.name}`.trim());
+  }
+  if (!lines.length) return "";
+  return `\n\nAvailable skills (invoke when relevant):\n${lines.join("\n")}`;
+}
+
 function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
 }
@@ -1423,12 +1490,19 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
         return;
       }
-      systemPromptOverride = savedAgent ? savedAgent.system_prompt : apiAgent.prompt;
+      // The /api/agents store can attach skills; surface them in the prompt so
+      // the model knows to invoke them (the files live in the shared catalog on
+      // disk, where opencode/cc discover them).
+      systemPromptOverride = savedAgent
+        ? savedAgent.system_prompt
+        : (apiAgent.prompt || apiAgent.system || "") + skillsPromptNote(apiAgent.skills);
       body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
       // Honor the agent's base harness. The MCP store calls it base_agent; the
-      // /api/agents store calls it harness. Default to opencode (always available)
-      // rather than cc, which needs the claude-code SDK to be installed.
-      storedBaseAgent = (savedAgent && savedAgent.base_agent) || (apiAgent && apiAgent.harness) || "opencode";
+      // /api/agents store calls it harness ("claude-code" -> "cc"). Default to
+      // opencode (always available) rather than cc, which needs the claude-code
+      // SDK to be installed.
+      const rawHarness = (savedAgent && savedAgent.base_agent) || (apiAgent && apiAgent.harness) || "opencode";
+      storedBaseAgent = rawHarness === "claude-code" ? "cc" : rawHarness;
     }
     const resolvedAgent = builtin ?? storedBaseAgent ?? "cc";
 
@@ -1942,6 +2016,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Skills catalog ────────────────────────────────────────────────────────────
+  // GET /api/skills — list the skills available on this server so the UI can
+  // offer them when attaching skills to an agent.
+  if (p === "/api/skills" && req.method === "GET") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ skills: listPlatformSkills() }));
+    return;
+  }
+
   // ── Agent CRUD + run routes ───────────────────────────────────────────────────
   const _agentRunLogsMatch = p.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/logs$/);
   const _agentRunsMatch    = p.match(/^\/api\/agents\/([^/]+)\/runs$/);
@@ -1965,6 +2048,7 @@ const server = http.createServer(async (req, res) => {
       config = {},
       model = "claude-sonnet-4-6",
       system = "",
+      skills = [],
     } = body;
     if (!name || !owner_id) {
       res.writeHead(400, { "content-type": "application/json" });
@@ -2008,6 +2092,7 @@ const server = http.createServer(async (req, res) => {
       vault_keys, setup_commands, max_runtime_minutes, on_failure,
       config, owner_id, status: "paused", description: description || null,
       harness: agentHarness,
+      skills: Array.isArray(skills) ? skills : [],
     });
     const host = req.headers.host || "localhost";
     res.writeHead(201, { "content-type": "application/json" });
@@ -2174,6 +2259,11 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: e.message }));
       return;
     }
+
+    // Surface attached skills to the agent: they already live on disk in the
+    // shared catalog (so opencode/cc discover them), and we append a note to
+    // the prompt so the model knows which to invoke.
+    resolvedPrompt += skillsPromptNote(agentDef.skills);
 
     // Create ephemeral session for this run using the agent's configured harness
     const runHarness = agentDef.harness === "claude-code" ? "cc" : agentDef.harness === "github-copilot" ? "github-copilot" : agentDef.harness === "codex" ? "codex" : "opencode";
