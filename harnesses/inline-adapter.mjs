@@ -2136,14 +2136,37 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: "claude-code SDK not available" }));
       return;
     }
-    const runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    let runSid;
     const runNow = Date.now();
-    ccSessions.set(runSid, {
-      id: runSid, title: `agent-run-${agentId}`,
-      time: { created: runNow }, harness: agentDef.harness || "claude-code",
-      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
-    });
-    sessionHarness.set(runSid, runHarness);
+    if (runHarness === "opencode") {
+      // Create the session in the opencode child first so prompt_async finds it.
+      try {
+        const ocSessResp = await new Promise((resolve, reject) => {
+          let data = "";
+          const r = http.request(`${UP}/session`, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+            res.on("data", c => data += c);
+            res.on("end", () => { try { resolve(JSON.parse(data)); } catch { reject(new Error("bad json from child")); } });
+          });
+          r.on("error", reject);
+          r.end(JSON.stringify({ title: `agent-run-${agentId}` }));
+        });
+        runSid = ocSessResp.id;
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `failed to create opencode session: ${e.message}` }));
+        return;
+      }
+      sessionHarness.set(runSid, "opencode");
+    } else {
+      runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      ccSessions.set(runSid, {
+        id: runSid, title: `agent-run-${agentId}`,
+        time: { created: runNow }, harness: agentDef.harness || "claude-code",
+        sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+      });
+      sessionAgent.set(runSid, runHarness);
+      sessionHarness.set(runSid, runHarness);
+    }
     persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
 
     const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
