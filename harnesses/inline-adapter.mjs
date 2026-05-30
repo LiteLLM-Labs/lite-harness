@@ -34,6 +34,7 @@ import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
+import { createSkill, listSkills, getSkill, getSkillsByIds, updateSkill, deleteSkill } from "./skills-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
 import {
   hydrateFromDb,
@@ -124,6 +125,32 @@ async function resolveTemplates(prompt, userId, config, vaultBackend) {
     result = result.split(placeholder).join(String(config[key]));
   }
   return result;
+}
+
+// Build the effective system prompt for an agent run, composing three layers:
+//   1. A default preamble exposing the *skills* concept (a catalog of every
+//      skill on the platform), so any agent knows what's available and can ask
+//      to use more.
+//   2. The full content of each skill attached to the agent (skill_ids).
+//   3. The agent's own `system` prompt.
+// `attachedSkills` / `allSkills` are rows from skills-store.
+function composeAgentSystem(agentSystem, attachedSkills, allSkills) {
+  const parts = [];
+  const catalog = (allSkills || [])
+    .map((s) => `- ${s.name} (${s.id})${s.description ? `: ${s.description}` : ""}`)
+    .join("\n");
+  parts.push(
+    "## Skills available on this platform\n" +
+      "Skills are reusable capability playbooks. The platform currently has:\n" +
+      (catalog || "(none yet)") +
+      "\n\nThe skills attached to you are included in full below — follow them. " +
+      "To list the latest catalog at runtime, GET /api/skills on the harness.",
+  );
+  for (const sk of attachedSkills || []) {
+    parts.push(`## Skill: ${sk.name}\n${sk.content}`);
+  }
+  if (agentSystem && agentSystem.trim()) parts.push(agentSystem.trim());
+  return parts.join("\n\n---\n\n");
 }
 
 // Load the claude-code SDK from ./claude-code/node_modules/ relative to this
@@ -678,7 +705,10 @@ async function ccRunTurn(s, userText, modelId) {
       abortController: ac,
       disallowedTools: ["AskUserQuestion"],
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
-      ...(s.systemPrompt ? { system: s.systemPrompt } : {}),
+      // The claude-code SDK ignores `system`; it appends extra system-prompt
+      // text via `appendSystemPrompt`. This is how an agent's skills + system
+      // prompt actually reach the model.
+      ...(s.systemPrompt ? { appendSystemPrompt: s.systemPrompt } : {}),
       mcpServers: [{ type: "http", url: PLATFORM_MCP_URL }],
     }});
     for await (const m of stream) {
@@ -1836,6 +1866,58 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Skill CRUD routes ─────────────────────────────────────────────────────────
+  // Skills are reusable markdown capability docs, attached to agents via skill_ids.
+  const _skillIdMatch = p.match(/^\/api\/skills\/([^/]+)$/);
+  const _skillsMatch  = p === "/api/skills";
+
+  if (_skillsMatch && req.method === "POST") {
+    const raw = await readBody(req);
+    let b = {}; try { b = JSON.parse(raw || "{}"); } catch {}
+    const { name, content, description = null, owner_id = null } = b;
+    if (!name || !content) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "name and content required" }));
+      return;
+    }
+    const skill = createSkill({ name, content, description, owner_id });
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify(skill));
+    return;
+  }
+
+  if (_skillsMatch && req.method === "GET") {
+    const ownerId = url.searchParams.get("owner_id");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ skills: listSkills(ownerId || undefined) }));
+    return;
+  }
+
+  if (_skillIdMatch && req.method === "GET") {
+    const skill = getSkill(_skillIdMatch[1]);
+    if (!skill) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(skill));
+    return;
+  }
+
+  if (_skillIdMatch && req.method === "PATCH") {
+    if (!getSkill(_skillIdMatch[1])) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    const raw = await readBody(req);
+    let f = {}; try { f = JSON.parse(raw || "{}"); } catch {}
+    updateSkill(_skillIdMatch[1], f);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(getSkill(_skillIdMatch[1])));
+    return;
+  }
+
+  if (_skillIdMatch && req.method === "DELETE") {
+    deleteSkill(_skillIdMatch[1]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // ── Agent CRUD + run routes ───────────────────────────────────────────────────
   const _agentRunLogsMatch = p.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/logs$/);
   const _agentRunsMatch    = p.match(/^\/api\/agents\/([^/]+)\/runs$/);
@@ -1859,6 +1941,7 @@ const server = http.createServer(async (req, res) => {
       config = {},
       model = "claude-sonnet-4-6",
       system = "",
+      skill_ids = [],
     } = body;
     if (!name || !owner_id) {
       res.writeHead(400, { "content-type": "application/json" });
@@ -1902,6 +1985,7 @@ const server = http.createServer(async (req, res) => {
       vault_keys, setup_commands, max_runtime_minutes, on_failure,
       config, owner_id, status: "paused", description: description || null,
       harness: agentHarness,
+      skill_ids: Array.isArray(skill_ids) ? skill_ids : [],
     });
     const host = req.headers.host || "localhost";
     res.writeHead(201, { "content-type": "application/json" });
@@ -2031,14 +2115,21 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Resolve prompt templates ({{vault.X}} and {{config.X}})
+    // Compose the effective system prompt: skills catalog + attached skills +
+    // the agent's own system. The user message is the agent's `prompt` (task).
+    const attachedSkills = getSkillsByIds(agentDef.skill_ids || []);
+    const allSkills = listSkills();
+    let effectiveSystem = composeAgentSystem(agentDef.system, attachedSkills, allSkills);
+
+    // Resolve prompt templates ({{vault.X}} and {{config.X}}) in both the task
+    // prompt and the composed system prompt.
     const mergedConfig = Object.assign({}, agentDef.config || {}, configOverrides);
-    let resolvedPrompt = agentDef.prompt || agentDef.system || "";
+    let resolvedPrompt = (agentDef.prompt && agentDef.prompt.trim()) ? agentDef.prompt : "Proceed with your task.";
     try {
       if (vaultPlugin && vaultPlugin.backend) {
-        resolvedPrompt = await resolveTemplates(
-          resolvedPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend
-        );
+        const uid = agentDef.owner_id || "default";
+        resolvedPrompt = await resolveTemplates(resolvedPrompt, uid, mergedConfig, vaultPlugin.backend);
+        effectiveSystem = await resolveTemplates(effectiveSystem, uid, mergedConfig, vaultPlugin.backend);
       }
     } catch (e) {
       res.writeHead(422, { "content-type": "application/json" });
@@ -2058,6 +2149,7 @@ const server = http.createServer(async (req, res) => {
       id: runSid, title: `agent-run-${agentId}`,
       time: { created: runNow }, harness: "claude-code",
       sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+      systemPrompt: effectiveSystem || null,   // skills catalog + attached skills + agent.system
     });
     sessionHarness.set(runSid, "cc");
     persistSession({ id: runSid, harness: "cc", title: `agent-run-${agentId}`, createdAt: runNow });
