@@ -97,6 +97,33 @@ function initAgentSchema(db) {
   }
 }
 
+function initInboxSchema(db) {
+  // Unified agent-inbox items. Two kinds share one table:
+  //   kind='approval' — a human-in-the-loop tool-call gate (request_human_approval).
+  //                     status: 'pending' → 'accepted' | 'rejected'.
+  //   kind='issue'    — an informational issue an agent filed for a human to read.
+  //                     status: 'open' → 'resolved'.
+  // The live blocking promise for an approval lives in mcp/approvals.mjs; this
+  // table is the durable record so the Inbox can show resolved history too.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inbox_items (
+      id          TEXT PRIMARY KEY,
+      kind        TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      session_id  TEXT,
+      agent       TEXT,
+      body        TEXT,
+      args_json   TEXT,
+      status      TEXT NOT NULL,
+      feedback    TEXT,
+      created_at  INTEGER NOT NULL,
+      resolved_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS inbox_items_status_created
+      ON inbox_items(status, created_at);
+  `);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -162,6 +189,7 @@ export function initDb(dbPath) {
   try { _db.exec("ALTER TABLE loops ADD COLUMN tz TEXT"); } catch {}
   initSessionSchema(_db);
   initAgentSchema(_db);
+  initInboxSchema(_db);
   try { _db.exec("ALTER TABLE sessions ADD COLUMN tz TEXT"); } catch {}
 
   return _db;
