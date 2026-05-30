@@ -73,6 +73,25 @@ function initAgentSchema(db) {
       created_at       INTEGER NOT NULL
     )
   `);
+
+  // Migrate new columns — SQLite has no ADD COLUMN IF NOT EXISTS; swallow errors.
+  const _newAgentCols = [
+    "ALTER TABLE agents ADD COLUMN prompt TEXT",
+    "ALTER TABLE agents ADD COLUMN cron TEXT",
+    "ALTER TABLE agents ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'",
+    "ALTER TABLE agents ADD COLUMN vault_keys TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE agents ADD COLUMN setup_commands TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE agents ADD COLUMN max_runtime_minutes INTEGER NOT NULL DEFAULT 30",
+    "ALTER TABLE agents ADD COLUMN on_failure TEXT NOT NULL DEFAULT 'pause_and_notify'",
+    "ALTER TABLE agents ADD COLUMN config TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE agents ADD COLUMN owner_id TEXT",
+    "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'paused'",
+    "ALTER TABLE agents ADD COLUMN description TEXT",
+    "ALTER TABLE agents ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude-code'",
+  ];
+  for (const sql of _newAgentCols) {
+    try { db.exec(sql); } catch {}
+  }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -120,6 +139,19 @@ export function initDb(dbPath) {
       iteration_count  INTEGER NOT NULL DEFAULT 0,
       next_run_at      INTEGER NOT NULL,
       created_at       INTEGER NOT NULL
+    )
+  `);
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id               TEXT PRIMARY KEY,
+      agent_id         TEXT NOT NULL,
+      session_id       TEXT,
+      status           TEXT NOT NULL DEFAULT 'starting',
+      started_at       INTEGER NOT NULL,
+      finished_at      INTEGER,
+      summary          TEXT,
+      error            TEXT,
+      config_overrides TEXT NOT NULL DEFAULT '{}'
     )
   `);
   initSessionSchema(_db);
@@ -211,4 +243,49 @@ export function listLoops() {
 export function getLoop(id) {
   assertDb();
   return _db.prepare("SELECT * FROM loops WHERE id = ?").get(id) ?? null;
+}
+
+// ── Agent Run CRUD ─────────────────────────────────────────────────────────────
+
+function generateRunId() {
+  return "run_" + Math.random().toString(36).slice(2, 10);
+}
+
+export function createAgentRun({ agentId, sessionId = null, configOverrides = {} }) {
+  assertDb();
+  const id = generateRunId();
+  const now = Date.now();
+  _db.prepare(`
+    INSERT INTO agent_runs (id, agent_id, session_id, status, started_at, config_overrides)
+    VALUES (?, ?, ?, 'starting', ?, ?)
+  `).run(id, agentId, sessionId, now, JSON.stringify(configOverrides));
+  return getAgentRun(id);
+}
+
+export function getAgentRun(id) {
+  assertDb();
+  const row = _db.prepare("SELECT * FROM agent_runs WHERE id = ?").get(id);
+  if (!row) return null;
+  return { ...row, config_overrides: JSON.parse(row.config_overrides || '{}') };
+}
+
+export function updateAgentRun(id, { status, finishedAt, summary, error, sessionId } = {}) {
+  assertDb();
+  const fields = [];
+  const vals = [];
+  if (status !== undefined) { fields.push("status = ?"); vals.push(status); }
+  if (finishedAt !== undefined) { fields.push("finished_at = ?"); vals.push(finishedAt); }
+  if (summary !== undefined) { fields.push("summary = ?"); vals.push(summary); }
+  if (error !== undefined) { fields.push("error = ?"); vals.push(error); }
+  if (sessionId !== undefined) { fields.push("session_id = ?"); vals.push(sessionId); }
+  if (!fields.length) return;
+  vals.push(id);
+  _db.prepare(`UPDATE agent_runs SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
+}
+
+export function listAgentRuns(agentId, limit = 10) {
+  assertDb();
+  return _db.prepare("SELECT * FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC LIMIT ?")
+    .all(agentId, Math.min(limit, 100))
+    .map(row => ({ ...row, config_overrides: JSON.parse(row.config_overrides || '{}') }));
 }
