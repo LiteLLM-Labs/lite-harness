@@ -211,7 +211,7 @@ export default function AgentsPage() {
               <Card
                 key={String(ag.id)}
                 className="p-4 flex items-start justify-between gap-4 cursor-pointer hover:bg-muted/40 transition-colors"
-                onClick={() => router.push(`/agents/${encodeURIComponent(ag.id)}`)}
+                onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(ag.id)}`)}
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
