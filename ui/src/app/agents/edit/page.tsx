@@ -1,7 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -20,8 +21,10 @@ interface FormState {
   model: string;
 }
 
-export default function AgentEditPage({ id }: { id: string }) {
+function AgentEdit() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const id = decodeURIComponent(searchParams.get("id") ?? "");
 
   const [form, setForm] = useState<FormState>({ name: "", description: "", prompt: "", model: "" });
   const [models, setModels] = useState<string[]>([]);
@@ -31,15 +34,11 @@ export default function AgentEditPage({ id }: { id: string }) {
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!id) return;
     (async () => {
       try {
         const [ag, modelList] = await Promise.all([getAgent(id), listModels()]);
-        setForm({
-          name: ag.name ?? "",
-          description: ag.description ?? "",
-          prompt: ag.prompt ?? "",
-          model: ag.model ?? "",
-        });
+        setForm({ name: ag.name ?? "", description: ag.description ?? "", prompt: ag.prompt ?? "", model: ag.model ?? "" });
         setModels(modelList);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -60,7 +59,7 @@ export default function AgentEditPage({ id }: { id: string }) {
         prompt: form.prompt,
         ...(form.model ? { model: form.model } : {}),
       });
-      router.push(`/agents/${encodeURIComponent(id)}`);
+      router.push(`/agents/detail/?id=${encodeURIComponent(id)}`);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,91 +73,45 @@ export default function AgentEditPage({ id }: { id: string }) {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => router.push(`/agents/${encodeURIComponent(id)}`)}
-              className="gap-1.5 text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="size-3.5" />
-              Agent
+            <Button size="sm" variant="ghost"
+              onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(id)}`)}
+              className="gap-1.5 text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="size-3.5" />Agent
             </Button>
             <span className="text-muted-foreground">/</span>
             <span className="text-sm font-semibold">Edit</span>
           </div>
           <ThemeToggle />
         </header>
-
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-2xl mx-auto px-4 py-8">
-            {error && (
-              <Card className="border-destructive p-3 mb-6">
-                <p className="text-sm text-destructive">{error}</p>
-              </Card>
-            )}
-            {loading ? (
-              <div className="text-sm text-muted-foreground">Loading…</div>
-            ) : (
+            {error && <Card className="border-destructive p-3 mb-6"><p className="text-sm text-destructive">{error}</p></Card>}
+            {loading ? <div className="text-sm text-muted-foreground">Loading…</div> : (
               <div className="flex flex-col gap-6">
                 <h1 className="text-lg font-semibold">Edit agent</h1>
-
                 <div className="flex flex-col gap-4">
                   <div className="grid gap-1.5">
                     <Label htmlFor="ag-name">Name</Label>
-                    <Input
-                      id="ag-name"
-                      value={form.name}
-                      onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      placeholder="security-reviewer"
-                    />
+                    <Input id="ag-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="security-reviewer" />
                   </div>
-
                   <div className="grid gap-1.5">
                     <Label htmlFor="ag-desc">Description</Label>
-                    <Input
-                      id="ag-desc"
-                      value={form.description}
-                      onChange={(e) => setForm({ ...form, description: e.target.value })}
-                      placeholder="What this agent does"
-                    />
+                    <Input id="ag-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="What this agent does" />
                   </div>
-
                   <div className="grid gap-1.5">
                     <Label>Model</Label>
-                    <ModelSelect
-                      value={form.model}
-                      models={models}
-                      onValueChange={(v) => setForm({ ...form, model: v })}
-                    />
+                    <ModelSelect value={form.model} models={models} onValueChange={(v) => setForm({ ...form, model: v })} />
                   </div>
-
                   <div className="grid gap-1.5">
                     <Label htmlFor="ag-prompt">System prompt</Label>
-                    <Textarea
-                      id="ag-prompt"
-                      value={form.prompt}
-                      onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-                      className="font-mono text-xs min-h-[320px] resize-y"
-                      placeholder="You are a meticulous security reviewer…"
-                    />
+                    <Textarea id="ag-prompt" value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+                      className="font-mono text-xs min-h-[320px] resize-y" placeholder="You are a meticulous security reviewer…" />
                   </div>
-
-                  {formError && (
-                    <p className="text-sm text-destructive">{formError}</p>
-                  )}
+                  {formError && <p className="text-sm text-destructive">{formError}</p>}
                 </div>
-
                 <div className="flex items-center gap-2 pt-2">
-                  <Button onClick={save} disabled={saving}>
-                    {saving ? "Saving…" : "Save changes"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => router.push(`/agents/${encodeURIComponent(id)}`)}
-                    disabled={saving}
-                  >
-                    Cancel
-                  </Button>
+                  <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
+                  <Button variant="outline" onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(id)}`)} disabled={saving}>Cancel</Button>
                 </div>
               </div>
             )}
@@ -167,4 +120,8 @@ export default function AgentEditPage({ id }: { id: string }) {
       </div>
     </div>
   );
+}
+
+export default function AgentEditPage() {
+  return <Suspense><AgentEdit /></Suspense>;
 }

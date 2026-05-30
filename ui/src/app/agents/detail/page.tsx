@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Brain,
@@ -19,19 +19,19 @@ import {
 } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  getAgent,
-  deleteAgent,
   createSession,
-  listSessions,
-  listMemory,
-  storeMemory,
+  deleteAgent,
   deleteMemory,
+  getAgent,
+  listMemory,
+  listSessions,
+  storeMemory,
 } from "@/lib/api";
 import type { Agent, Memory, OpencodeSession } from "@/lib/types";
 
@@ -63,8 +63,10 @@ function formatMemoryDate(ms: number): string {
 
 type MemoryFilter = "all" | "always" | "standard";
 
-export default function AgentDetailPage({ id }: { id: string }) {
+function AgentDetail() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const id = decodeURIComponent(searchParams.get("id") ?? "");
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [sessions, setSessions] = useState<OpencodeSession[]>([]);
@@ -80,6 +82,7 @@ export default function AgentDetailPage({ id }: { id: string }) {
   const [loading, setLoading] = useState(true);
 
   const loadMemories = async (agentId = id) => {
+    if (!agentId) return;
     setMemoryLoading(true);
     try {
       const rows = await listMemory(agentId);
@@ -93,6 +96,7 @@ export default function AgentDetailPage({ id }: { id: string }) {
   };
 
   useEffect(() => {
+    if (!id) return;
     (async () => {
       try {
         const [ag, allSessions, memoryRows] = await Promise.all([
@@ -111,6 +115,24 @@ export default function AgentDetailPage({ id }: { id: string }) {
     })();
   }, [id]);
 
+  const visibleMemories = useMemo(() => {
+    const q = memoryQuery.trim().toLowerCase();
+    return memories
+      .filter((memory) => {
+        if (memoryFilter === "always" && !isAlwaysOn(memory)) return false;
+        if (memoryFilter === "standard" && isAlwaysOn(memory)) return false;
+        if (!q) return true;
+        return memory.key.toLowerCase().includes(q) || memory.value.toLowerCase().includes(q);
+      })
+      .sort((a, b) => {
+        const pinDiff = Number(isAlwaysOn(b)) - Number(isAlwaysOn(a));
+        return pinDiff || b.updated_at - a.updated_at;
+      });
+  }, [memories, memoryFilter, memoryQuery]);
+
+  const alwaysOnCount = memories.filter(isAlwaysOn).length;
+  const selectedMemories = memories.filter((memory) => selectedKeys.has(memory.key));
+
   const handleDelete = async () => {
     if (!agent) return;
     if (!confirm(`Delete agent "${agent.name}"?`)) return;
@@ -122,26 +144,15 @@ export default function AgentDetailPage({ id }: { id: string }) {
     }
   };
 
-  const visibleMemories = useMemo(() => {
-    const q = memoryQuery.trim().toLowerCase();
-    return memories
-      .filter((memory) => {
-        if (memoryFilter === "always" && !isAlwaysOn(memory)) return false;
-        if (memoryFilter === "standard" && isAlwaysOn(memory)) return false;
-        if (!q) return true;
-        return (
-          memory.key.toLowerCase().includes(q) ||
-          memory.value.toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => {
-        const pinDiff = Number(isAlwaysOn(b)) - Number(isAlwaysOn(a));
-        return pinDiff || b.updated_at - a.updated_at;
-      });
-  }, [memories, memoryFilter, memoryQuery]);
-
-  const alwaysOnCount = memories.filter(isAlwaysOn).length;
-  const selectedMemories = memories.filter((memory) => selectedKeys.has(memory.key));
+  const handleStartSession = async () => {
+    if (!agent) return;
+    try {
+      const sess = await createSession(agent.name, id);
+      router.push(`/chat/?id=${encodeURIComponent(sess.id)}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const toggleSelected = (key: string) => {
     setSelectedKeys((prev) => {
@@ -154,11 +165,7 @@ export default function AgentDetailPage({ id }: { id: string }) {
 
   const beginEditMemory = (memory: Memory) => {
     setEditingKey(memory.key);
-    setEditDraft({
-      key: memory.key,
-      value: memory.value,
-      alwaysOn: isAlwaysOn(memory),
-    });
+    setEditDraft({ key: memory.key, value: memory.value, alwaysOn: isAlwaysOn(memory) });
   };
 
   const saveMemoryDraft = async () => {
@@ -222,11 +229,10 @@ export default function AgentDetailPage({ id }: { id: string }) {
   };
 
   const bulkSetAlwaysOn = async (alwaysOn: boolean) => {
-    const rows = selectedMemories;
-    if (rows.length === 0) return;
+    if (selectedMemories.length === 0) return;
     try {
       const updated = await Promise.all(
-        rows.map((memory) => storeMemory(id, memory.key, memory.value, alwaysOn)),
+        selectedMemories.map((memory) => storeMemory(id, memory.key, memory.value, alwaysOn)),
       );
       setMemories((prev) =>
         prev.map((memory) => updated.find((row) => row.key === memory.key) ?? memory),
@@ -250,21 +256,11 @@ export default function AgentDetailPage({ id }: { id: string }) {
     }
   };
 
-  const handleStartSession = async () => {
-    if (!agent) return;
-    try {
-      const sess = await createSession(agent.name, id);
-      router.push(`/chat/?id=${encodeURIComponent(sess.id)}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   return (
     <div className="flex h-screen bg-background text-foreground">
       <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
           <div className="flex items-center gap-2">
             <Button
               size="sm"
@@ -278,7 +274,7 @@ export default function AgentDetailPage({ id }: { id: string }) {
             {agent && (
               <>
                 <span className="text-muted-foreground">/</span>
-                <span className="text-sm font-semibold truncate max-w-[240px]">{agent.name}</span>
+                <span className="max-w-[240px] truncate text-sm font-semibold">{agent.name}</span>
               </>
             )}
           </div>
@@ -292,7 +288,7 @@ export default function AgentDetailPage({ id }: { id: string }) {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => router.push(`/agents/${encodeURIComponent(id)}/edit`)}
+                  onClick={() => router.push(`/agents/edit/?id=${encodeURIComponent(id)}`)}
                 >
                   <Pencil className="size-3.5" />
                   Edit
@@ -307,24 +303,21 @@ export default function AgentDetailPage({ id }: { id: string }) {
         </header>
 
         <main className="flex-1 overflow-y-auto">
-          <div className="max-w-4xl mx-auto px-4 py-6 flex flex-col gap-6">
+          <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6">
             {error && (
               <Card className="border-destructive p-3">
                 <p className="text-sm text-destructive">{error}</p>
               </Card>
             )}
-            {loading && (
-              <div className="text-sm text-muted-foreground">Loading…</div>
-            )}
+            {loading && <div className="text-sm text-muted-foreground">Loading...</div>}
 
             {agent && (
               <>
-                {/* Hero */}
                 <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-xl font-semibold">{agent.name}</h1>
                     {agent.model && (
-                      <span className="text-xs font-mono bg-muted text-muted-foreground rounded px-2 py-0.5">
+                      <span className="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
                         {String(agent.model)}
                       </span>
                     )}
@@ -333,40 +326,39 @@ export default function AgentDetailPage({ id }: { id: string }) {
                     <p className="text-sm text-muted-foreground">{agent.description}</p>
                   )}
                   {agent.created_at && (
-                    <p className="text-xs text-muted-foreground/60 flex items-center gap-1 mt-1">
+                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground/60">
                       <Clock className="size-3" />
                       Created {timeAgo(Number(agent.created_at) * 1000)}
                     </p>
                   )}
                 </div>
 
-                {/* Configuration */}
                 <section>
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Configuration
                   </h2>
                   <Card className="p-4">
                     <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[140px_1fr]">
-                      <dt className="text-muted-foreground font-medium">ID</dt>
-                      <dd className="font-mono text-xs text-muted-foreground break-all">{agent.id}</dd>
+                      <dt className="font-medium text-muted-foreground">ID</dt>
+                      <dd className="break-all font-mono text-xs text-muted-foreground">{agent.id}</dd>
 
                       {agent.model && (
                         <>
-                          <dt className="text-muted-foreground font-medium">Model</dt>
+                          <dt className="font-medium text-muted-foreground">Model</dt>
                           <dd className="font-mono text-xs">{String(agent.model)}</dd>
                         </>
                       )}
 
                       {agent.owner_id && (
                         <>
-                          <dt className="text-muted-foreground font-medium">Owner</dt>
+                          <dt className="font-medium text-muted-foreground">Owner</dt>
                           <dd className="font-mono text-xs">{String(agent.owner_id)}</dd>
                         </>
                       )}
 
                       {agent.prompt && (
                         <>
-                          <dt className="text-muted-foreground font-medium pt-1">System prompt</dt>
+                          <dt className="pt-1 font-medium text-muted-foreground">System prompt</dt>
                           <dd>
                             <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
                               {String(agent.prompt)}
@@ -378,7 +370,6 @@ export default function AgentDetailPage({ id }: { id: string }) {
                   </Card>
                 </section>
 
-                {/* Memory */}
                 <section>
                   <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div>
@@ -507,7 +498,7 @@ export default function AgentDetailPage({ id }: { id: string }) {
                     </div>
 
                     {memoryLoading && memories.length === 0 ? (
-                      <div className="p-6 text-sm text-muted-foreground">Loading memories…</div>
+                      <div className="p-6 text-sm text-muted-foreground">Loading memories...</div>
                     ) : visibleMemories.length === 0 ? (
                       <div className="p-8 text-center">
                         <Brain className="mx-auto mb-3 size-7 text-muted-foreground/60" />
@@ -624,9 +615,8 @@ export default function AgentDetailPage({ id }: { id: string }) {
                   </Card>
                 </section>
 
-                {/* Sessions */}
                 <section>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="mb-2 flex items-center justify-between">
                     <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       Sessions ({sessions.length})
                     </h2>
@@ -642,15 +632,15 @@ export default function AgentDetailPage({ id }: { id: string }) {
                       {sessions.map((s) => (
                         <Card
                           key={s.id}
-                          className="px-4 py-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-muted/40 transition-colors"
+                          className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 transition-colors hover:bg-muted/40"
                           onClick={() => router.push(`/chat/?id=${encodeURIComponent(s.id)}`)}
                         >
                           <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">{s.title ?? "Untitled session"}</p>
-                            <p className="font-mono text-[10px] text-muted-foreground mt-0.5">{s.id}</p>
+                            <p className="truncate text-sm font-medium">{s.title ?? "Untitled session"}</p>
+                            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{s.id}</p>
                           </div>
                           {s.time?.created && (
-                            <span className="text-xs text-muted-foreground shrink-0">
+                            <span className="shrink-0 text-xs text-muted-foreground">
                               {timeAgo(s.time.created * 1000)}
                             </span>
                           )}
@@ -665,5 +655,13 @@ export default function AgentDetailPage({ id }: { id: string }) {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function AgentDetailPage() {
+  return (
+    <Suspense>
+      <AgentDetail />
+    </Suspense>
   );
 }

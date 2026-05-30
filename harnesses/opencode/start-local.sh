@@ -113,5 +113,6 @@ EOF
 
 echo "[start-local] wrote opencode.json to $OPENCODE_INLINE_WORKDIR"
 echo "[start-local] starting inline adapter on :${PORT}"
+echo "[start-local] open http://localhost:${PORT} in your browser (not :$((PORT + 1)) — that is the internal opencode child)"
 cd "$OPENCODE_INLINE_WORKDIR"
 exec node "$HARNESS_DIR/../inline-adapter.mjs"
