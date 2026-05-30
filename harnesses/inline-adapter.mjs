@@ -1181,11 +1181,17 @@ async function buildCapabilities() {
     sandbox = { provider: "daytona", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
   }
 
+  const { error: sbError } = buildDirectProvider();
+  const files = sbError
+    ? { available: false, reason: "no sandbox provider configured" }
+    : { available: true, ...FILE_LIMITS, sandbox_required: true };
+
   return {
     harnesses,
     mcp_servers,
     vault,
     scheduler,
+    files,
     ...(sandbox && { sandbox }),
     agents: {
       create:   "POST /api/agents",
