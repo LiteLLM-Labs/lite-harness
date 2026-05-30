@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Play, Pencil, Trash2, X, Brain } from "lucide-react";
+import { Clock, Plus, Play, Pencil, Trash2, X, Brain } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { ScheduleEditor } from "@/components/schedule-editor";
 import {
   listAgents,
   createAgent,
@@ -32,6 +33,7 @@ import {
   storeMemory,
   deleteMemory,
 } from "@/lib/api";
+import { DEFAULT_TIMEZONE, scheduleLabel } from "@/lib/schedule";
 import type { Agent, Skill, Memory } from "@/lib/types";
 
 interface FormState {
@@ -40,10 +42,21 @@ interface FormState {
   description: string;
   prompt: string;
   skill_ids: string[];
+  cron: string;
+  timezone: string;
   vault_keys: string[];
 }
 
-const EMPTY: FormState = { name: "", owner_id: "local", description: "", prompt: "", skill_ids: [], vault_keys: [] };
+const EMPTY: FormState = {
+  name: "",
+  owner_id: "local",
+  description: "",
+  prompt: "",
+  skill_ids: [],
+  cron: "",
+  timezone: DEFAULT_TIMEZONE,
+  vault_keys: [],
+};
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -158,6 +171,8 @@ export default function AgentsPage() {
       description: ag.description ?? "",
       prompt: ag.prompt ?? "",
       skill_ids: Array.isArray(ag.skill_ids) ? ag.skill_ids : [],
+      cron: ag.cron ?? "",
+      timezone: ag.timezone ?? DEFAULT_TIMEZONE,
       vault_keys: Array.isArray(ag.vault_keys) ? ag.vault_keys : [],
     });
     setFormError(null);
@@ -174,12 +189,16 @@ export default function AgentsPage() {
     setFormError(null);
     try {
       if (!form.name.trim()) throw new Error("Name is required");
+      const cron = form.cron.trim();
+      const timezone = form.timezone.trim() || "UTC";
       if (editingId) {
         await updateAgent(editingId, {
           name: form.name,
           description: form.description,
           prompt: form.prompt,
           skill_ids: form.skill_ids,
+          cron: cron || null,
+          timezone,
           vault_keys: form.vault_keys,
         });
       } else {
@@ -189,6 +208,7 @@ export default function AgentsPage() {
           description: form.description,
           prompt: form.prompt,
           skill_ids: form.skill_ids,
+          schedule: cron ? { cron, timezone } : null,
           vault_keys: form.vault_keys,
         });
       }
@@ -270,6 +290,10 @@ export default function AgentsPage() {
                   {Boolean(ag.prompt) && (
                     <p className="text-xs text-muted-foreground/70 mt-1 line-clamp-1 font-mono">{String(ag.prompt)}</p>
                   )}
+                  <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1.5">
+                    <Clock className="size-3" />
+                    <span className="font-mono text-[11px]">{scheduleLabel(ag.cron, ag.timezone)}</span>
+                  </p>
                   {Array.isArray(ag.skill_ids) && ag.skill_ids.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {ag.skill_ids.map((id) => (
@@ -342,6 +366,11 @@ export default function AgentsPage() {
                 placeholder="You are a meticulous security reviewer…"
               />
             </div>
+            <ScheduleEditor
+              cron={form.cron}
+              timezone={form.timezone}
+              onChange={(next) => setForm({ ...form, ...next })}
+            />
             <div className="grid gap-1.5">
               <Label>Skills</Label>
               {skills.length === 0 ? (

@@ -417,7 +417,7 @@ export function subscribeEvents(opts: {
 
 // ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
 export async function createAgent(
-  input: { name: string; owner_id: string } & Partial<Agent>,
+  input: { name: string; owner_id: string; schedule?: { cron: string; timezone?: string } | null } & Partial<Agent>,
 ): Promise<Agent> {
   const res = await req("/api/agents", {
     method: "POST",
