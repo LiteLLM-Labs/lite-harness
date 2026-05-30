@@ -171,12 +171,15 @@ COPY --chown=sandbox:sandbox harnesses/session-store.mjs /opt/lap/session-store.
 COPY --chown=sandbox:sandbox harnesses/agent-store.mjs /opt/lap/agent-store.mjs
 COPY --chown=sandbox:sandbox harnesses/agent-run-store.mjs /opt/lap/agent-run-store.mjs
 COPY --chown=sandbox:sandbox harnesses/agent-plugin.mjs /opt/lap/agent-plugin.mjs
+COPY --chown=sandbox:sandbox harnesses/sandbox-provider.mjs /opt/lap/sandbox-provider.mjs
+COPY --chown=sandbox:sandbox harnesses/agent-file-store.mjs /opt/lap/agent-file-store.mjs
 
 COPY --chown=sandbox:sandbox mcp/index.mjs /opt/mcp/index.mjs
 COPY --chown=sandbox:sandbox mcp/server.mjs /opt/mcp/server.mjs
 COPY --chown=sandbox:sandbox mcp/tools.mjs /opt/mcp/tools.mjs
 COPY --chown=sandbox:sandbox mcp/approvals.mjs /opt/mcp/approvals.mjs
 COPY --chown=sandbox:sandbox mcp/agents/store.mjs /opt/mcp/agents/store.mjs
+COPY --chown=sandbox:sandbox mcp/sandbox.mjs /opt/mcp/sandbox.mjs
 
 RUN ln -s /opt/lap /opt/harnesses
 
