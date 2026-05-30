@@ -105,6 +105,8 @@ function authOk(req, urlObj) {
 // cc sessions live entirely in-process.
 const sessionAgent = new Map(); // id → "opencode" | "cc"
 const sessionHarness = sessionAgent; // alias — same map, two names from merged branches
+const sessionSystemPrompt = new Map(); // sid -> system prompt for opencode agents (applied on first turn)
+const ocSysPromptDelivered = new Set();
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -1336,6 +1338,7 @@ const server = http.createServer(async (req, res) => {
     const sessionTz = body.timezone || null;
     let systemPromptOverride = body.systemPrompt || null;
 
+    let storedBaseAgent = null;
     if (!builtin) {
       // Resolve against both agent stores: the save_agent MCP store (system_prompt)
       // and the /api/agents store (prompt). The UI creates agents in the latter.
@@ -1350,8 +1353,12 @@ const server = http.createServer(async (req, res) => {
       }
       systemPromptOverride = savedAgent ? savedAgent.system_prompt : apiAgent.prompt;
       body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
+      // Honor the agent's base harness. The MCP store calls it base_agent; the
+      // /api/agents store calls it harness. Default to opencode (always available)
+      // rather than cc, which needs the claude-code SDK to be installed.
+      storedBaseAgent = (savedAgent && savedAgent.base_agent) || (apiAgent && apiAgent.harness) || "opencode";
     }
-    const resolvedAgent = builtin ?? "cc";
+    const resolvedAgent = builtin ?? storedBaseAgent ?? "cc";
 
     if (resolvedAgent === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
@@ -1424,6 +1431,7 @@ const server = http.createServer(async (req, res) => {
           if (parsed.id) {
             sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
+            if (systemPromptOverride) sessionSystemPrompt.set(parsed.id, systemPromptOverride);
             persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz });
           }
         } catch {}
@@ -1626,6 +1634,16 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       if (sessionHarness.get(sid) === "opencode") {
         const { childSid, preamble } = await ensureOcChildAlive(sid);
+        const _sysPrompt = sessionSystemPrompt.get(sid);
+        if (_sysPrompt && !ocSysPromptDelivered.has(sid)) {
+          try {
+            const _b = JSON.parse(forwardBody);
+            const _ut = (_b.parts || []).filter(pt => pt.type === "text").map(pt => pt.text).join("\n");
+            _b.parts = [{ type: "text", text: `${_sysPrompt}\n\n---\n\n${_ut}` }];
+            forwardBody = JSON.stringify(_b);
+            ocSysPromptDelivered.add(sid);
+          } catch {}
+        }
         if (preamble) {
           try {
             const b = JSON.parse(forwardBody);
