@@ -1,9 +1,14 @@
-// Human-in-the-loop approval store for platform MCP tool calls.
+// Human-in-the-loop approval store.
 //
-// When a tool call is "gated", the MCP server pauses it here and waits for a
-// human to Accept (optionally with edited arguments) or Reject (optionally with
-// feedback for the agent). Pending approvals are surfaced to clients (CLI / web
-// UI) via a broadcaster, and resolved through the harness's HTTP API.
+// The agent decides WHEN to ask for approval — its system prompt tells it to
+// call the `request_human_approval` tool before sensitive actions. That tool
+// parks the request here and blocks until a human Accepts (optionally with
+// edited arguments) or Rejects (optionally with feedback for the agent).
+// Pending approvals are surfaced to clients (CLI / web UI) via a broadcaster
+// and resolved through the harness's HTTP API.
+//
+// There is intentionally no server-side "which tools are gated" policy — the
+// gating decision lives in the agent's prompt, not in config.
 //
 // ESM module — no external deps, only node:crypto.
 
@@ -35,26 +40,6 @@ function emit(type, props) {
   } catch (err) {
     console.error("[approvals] broadcaster error:", err);
   }
-}
-
-/**
- * Decide whether a tool call must be approved by a human before it runs.
- * A tool is gated if its definition opts in (`requiresApproval: true`) or it is
- * named in the HITL_APPROVAL_TOOLS env var (comma list, or `*` for all tools).
- * @param {string} toolName
- * @param {object} [definition]  the tool's registered definition
- * @returns {boolean}
- */
-export function shouldGate(toolName, definition) {
-  if (definition?.requiresApproval) return true;
-  const env = (process.env.HITL_APPROVAL_TOOLS || "").trim();
-  if (!env) return false;
-  if (env === "*") return true;
-  return env
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .includes(toolName);
 }
 
 /**
