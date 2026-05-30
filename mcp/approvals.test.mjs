@@ -89,7 +89,7 @@ test("getPending returns a public view without internal handles", () => {
   requestApproval("t", { x: 1 });
   const { id } = listPending()[0];
   const view = getPending(id);
-  assert.deepEqual(Object.keys(view).sort(), ["arguments", "createdAt", "id", "tool"]);
+  assert.deepEqual(Object.keys(view).sort(), ["arguments", "createdAt", "id", "sessionID", "tool"]);
   assert.equal(getPending("missing"), null);
   reset();
 });
