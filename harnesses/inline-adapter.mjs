@@ -40,6 +40,7 @@ import { createSkill, listSkills, getSkill, getSkillsByIds, updateSkill, deleteS
 import { storeMemory, listMemory, deleteMemory, deleteAllMemory } from "./memory-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer, setRunSandbox, getRunSandbox } from "./agent-run-store.mjs";
 import { buildDirectProvider } from "./sandbox-provider.mjs";
+import { fetchSlackThreadContext } from "./slack-thread-context.mjs";
 import { upsertAgentFile, listAgentFiles, listAgentFilesWithContent, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS, isBinaryAgentFile } from "./agent-file-store.mjs";
 import {
   hydrateFromDb,
@@ -309,15 +310,23 @@ async function liteLlmChat(messages, model) {
   }
 }
 
-async function runAgentForSlack(agentDef, slackEvent) {
+async function runAgentForSlack(agentDef, slackEvent, slackThreadContext = "") {
   const userText = slackEvent.text || "";
   const threadTs = slackEvent.thread_ts || slackEvent.ts;
+  const threadContextBlock = slackThreadContext
+    ? `Slack thread history, oldest to newest:
+${slackThreadContext}
+
+Use the thread history to preserve conversation context. The current message is marked in the transcript and is also repeated below.`
+    : "Slack thread history was unavailable; use the current message below.";
   const slackPrompt = `Slack message received for this agent.
 
 Workspace team: ${slackEvent.team || "unknown"}
 Channel: ${slackEvent.channel || "unknown"}
 Thread timestamp: ${threadTs || "unknown"}
 User: ${slackEvent.user || "unknown"}
+${threadContextBlock}
+
 Message:
 ${userText}
 
@@ -381,11 +390,24 @@ async function handleSlackEventAsync(agentId, body) {
       timestamp: event.ts,
       name: "eyes",
     }).catch(() => {});
-    const result = await runAgentForSlack(agentDef, { ...event, team: body.team_id });
+    const threadTs = event.thread_ts || event.ts;
+    let slackThreadContext = "";
+    try {
+      slackThreadContext = await fetchSlackThreadContext({
+        slackApi,
+        botToken,
+        channel: event.channel,
+        threadTs,
+        currentTs: event.ts,
+      });
+    } catch (e) {
+      log(`[slack] failed to fetch thread context for ${agentId}:`, e instanceof Error ? e.message : String(e));
+    }
+    const result = await runAgentForSlack(agentDef, { ...event, team: body.team_id }, slackThreadContext);
     await slackApi("chat.postMessage", botToken, {
       channel: event.channel,
       text: result.text.slice(0, 39000),
-      thread_ts: event.thread_ts || event.ts,
+      thread_ts: threadTs,
       unfurl_links: false,
       unfurl_media: false,
     });
