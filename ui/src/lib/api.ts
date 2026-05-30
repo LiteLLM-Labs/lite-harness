@@ -200,6 +200,45 @@ export async function rejectApproval(id: string, feedback?: string): Promise<voi
   await jsonOrThrow(res);
 }
 
+// ── Agent inbox (/api/inbox) ────────────────────────────────────────────────
+// Unified list of human-in-the-loop approvals (kind="approval") an agent is
+// blocked on, plus informational issues an agent filed (kind="issue").
+
+export type InboxKind = "approval" | "issue";
+export type InboxStatus = "pending" | "accepted" | "rejected" | "open" | "resolved";
+export type InboxFilter = "attention" | "completed" | "all";
+
+export interface InboxItem {
+  id: string;
+  kind: InboxKind;
+  title: string;
+  sessionId: string | null;
+  agent: string | null;
+  body: string | null;
+  /** Approval tool arguments (editable fields) — present for kind="approval". */
+  args?: Record<string, unknown>;
+  status: InboxStatus;
+  feedback: string | null;
+  createdAt: number;
+  resolvedAt: number | null;
+}
+
+export async function listInbox(filter: InboxFilter = "all"): Promise<InboxItem[]> {
+  const res = await req(`/api/inbox?filter=${encodeURIComponent(filter)}`);
+  const data = await jsonOrThrow<{ items: InboxItem[] }>(res);
+  return data.items ?? [];
+}
+
+/** Mark an inbox issue done. */
+export async function resolveInboxItem(id: string, note?: string): Promise<void> {
+  const res = await req(`/api/inbox/${encodeURIComponent(id)}/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(note ? { note } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
 // ── Integrations / vault ──────────────────────────────────────────────────────
 // API keys are stored in the harness's encrypted vault via /api/vault/:userId.
 // When the backend vault is unreachable (e.g. running the UI standalone via
