@@ -11,8 +11,75 @@ permissions:
   packages: write
 
 jobs:
+  # ── Unit tests ──────────────────────────────────────────────────────────────
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install harness deps
+        run: npm install --no-audit --no-fund
+        working-directory: harnesses
+      - name: Run unit tests
+        run: node --test mcp/sandbox.test.mjs mcp/approvals.test.mjs harnesses/agent-plugin.test.mjs
+
+  # ── Docker smoke test ───────────────────────────────────────────────────────
+  # Catches missing COPY lines and unresolvable imports before publish.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: lite-harness:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test — server starts and /health returns 200
+        run: |
+          docker run -d --name smoke \
+            -p 10000:10000 \
+            -e LITELLM_API_BASE=https://api.anthropic.com \
+            -e LITELLM_API_KEY=test-key \
+            -e MASTER_KEY=smoke-test \
+            -e PORT=10000 \
+            lite-harness:smoke
+
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:10000/health 2>/dev/null || echo 000)
+            if [ "$STATUS" = "200" ]; then
+              echo "Server healthy after $((i * 2))s"
+              curl -s http://localhost:10000/health
+              docker stop smoke
+              exit 0
+            fi
+            if ! docker ps -q --filter name=smoke | grep -q .; then
+              echo "Container exited — crash at startup"
+              docker logs smoke
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Timed out waiting for /health after 60s"
+          docker logs smoke
+          docker stop smoke || true
+          exit 1
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs smoke 2>/dev/null || true
+
+  # ── Publish (only after unit + smoke pass) ──────────────────────────────────
   publish:
     runs-on: ubuntu-latest
+    needs: [unit, smoke]
     steps:
       - uses: actions/checkout@v4
 

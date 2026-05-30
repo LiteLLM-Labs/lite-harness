@@ -348,8 +348,9 @@ export function subscribeEvents(opts: {
       const data = JSON.parse(msg.data);
       const sid =
         (data?.properties?.sessionID as string | undefined) ??
-        (data?.properties?.info?.sessionID as string | undefined);
-      if (!sid || sid === opts.sessionId) opts.onEvent(data);
+        (data?.properties?.info?.sessionID as string | undefined) ??
+        (data?.properties?.part?.sessionID as string | undefined);
+      if (sid === opts.sessionId) opts.onEvent(data);
     } catch (e) {
       opts.onError?.(e);
     }
