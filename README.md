@@ -2,6 +2,8 @@
 
 Run Claude Code/Codex/OpenCode on a sandbox in autopilot. Call the harnesses via a CLI or API's through an OpenCode-compatible API spec.
 
+[![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
+
 ![litellm_hero_v11](https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6)
 
 ## usage

@@ -31,17 +31,32 @@ const log = (...a) => console.error("[session-store]", ...a);
 /**
  * Persist a new session row. Silently ignored if the id already exists.
  *
- * @param {{ id: string, harness: string, title: string, createdAt: number }} opts
+ * @param {{ id: string, harness: string, title: string, createdAt: number, tz?: string|null }} opts
  */
-export function persistSession({ id, harness, title, createdAt }) {
+export function persistSession({ id, harness, title, createdAt, tz = null }) {
   try {
     getDb()
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, harness, title, created_at) VALUES (?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, harness, title, created_at, tz) VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(id, harness, title, createdAt);
+      .run(id, harness, title, createdAt, tz ?? null);
   } catch (e) {
     log("persistSession error:", e.message);
+  }
+}
+
+/**
+ * Return the IANA timezone stored for a session, or null if unset.
+ *
+ * @param {string} sessionId
+ * @returns {string|null}
+ */
+export function getSessionTz(sessionId) {
+  try {
+    const row = getDb().prepare("SELECT tz FROM sessions WHERE id = ?").get(sessionId);
+    return row?.tz ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -155,6 +170,17 @@ export function setOcSessionChildId(sessionId, childSid) {
  *
  * @returns {{ id: string, title: string, created_at: number, updated_at: number|null, sdk_session_id: string|null }[]}
  */
+export function loadMessages(sessionId) {
+  try {
+    return getDb()
+      .prepare("SELECT * FROM session_messages WHERE session_id = ? ORDER BY seq ASC")
+      .all(sessionId);
+  } catch (e) {
+    log("loadMessages error:", e.message);
+    return [];
+  }
+}
+
 export function loadOcSessions() {
   try {
     return getDb()

@@ -127,7 +127,10 @@ export function boxedPrompt(history) {
       setBuf(histIdx === history.length ? stash : history[histIdx]);
     }
 
+    const onResize = () => render();
+
     function done(value) {
+      process.stdout.removeListener("resize", onResize);
       stdin.setRawMode(false);
       stdin.pause();
       stdin.removeListener("data", onData);
@@ -173,7 +176,8 @@ export function boxedPrompt(history) {
             i += m[0].length;
             continue;
           }
-          i += 1; // lone ESC
+          setBuf(""); // lone ESC clears draft
+          i += 1;
           continue;
         }
 
@@ -198,11 +202,12 @@ export function boxedPrompt(history) {
         }
         if (code < 32) { i++; continue; }                                    // other controls
 
-        // Printable run (handles paste). Newlines collapse to spaces.
+        // Printable run (handles paste). Preserve newlines; strip bare \r.
         let j = i, ins = "";
         while (j < s.length && s[j] !== "\x1b") {
           const c = s[j], cc = c.charCodeAt(0);
-          if (c === "\r" || c === "\n") { ins += " "; j++; continue; }
+          if (c === "\r") { j++; continue; }             // strip \r (\r\n → \n via next iteration)
+          if (c === "\n") { ins += "\n"; j++; continue; }
           if (cc < 32) break;
           ins += c; j++;
         }
@@ -216,6 +221,7 @@ export function boxedPrompt(history) {
     stdin.resume();
     stdin.setEncoding("utf8");
     stdin.on("data", onData);
+    process.stdout.on("resize", onResize);
     render();
   });
 }

@@ -29,13 +29,16 @@ import { VaultPlugin } from "./vault-plugin.mjs";
 import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
-import { initDb as initAgentDb, getAgent, listAgents, deleteAgent } from "../mcp/agents/store.mjs";
+import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSavedAgents, deleteAgent as deleteSavedAgent } from "../mcp/agents/store.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb } from "./loop-store.mjs";
+import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
+import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
 import {
   hydrateFromDb,
   persistSession,
+  getSessionTz,
   appendMessage,
   deleteMessage,
   updateSdkSessionId,
@@ -73,6 +76,8 @@ const MASTER_KEY = process.env.MASTER_KEY || "";
 const DB_PATH = process.env.DB_PATH ||
   path.join(process.env.HOME || "/home/sandbox", ".local", "share", "lite-harness", "db.db");
 
+let CAPABILITIES_CACHE = null;
+
 // Initialize DB synchronously so session hydration runs before any request.
 // LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
 initDb(DB_PATH);
@@ -101,6 +106,24 @@ function authOk(req, urlObj) {
 const sessionAgent = new Map(); // id → "opencode" | "cc"
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
+
+// Resolve {{vault.KEY}} and {{config.KEY}} placeholders in agent prompts.
+async function resolveTemplates(prompt, userId, config, vaultBackend) {
+  if (!prompt) return prompt;
+  let result = prompt;
+  const vaultMatches = [...result.matchAll(/\{\{vault\.([A-Za-z0-9_]+)\}\}/g)];
+  for (const [placeholder, key] of vaultMatches) {
+    const val = await vaultBackend.get(`${userId}:${key}`);
+    if (val === null) throw new Error(`vault key missing: ${key}`);
+    result = result.split(placeholder).join(val);
+  }
+  const configMatches = [...result.matchAll(/\{\{config\.([A-Za-z0-9_]+)\}\}/g)];
+  for (const [placeholder, key] of configMatches) {
+    if (!(key in config)) throw new Error(`config key missing: ${key}`);
+    result = result.split(placeholder).join(String(config[key]));
+  }
+  return result;
+}
 
 // Load the claude-code SDK from ./claude-code/node_modules/ relative to this
 // file. In Docker the adapter lives at /opt/lap/inline-adapter.mjs and the SDK
@@ -889,13 +912,19 @@ async function ensureOcChildAlive(ourSid) {
   return { childSid: newChildSid, preamble };
 }
 
+// Per-turn SSE buffers for opencode message persistence.
+// Keyed by opencode child session id (what the child emits).
+//   ocMsgBuf:   childSid → Map<msgId, { info, parts: Map<partId, part> }>
+//   ocPartToSid: partId  → childSid  (reverse index for message.part.delta lookup)
+const ocMsgBuf = new Map();
+const ocPartToSid = new Map();
+
 // Parse SSE chunks from the opencode event stream.
-// - Clears pending turn on session.idle (turn complete).
-// - Updates lastEventAt on ANY event — so the stuck watchdog only fires when
-//   the session has been truly silent, not merely slow.
-// - Tracks toolInFlight: MCP tools can take minutes with no SSE events; the
-//   watchdog uses a 10-minute timeout instead of STUCK_TIMEOUT_MS when a tool
-//   is actively executing so it doesn't abort a legitimate long-running call.
+// - Buffers message.updated / message.part.updated / message.part.delta so we
+//   capture full assistant text without relying on GET /message (which omits parts).
+// - Flushes buffer to SQLite on session.idle (turn complete).
+// - Updates lastEventAt so the stuck watchdog only fires on truly silent turns.
+// - Tracks toolInFlight for the 10-minute tool-call timeout.
 function tapOcSseChunk(chunk) {
   const text = chunk.toString("utf8");
   const now = Date.now();
@@ -903,14 +932,56 @@ function tapOcSseChunk(chunk) {
     if (!line.startsWith("data: ")) continue;
     try {
       const ev = JSON.parse(line.slice(6));
-      // session.idle and most events use properties.sessionID directly.
-      // message.part.updated embeds sessionID inside properties.part.sessionID.
       const sid = ev.properties?.sessionID ?? ev.properties?.part?.sessionID;
+
+      // ── Message buffering (runs for all events, not just pending turns) ──
+      if (ev.type === "message.updated" && sid && ev.properties?.info?.id) {
+        const info = ev.properties.info;
+        let msgs = ocMsgBuf.get(sid);
+        if (!msgs) { msgs = new Map(); ocMsgBuf.set(sid, msgs); }
+        const entry = msgs.get(info.id) ?? { info: null, parts: new Map() };
+        entry.info = info;
+        msgs.set(info.id, entry);
+      } else if (ev.type === "message.part.updated" && sid && ev.properties?.part) {
+        const part = ev.properties.part;
+        if (part.messageID) {
+          const msgs = ocMsgBuf.get(sid);
+          const msg = msgs?.get(part.messageID);
+          if (msg) {
+            msg.parts.set(part.id, { ...part });
+            ocPartToSid.set(part.id, sid);
+          }
+        }
+      } else if (ev.type === "message.part.delta" && ev.properties) {
+        const { messageID, partID, field, delta } = ev.properties;
+        if (partID && field === "text" && typeof delta === "string") {
+          const deltaSid = ocPartToSid.get(partID);
+          if (deltaSid) {
+            const part = ocMsgBuf.get(deltaSid)?.get(messageID)?.parts?.get(partID);
+            if (part) part.text = (part.text ?? "") + delta;
+          }
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────
+
       if (!sid || !ocPendingTurns.has(sid)) continue;
       if (ev.type === "session.idle") {
         ocPendingTurns.delete(sid);
         const ourSid = ocSidRemapReverse.get(sid) ?? sid;
-        snapshotOcMessages(ourSid).catch(() => {});
+        // Flush SSE-buffered messages (full content) to DB.
+        const msgs = ocMsgBuf.get(sid);
+        if (msgs?.size) {
+          const arr = [...msgs.values()]
+            .filter(m => m.info)
+            .map(m => ({ info: m.info, parts: [...m.parts.values()] }));
+          if (arr.length) saveOcMessages(ourSid, arr);
+          // Clean up part-to-sid index for this session's parts
+          for (const [pid, s] of ocPartToSid) { if (s === sid) ocPartToSid.delete(pid); }
+          ocMsgBuf.delete(sid);
+        } else {
+          // Fallback: fetch from child REST API
+          snapshotOcMessages(ourSid).catch(() => {});
+        }
       } else {
         const entry = ocPendingTurns.get(sid);
         let toolInFlight = entry.toolInFlight ?? false;
@@ -965,6 +1036,129 @@ function forward(method, urlPath, search, bodyBuf, clientRes, label) {
   upReq.end();
 }
 
+async function buildCapabilities() {
+  const providers = [];
+  if (process.env.LITELLM_API_BASE) providers.push("litellm");
+  else if (process.env.ANTHROPIC_API_KEY) providers.push("anthropic");
+  const harnessesDir = path.join(path.dirname(new URL(import.meta.url).pathname));
+  const knownHarnesses = ["claude-code", "opencode", "github-copilot", "codex"];
+  const harnesses = knownHarnesses
+    .filter(name => {
+      try { return fs.statSync(path.join(harnessesDir, name)).isDirectory(); } catch { return false; }
+    })
+    .map(name => {
+      let version = "unknown";
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(harnessesDir, name, "package.json"), "utf8"));
+        version = pkg.version || "unknown";
+      } catch {}
+      return { name, version, model_providers: providers };
+    });
+
+  const mcp_servers = [];
+  if (process.env.E2B_API_KEY || process.env.DAYTONA_API_KEY || process.env.LAP_PLATFORM_MODE) {
+    mcp_servers.push({
+      name: "sandbox",
+      description: "Code execution sandbox",
+      tools: ["provision", "execute", "read_file", "upload_artifact"],
+      auth_required: true,
+      auth_type: "api_key",
+    });
+  }
+  const lapBase = process.env.LAP_BASE_URL;
+  const lapAccess = process.env.LAP_ACCESS_TOKEN || process.env.LAP_AUTH_TOKEN;
+  if (lapBase && (process.env.AGENT_ID || lapAccess)) {
+    mcp_servers.push({
+      name: "lap-memory",
+      description: "Agent memory storage via LAP platform",
+      tools: ["memory_store", "memory_get", "memory_list", "memory_delete"],
+      auth_required: true,
+      auth_type: "bearer_token",
+    });
+  }
+  if (lapBase && lapAccess) {
+    mcp_servers.push({
+      name: "lap-issue-reporter",
+      description: "Report issues to LAP platform",
+      tools: ["report_issue"],
+      auth_required: true,
+      auth_type: "bearer_token",
+    });
+  }
+  // Platform MCP server (same process — call handler directly, no HTTP round-trip)
+  try {
+    const resp = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const tools = resp?.result?.tools ?? [];
+    if (tools.length > 0) {
+      mcp_servers.push({
+        name: "platform",
+        description: "Built-in platform tools (save_agent, etc.)",
+        tools: tools.map(t => t.name),
+        auth_required: !!MASTER_KEY,
+        auth_type: "bearer_token",
+      });
+    }
+  } catch {}
+
+  const rawLitellmBase = process.env.LITELLM_API_BASE || "";
+  const litellmKey = process.env.LITELLM_API_KEY || "";
+  const litellmBase = rawLitellmBase.replace(/\/+$/, "").replace(/\/v1$/, "");
+  if (litellmBase && litellmKey) {
+    try {
+      const r = await fetch(`${litellmBase}/v1/mcp/server`, {
+        headers: { Authorization: `Bearer ${litellmKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const list = Array.isArray(data) ? data : (data.servers ?? []);
+        for (const s of list) {
+          const name = s.alias || s.server_name;
+          if (!name) continue;
+          mcp_servers.push({
+            name,
+            description: s.description || "",
+            tools: Array.isArray(s.tools) ? s.tools : [],
+            auth_required: true,
+            auth_type: "bearer_token",
+          });
+        }
+      }
+    } catch {}
+  }
+
+  const vaultAvailable = !!(process.env.MASTER_KEY || process.env.VAULT_DB_PATH);
+  const vault = {
+    available: vaultAvailable,
+    operations: vaultAvailable ? ["store", "list_keys", "delete"] : [],
+  };
+
+  const scheduler = {
+    available: true,
+    min_interval_minutes: Number(process.env.SCHEDULER_MIN_INTERVAL_MINUTES ?? 1),
+    cron_supported: true,
+    manual_trigger: false,
+  };
+
+  let sandbox = null;
+  if (process.env.LAP_PLATFORM_MODE) {
+    sandbox = { provider: "lap-platform", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
+  } else if (process.env.E2B_API_KEY) {
+    sandbox = { provider: "e2b", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
+  } else if (process.env.DAYTONA_API_KEY) {
+    sandbox = { provider: "daytona", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
+  }
+
+  return {
+    harnesses,
+    mcp_servers,
+    vault,
+    scheduler,
+    ...(sandbox && { sandbox }),
+    agents: {},
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
@@ -985,6 +1179,17 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, auth: MASTER_KEY ? "required" : "open" }));
+    return;
+  }
+
+  if (p === "/api/capabilities" && (req.method === "GET" || req.method === "OPTIONS")) {
+    res.writeHead(req.method === "OPTIONS" ? 204 : 200, {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    });
+    res.end(req.method === "OPTIONS" ? "" : JSON.stringify(CAPABILITIES_CACHE));
     return;
   }
 
@@ -1072,14 +1277,14 @@ const server = http.createServer(async (req, res) => {
   if (p === "/agents" && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(listAgents()));
+    res.end(JSON.stringify(listSavedAgents()));
     return;
   }
 
   const agentRouteMatch = p.match(/^\/agents\/([^/]+)$/);
   if (agentRouteMatch && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    const a = getAgent(decodeURIComponent(agentRouteMatch[1]));
+    const a = getSavedAgent(decodeURIComponent(agentRouteMatch[1]));
     if (!a) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(a));
@@ -1088,7 +1293,7 @@ const server = http.createServer(async (req, res) => {
 
   if (agentRouteMatch && req.method === "DELETE") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    deleteAgent(decodeURIComponent(agentRouteMatch[1]));
+    deleteSavedAgent(decodeURIComponent(agentRouteMatch[1]));
     res.writeHead(204); res.end();
     return;
   }
@@ -1117,11 +1322,12 @@ const server = http.createServer(async (req, res) => {
     const agentParam = body.agent ?? body.harness;
     const builtin = agentParam === "claude-code" ? "cc" : agentParam === "github-copilot" ? "github-copilot" : agentParam === "codex" ? "codex" : agentParam === "cc" ? "cc" : agentParam === "opencode" ? "opencode" : null;
 
+    const sessionTz = body.timezone || null;
     let systemPromptOverride = body.systemPrompt || null;
 
     if (!builtin) {
       let savedAgent = null;
-      try { savedAgent = getAgent(agentParam); } catch {}
+      try { savedAgent = getSavedAgent(agentParam); } catch {}
       if (!savedAgent) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
@@ -1144,7 +1350,7 @@ const server = http.createServer(async (req, res) => {
       copilotSessions.set(id, s);
       sessionAgent.set(id, "github-copilot");
       sessionHarness.set(id, "github-copilot");
-      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now });
+      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now, tz: sessionTz });
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "github-copilot" }));
@@ -1163,7 +1369,7 @@ const server = http.createServer(async (req, res) => {
       codexSessions.set(id, s);
       sessionAgent.set(id, "codex");
       sessionHarness.set(id, "codex");
-      persistSession({ id, harness: "codex", title: s.title, createdAt: now });
+      persistSession({ id, harness: "codex", title: s.title, createdAt: now, tz: sessionTz });
       log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "codex" }));
@@ -1182,7 +1388,7 @@ const server = http.createServer(async (req, res) => {
       ccSessions.set(id, s);
       sessionAgent.set(id, "cc");
       sessionHarness.set(id, "cc");
-      persistSession({ id, harness: "cc", title: s.title, createdAt: now });
+      persistSession({ id, harness: "cc", title: s.title, createdAt: now, tz: sessionTz });
       log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "claude-code" }));
@@ -1203,7 +1409,7 @@ const server = http.createServer(async (req, res) => {
           if (parsed.id) {
             sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
-            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now() });
+            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz });
           }
         } catch {}
         res.writeHead(upRes.statusCode || 200, upRes.headers);
@@ -1548,6 +1754,402 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── GET /api/capabilities ────────────────────────────────────────────────────
+  if (req.method === "GET" && p === "/api/capabilities") {
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    const loopPlugin = pluginRegistry.getPlugin("loop");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      harnesses: [{ name: "claude-code", version: "1.0" }],
+      mcp_servers: [],
+      vault: { available: !!(vaultPlugin && vaultPlugin.backend) },
+      scheduler: { available: !!loopPlugin, min_interval_minutes: 1 },
+      sandbox: {
+        provider: process.env.E2B_API_KEY ? "e2b" : null,
+        pip_install: true,
+        outbound_network: true,
+        persistent_storage: false,
+        max_runtime_minutes: 30,
+      },
+    }));
+    return;
+  }
+
+  // ── Vault HTTP endpoints ──────────────────────────────────────────────────────
+  const _vaultUserMatch = p.match(/^\/api\/vault\/([^/]+)$/);
+  const _vaultKeyMatch  = p.match(/^\/api\/vault\/([^/]+)\/([^/]+)$/);
+
+  if (_vaultUserMatch && req.method === "POST") {
+    const userId = _vaultUserMatch[1];
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const { key, value } = body;
+    if (!key || value === undefined) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "key and value required" }));
+      return;
+    }
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault not available" }));
+      return;
+    }
+    await vaultPlugin.backend.set(`${userId}:${key}`, value);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, key }));
+    return;
+  }
+
+  if (_vaultUserMatch && req.method === "GET") {
+    const userId = _vaultUserMatch[1];
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault not available" }));
+      return;
+    }
+    const prefix = `${userId}:`;
+    const all = await vaultPlugin.backend.list();
+    const keys = all
+      .filter(r => r.key.startsWith(prefix))
+      .map(r => ({ key: r.key.slice(prefix.length), updated_at: r.updatedAt }));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ keys }));
+    return;
+  }
+
+  if (_vaultKeyMatch && req.method === "DELETE") {
+    const userId = _vaultKeyMatch[1];
+    const key    = _vaultKeyMatch[2];
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault not available" }));
+      return;
+    }
+    await vaultPlugin.backend.delete(`${userId}:${key}`);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── Agent CRUD + run routes ───────────────────────────────────────────────────
+  const _agentRunLogsMatch = p.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/logs$/);
+  const _agentRunsMatch    = p.match(/^\/api\/agents\/([^/]+)\/runs$/);
+  const _agentRunMatch     = p.match(/^\/api\/agents\/([^/]+)\/run$/);
+  const _agentPauseMatch   = p.match(/^\/api\/agents\/([^/]+)\/pause$/);
+  const _agentResumeMatch  = p.match(/^\/api\/agents\/([^/]+)\/resume$/);
+  const _agentIdMatch      = p.match(/^\/api\/agents\/([^/]+)$/);
+  const _agentsMatch       = p === "/api/agents";
+
+  if (_agentsMatch && req.method === "POST") {
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const {
+      name, owner_id, description,
+      harness: agentHarness = "claude-code",
+      prompt, schedule,
+      vault_keys = [], setup_commands = [],
+      max_runtime_minutes = 30,
+      on_failure = "pause_and_notify",
+      config = {},
+      model = "claude-sonnet-4-6",
+      system = "",
+    } = body;
+    if (!name || !owner_id) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "name and owner_id required" }));
+      return;
+    }
+    // Validate vault_keys exist before accepting the agent
+    if (vault_keys.length > 0) {
+      const vaultPlugin = pluginRegistry.getPlugin("vault");
+      if (vaultPlugin && vaultPlugin.backend) {
+        const missing = [];
+        for (const k of vault_keys) {
+          const v = await vaultPlugin.backend.get(`${owner_id}:${k}`);
+          if (v === null) missing.push(k);
+        }
+        if (missing.length > 0) {
+          res.writeHead(422, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "vault keys missing", missing }));
+          return;
+        }
+      }
+    }
+    // Create an ephemeral builder session so the agent has a session_id
+    const builderSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const builderNow = Date.now();
+    ccSessions.set(builderSid, {
+      id: builderSid, title: `agent-builder-${name}`,
+      time: { created: builderNow }, harness: "claude-code",
+      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+    });
+    sessionHarness.set(builderSid, "cc");
+    persistSession({ id: builderSid, harness: "cc", title: `agent-builder-${name}`, createdAt: builderNow });
+
+    const newAgent = createAgent({
+      name, model, system: system || prompt || "", tools: [],
+      cadence: schedule ? schedule.cron : null, intervalSeconds: null,
+      sessionId: builderSid, loopId: null,
+      prompt: prompt || null,
+      cron: schedule ? schedule.cron : null,
+      timezone: schedule ? (schedule.timezone || "UTC") : "UTC",
+      vault_keys, setup_commands, max_runtime_minutes, on_failure,
+      config, owner_id, status: "paused", description: description || null,
+      harness: agentHarness,
+    });
+    const host = req.headers.host || "localhost";
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: newAgent.id,
+      name: newAgent.name,
+      owner_id: newAgent.owner_id,
+      status: newAgent.status || "paused",
+      url: `https://${host}/agents/${newAgent.id}`,
+      schedule: schedule ? { cron: schedule.cron, timezone: schedule.timezone || "UTC" } : null,
+      created_at: newAgent.created_at,
+    }));
+    return;
+  }
+
+  if (_agentsMatch && req.method === "GET") {
+    const ownerId = url.searchParams.get("owner_id");
+    const agents = listAgents(ownerId || undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ agents }));
+    return;
+  }
+
+  if (_agentIdMatch && req.method === "GET") {
+    const agentId = _agentIdMatch[1];
+    const found = getAgent(agentId);
+    if (!found) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(found));
+    return;
+  }
+
+  if (_agentIdMatch && req.method === "PATCH") {
+    const agentId = _agentIdMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    const raw = await readBody(req);
+    let fields = {};
+    try { fields = JSON.parse(raw || "{}"); } catch {}
+    updateAgent(agentId, fields);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(getAgent(agentId)));
+    return;
+  }
+
+  if (_agentIdMatch && req.method === "DELETE") {
+    const agentId = _agentIdMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    deleteAgent(agentId);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (_agentPauseMatch && req.method === "POST") {
+    const agentId = _agentPauseMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    updateAgent(agentId, { status: "paused" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: agentId, status: "paused" }));
+    return;
+  }
+
+  if (_agentResumeMatch && req.method === "POST") {
+    const agentId = _agentResumeMatch[1];
+    const existing = getAgent(agentId);
+    if (!existing) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    updateAgent(agentId, { status: "active" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: agentId, status: "active" }));
+    return;
+  }
+
+  // ── POST /api/agents/:id/run ──────────────────────────────────────────────────
+  if (_agentRunMatch && req.method === "POST") {
+    const agentId = _agentRunMatch[1];
+    const agentDef = getAgent(agentId);
+    if (!agentDef) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "agent not found" }));
+      return;
+    }
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const configOverrides = body.config_overrides || {};
+
+    // Validate vault_keys exist before burning sandbox time
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (agentDef.vault_keys && agentDef.vault_keys.length > 0) {
+      if (!vaultPlugin || !vaultPlugin.backend) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "vault not available" }));
+        return;
+      }
+      const missing = [];
+      for (const k of agentDef.vault_keys) {
+        const v = await vaultPlugin.backend.get(`${agentDef.owner_id}:${k}`);
+        if (v === null) missing.push(k);
+      }
+      if (missing.length > 0) {
+        res.writeHead(422, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "vault keys missing", missing }));
+        return;
+      }
+    }
+
+    // Resolve prompt templates ({{vault.X}} and {{config.X}})
+    const mergedConfig = Object.assign({}, agentDef.config || {}, configOverrides);
+    let resolvedPrompt = agentDef.prompt || agentDef.system || "";
+    try {
+      if (vaultPlugin && vaultPlugin.backend) {
+        resolvedPrompt = await resolveTemplates(
+          resolvedPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend
+        );
+      }
+    } catch (e) {
+      res.writeHead(422, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e.message }));
+      return;
+    }
+
+    // Create ephemeral cc session for this run
+    if (!ccQuery) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "claude-code SDK not available" }));
+      return;
+    }
+    const runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const runNow = Date.now();
+    ccSessions.set(runSid, {
+      id: runSid, title: `agent-run-${agentId}`,
+      time: { created: runNow }, harness: "claude-code",
+      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+    });
+    sessionHarness.set(runSid, "cc");
+    persistSession({ id: runSid, harness: "cc", title: `agent-run-${agentId}`, createdAt: runNow });
+
+    const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
+    const runId = runRecord.id;
+    initRunBuffer(runId);
+
+    // Listen on the global SSE bus to track run completion and buffer events
+    const runEventListener = (line) => {
+      try {
+        const m = line.match(/^data: (.+)\n/);
+        if (!m) return;
+        const evt = JSON.parse(m[1]);
+        if (evt.properties && evt.properties.sessionID !== runSid) return;
+        bufferRunEvent(runId, line);
+        if (evt.type === "session.idle") {
+          updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
+          ccGlobalBus.delete(runEventListener);
+          pluginGlobalBus.delete(runEventListener);
+        } else if (evt.type === "session.error") {
+          const errMsg = (evt.properties && evt.properties.error && evt.properties.error.message) || "unknown error";
+          updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: errMsg });
+          if (agentDef.on_failure === "pause_and_notify") {
+            updateAgent(agentId, { status: "paused" });
+          }
+          ccGlobalBus.delete(runEventListener);
+          pluginGlobalBus.delete(runEventListener);
+        }
+      } catch {}
+    };
+    ccGlobalBus.add(runEventListener);
+    pluginGlobalBus.add(runEventListener);
+
+    // Fire prompt async — non-blocking
+    callPromptAsync(runSid, resolvedPrompt).catch((e) => {
+      log(`run ${runId} error: ${e.message}`);
+      updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: e.message });
+      ccGlobalBus.delete(runEventListener);
+      pluginGlobalBus.delete(runEventListener);
+    });
+
+    const host = req.headers.host || "localhost";
+    res.writeHead(202, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      run_id: runId,
+      agent_id: agentId,
+      status: "starting",
+      logs_url: `https://${host}/api/agents/${agentId}/runs/${runId}/logs`,
+    }));
+    return;
+  }
+
+  // ── GET /api/agents/:id/runs/:runId/logs (SSE stream) ────────────────────────
+  if (_agentRunLogsMatch && req.method === "GET") {
+    const agentId = _agentRunLogsMatch[1];
+    const runId   = _agentRunLogsMatch[2];
+    const runRec = getAgentRun(runId);
+    if (!runRec || runRec.agent_id !== agentId) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "run not found" }));
+      return;
+    }
+    const terminal = ["completed", "failed", "timed_out", "cancelled"];
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    if (terminal.includes(runRec.status)) {
+      // Run already done — flush buffered events and close
+      const buffered = getRunEventBuffer(runId) || [];
+      for (const line of buffered) { try { res.write(line); } catch {} }
+      res.end();
+      return;
+    }
+    // Live stream: subscribe to run's event buffer
+    const liveListener = (line) => { try { res.write(line); } catch {} };
+    subscribeRunEvents(runId, liveListener);
+    req.on("close", () => unsubscribeRunEvents(runId, liveListener));
+    return;
+  }
+
+  // ── GET /api/agents/:id/runs ──────────────────────────────────────────────────
+  if (_agentRunsMatch && req.method === "GET") {
+    const agentId = _agentRunsMatch[1];
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "10", 10), 100);
+    const runs = listAgentRuns(agentId, limit);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ runs }));
+    return;
+  }
+
   // Everything else (/event, /session/:id/*, ...) — transparent passthrough.
   const raw = ["POST", "PUT", "PATCH"].includes(req.method) ? await readBody(req) : null;
   forward(req.method, p, url.search, raw ? Buffer.from(raw) : null, res, p);
@@ -1603,8 +2205,9 @@ server.listen(PORT, "0.0.0.0", () => {
 });
 
 startChild();
-waitChild().then((ok) => {
+waitChild().then(async (ok) => {
   if (!ok) { log("opencode serve never became ready"); process.exit(1); }
+  CAPABILITIES_CACHE = await buildCapabilities();
   log(`opencode ready :${PORT} -> ${UP} | skills=${SKILLS_ROOT}`);
 
   const healthTimer = setInterval(async () => {

@@ -1,3 +1,4 @@
+import { Cron } from "croner";
 import { AdapterPlugin } from "./plugin-registry.mjs";
 import {
   initDb,
@@ -8,17 +9,36 @@ import {
   listLoops,
   getLoop,
 } from "./loop-store.mjs";
+import { getSessionTz } from "./session-store.mjs";
 
-function parseInterval(raw) {
-  if (raw === "daily") return 86400;
-  if (raw === "weekly") return 604800;
-  const m = /^(\d+)(s|m|h)$/.exec(raw);
+// Returns { type: "interval", seconds } or { type: "cron", expr } or null.
+function parseSchedule(raw) {
+  if (!raw) return null;
+  const r = raw.trim();
+  // Cron: 5 space-separated fields of digits/*/,-
+  if (/^[\d*/,\-]+([ \t]+[\d*/,\-]+){4}$/.test(r)) return { type: "cron", expr: r };
+  if (r === "daily") return { type: "interval", seconds: 86400 };
+  if (r === "weekly") return { type: "interval", seconds: 604800 };
+  const m = /^(\d+)(s|m|h)$/.exec(r);
   if (!m) return null;
   const n = parseInt(m[1], 10);
-  if (m[2] === "s") return n;
-  if (m[2] === "m") return n * 60;
-  if (m[2] === "h") return n * 3600;
-  return null;
+  const seconds = m[2] === "s" ? n : m[2] === "m" ? n * 60 : n * 3600;
+  return { type: "interval", seconds };
+}
+
+function computeNextRunAt(loop) {
+  if (loop.cron_expr) {
+    const job = new Cron(loop.cron_expr, { timezone: loop.tz || "UTC", paused: true });
+    const next = job.nextRun();
+    return next ? next.getTime() : Date.now() + 60_000;
+  }
+  return Date.now() + loop.interval_seconds * 1000;
+}
+
+function scheduleLabel(loop) {
+  return loop.cron_expr
+    ? `cron(${loop.cron_expr})${loop.tz ? " " + loop.tz : ""}`
+    : `${loop.interval_seconds}s`;
 }
 
 export class LoopPlugin extends AdapterPlugin {
@@ -67,7 +87,7 @@ export class LoopPlugin extends AdapterPlugin {
             l.max_iterations !== null
               ? `${l.iteration_count}/${l.max_iterations}`
               : `${l.iteration_count}/∞`;
-          return `${l.id.padEnd(20)} | ${String(l.interval_seconds + "s").padEnd(8)} | ${iters.padEnd(10)} | ${next} | ${l.prompt}`;
+          return `${l.id.padEnd(20)} | ${scheduleLabel(l).padEnd(20)} | ${iters.padEnd(10)} | ${next} | ${l.prompt}`;
         });
         emitter.text([header, sep, ...rows].join("\n"));
       }
@@ -96,7 +116,7 @@ export class LoopPlugin extends AdapterPlugin {
           `ID:         ${loop.id}`,
           `Session:    ${loop.session_id}`,
           `Prompt:     ${loop.prompt}`,
-          `Interval:   ${loop.interval_seconds}s`,
+          `Schedule:   ${scheduleLabel(loop)}`,
           `Iterations: ${iters}`,
           `Next run:   ${next}`,
         ].join("\n")
@@ -105,7 +125,7 @@ export class LoopPlugin extends AdapterPlugin {
       return;
     }
 
-    // /loop [--max N] <interval> <prompt...>
+    // /loop [--max N] <schedule> <prompt...>
     let maxIterations = null;
     const remaining = parts.slice(1);
 
@@ -120,15 +140,26 @@ export class LoopPlugin extends AdapterPlugin {
       remaining.splice(maxIdx, 2);
     }
 
-    const intervalRaw = remaining[0];
-    const promptWords = remaining.slice(1);
+    // Cron expressions have spaces, so consume tokens until we hit something
+    // that looks like a prompt word (not a cron field). Strategy: try joining
+    // increasing prefixes until parseSchedule succeeds.
+    let schedule = null;
+    let scheduleTokenCount = 0;
+    for (let i = 1; i <= Math.min(remaining.length, 5); i++) {
+      const attempt = remaining.slice(0, i).join(" ");
+      const parsed = parseSchedule(attempt);
+      if (parsed) { schedule = parsed; scheduleTokenCount = i; }
+    }
 
-    if (!intervalRaw || promptWords.length === 0) {
+    const promptWords = remaining.slice(scheduleTokenCount);
+
+    if (!schedule || promptWords.length === 0) {
       emitter.text(
         [
-          "Usage: /loop [--max N] <interval> <prompt>",
+          "Usage: /loop [--max N] <schedule> <prompt>",
           "",
-          "Intervals: 30s, 5m, 1h, daily, weekly",
+          "Schedules: 30s, 5m, 1h, daily, weekly",
+          "           or a cron expression: \"0 9 * * 1-5\"",
           "Commands:  /loop list | /loop status <id> | /loop stop <id>",
         ].join("\n")
       );
@@ -136,22 +167,38 @@ export class LoopPlugin extends AdapterPlugin {
       return;
     }
 
-    const intervalSeconds = parseInterval(intervalRaw);
-    if (intervalSeconds === null) {
-      emitter.error(`Unknown interval: ${intervalRaw}`);
-      return;
+    const prompt = promptWords.join(" ");
+    const tz = getSessionTz(ctx.sessionId);
+    const tzWarning = schedule.type === "cron" && !tz
+      ? "\n⚠ No timezone on session — cron fires in UTC. Pass `timezone` on POST /session to use local time."
+      : "";
+
+    let nextRunAt;
+    if (schedule.type === "cron") {
+      try {
+        const job = new Cron(schedule.expr, { timezone: tz || "UTC", paused: true });
+        const next = job.nextRun();
+        nextRunAt = next ? next.getTime() : Date.now() + 60_000;
+      } catch (e) {
+        emitter.error(`Invalid cron expression: ${e.message}`);
+        return;
+      }
     }
 
-    const prompt = promptWords.join(" ");
     const loop = createLoop({
       sessionId: ctx.sessionId,
       prompt,
-      intervalSeconds,
+      ...(schedule.type === "interval"
+        ? { intervalSeconds: schedule.seconds }
+        : { cronExpr: schedule.expr, tz: tz || "UTC", nextRunAt }),
       maxIterations,
     });
 
+    const schedDesc = schedule.type === "cron"
+      ? `cron "${schedule.expr}"${tz ? " (" + tz + ")" : " (UTC)"}`
+      : `every ${remaining[0]}`;
     const maxLabel = maxIterations !== null ? `, max ${maxIterations} iterations` : "";
-    emitter.text(`✓ Loop created: ${loop.id} — every ${intervalRaw}${maxLabel}\nPrompt: ${prompt}`);
+    emitter.text(`✓ Loop created: ${loop.id} — ${schedDesc}${maxLabel}\nPrompt: ${prompt}${tzWarning}`);
     emitter.done();
   }
 
@@ -161,7 +208,7 @@ export class LoopPlugin extends AdapterPlugin {
       if (!this._isSessionActive(loop.session_id)) continue;
       try {
         await this._callPromptAsync(loop.session_id, loop.prompt);
-        tickLoop(loop.id, Date.now());
+        tickLoop(loop.id, computeNextRunAt(loop));
         const updated = getLoop(loop.id);
         if (
           updated &&

@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Shared deps for inline-adapter and root-level harness plugins",
   "dependencies": {
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^11.0.0",
+    "croner": "^9.0.0"
   }
 }

@@ -77,6 +77,12 @@ export class LiteClient {
     }).catch(() => {});
   }
 
+  abort(id) {
+    return fetch(`${this.url}/session/${encodeURIComponent(id)}/abort`, {
+      method: "POST", headers: this.authHdr,
+    }).catch(() => {});
+  }
+
   async prompt(id, model, text) {
     const r = await fetch(`${this.url}/session/${encodeURIComponent(id)}/prompt_async`, {
       method: "POST",

@@ -83,6 +83,10 @@ export class PluginRegistry {
     this._plugins.push(plugin);
   }
 
+  getPlugin(name) {
+    return this._plugins.find(p => p.name === name) ?? null;
+  }
+
   /**
    * Run setup() on every registered plugin.
    * @param {{ masterKey: string }} ctx
