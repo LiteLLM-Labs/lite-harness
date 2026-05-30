@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Plus, Play, Pencil, Trash2, X, Brain } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { BrandIcon } from "@/components/brand-icons";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,12 @@ import {
   deleteMemory,
 } from "@/lib/api";
 import type { Agent, Skill, Memory } from "@/lib/types";
+import {
+  slackActionClass,
+  slackActionLabel,
+  slackConfig,
+  useSlackAppFlow,
+} from "./slack-app-flow";
 
 interface FormState {
   name: string;
@@ -61,6 +68,7 @@ export default function AgentsPage() {
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [memKey, setMemKey] = useState("");
   const [memValue, setMemValue] = useState("");
+  const slackFlow = useSlackAppFlow(setAgents);
 
   const load = async () => {
     try {
@@ -251,12 +259,14 @@ export default function AgentsPage() {
                 No agents yet. Click <span className="font-medium">New agent</span> to define one.
               </div>
             )}
-            {agents?.map((ag) => (
-              <Card
-                key={String(ag.id)}
-                className="p-4 flex items-start justify-between gap-4 cursor-pointer hover:bg-muted/40 transition-colors"
-                onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(ag.id)}`)}
-              >
+            {agents?.map((ag) => {
+              const slack = slackConfig(ag);
+              return (
+                <Card
+                  key={String(ag.id)}
+                  className="p-4 flex items-start justify-between gap-4 cursor-pointer hover:bg-muted/40 transition-colors"
+                  onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(ag.id)}`)}
+                >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm truncate">{String(ag.name)}</span>
@@ -285,6 +295,20 @@ export default function AgentsPage() {
                     <Play className="size-3.5" />
                     Start session
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={slackActionClass(slack)}
+                    onClick={(e) => { e.stopPropagation(); slackFlow.openSlack(ag); }}
+                    title={
+                      slack.status === "connected"
+                        ? `${slack.slack_team_name || "Slack"}${slack.bot_user_id ? ` · <@${slack.bot_user_id}>` : ""}`
+                        : slack.oauth_error || undefined
+                    }
+                  >
+                    <BrandIcon id="slack" className="size-3.5" />
+                    {slackActionLabel(slack)}
+                  </Button>
                   <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); openEdit(ag); }} aria-label="Edit">
                     <Pencil className="size-3.5" />
                   </Button>
@@ -293,7 +317,8 @@ export default function AgentsPage() {
                   </Button>
                 </div>
               </Card>
-            ))}
+              );
+            })}
           </div>
         </main>
       </div>
@@ -513,6 +538,7 @@ export default function AgentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {slackFlow.dialog}
     </div>
   );
 }
