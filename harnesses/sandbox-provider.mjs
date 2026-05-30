@@ -78,7 +78,14 @@ export class E2bProvider extends SandboxProvider {
     const { Sandbox } = await import("e2b");
     const sandbox = await Sandbox.connect(id, { apiKey: this._apiKey });
     await sandbox.setTimeout(SANDBOX_TIMEOUT_MS); // keepalive
-    const result = await sandbox.commands.run(cmd, { timeoutMs: EXECUTE_TIMEOUT_MS });
+    let result;
+    try {
+      result = await sandbox.commands.run(cmd, { timeoutMs: EXECUTE_TIMEOUT_MS });
+    } catch (e) {
+      const out = (e.stdout ?? "") + (e.stderr ?? "");
+      if (out) return `${out}\n[exit 1]`;
+      throw e;
+    }
     const out = (result.stdout ?? "") + (result.stderr ?? "");
     return result.exitCode !== 0 ? `${out}\n[exit ${result.exitCode}]` : out;
   }

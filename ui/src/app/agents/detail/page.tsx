@@ -7,6 +7,8 @@ import {
   Brain,
   Check,
   Clock,
+  Download,
+  FileText,
   Pencil,
   Pin,
   PinOff,
@@ -28,13 +30,15 @@ import {
   createSession,
   deleteAgent,
   deleteMemory,
+  downloadAgentFile,
   getAgent,
+  listAgentFiles,
   listMemory,
   listSessions,
   storeMemory,
 } from "@/lib/api";
 import { scheduleLabel } from "@/lib/schedule";
-import type { Agent, Memory, OpencodeSession } from "@/lib/types";
+import type { Agent, AgentFile, Memory, OpencodeSession } from "@/lib/types";
 
 function timeAgo(ms: number): string {
   const diff = Date.now() - ms;
@@ -62,6 +66,24 @@ function formatMemoryDate(ms: number): string {
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units[units.length - 1]) {
+      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${bytes} B`;
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split("/").filter(Boolean).at(-1) || "agent-file";
+}
+
 type MemoryFilter = "all" | "always" | "standard";
 
 function AgentDetail() {
@@ -71,6 +93,10 @@ function AgentDetail() {
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [sessions, setSessions] = useState<OpencodeSession[]>([]);
+  const [files, setFiles] = useState<AgentFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [fileQuery, setFileQuery] = useState("");
+  const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryQuery, setMemoryQuery] = useState("");
@@ -96,18 +122,32 @@ function AgentDetail() {
     }
   };
 
+  const loadFiles = async (agentId = id) => {
+    if (!agentId) return;
+    setFilesLoading(true);
+    try {
+      setFiles(await listAgentFiles(agentId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFilesLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!id) return;
     (async () => {
       try {
-        const [ag, allSessions, memoryRows] = await Promise.all([
+        const [ag, allSessions, memoryRows, fileRows] = await Promise.all([
           getAgent(id),
           listSessions(),
           listMemory(id).catch(() => []),
+          listAgentFiles(id).catch(() => []),
         ]);
         setAgent(ag);
         setSessions(allSessions.filter((s) => s.agent === id || s.harness === id));
         setMemories(memoryRows);
+        setFiles(fileRows);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -115,6 +155,14 @@ function AgentDetail() {
       }
     })();
   }, [id]);
+
+  const visibleFiles = useMemo(() => {
+    const q = fileQuery.trim().toLowerCase();
+    const rows = q
+      ? files.filter((file) => file.path.toLowerCase().includes(q))
+      : files;
+    return [...rows].sort((a, b) => a.path.localeCompare(b.path));
+  }, [files, fileQuery]);
 
   const visibleMemories = useMemo(() => {
     const q = memoryQuery.trim().toLowerCase();
@@ -152,6 +200,25 @@ function AgentDetail() {
       router.push(`/chat/?id=${encodeURIComponent(sess.id)}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleDownloadFile = async (file: AgentFile) => {
+    setDownloadingPath(file.path);
+    try {
+      const blob = await downloadAgentFile(id, file.path);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileNameFromPath(file.path);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloadingPath(null);
     }
   };
 
@@ -380,6 +447,98 @@ function AgentDetail() {
                         </>
                       )}
                     </dl>
+                  </Card>
+                </section>
+
+                <section>
+                  <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        <FileText className="size-3.5" />
+                        Workspace Files
+                      </h2>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Persisted files copied into this agent's workspace on each run.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="relative w-full sm:w-[260px]">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={fileQuery}
+                          onChange={(e) => setFileQuery(e.target.value)}
+                          placeholder="Search files"
+                          className="h-8 pl-8 text-xs"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8"
+                        onClick={() => loadFiles()}
+                        disabled={filesLoading}
+                      >
+                        <RefreshCw className={`size-3.5 ${filesLoading ? "animate-spin" : ""}`} />
+                      </Button>
+                    </div>
+                  </div>
+
+                  <Card className="overflow-hidden">
+                    <div className="grid grid-cols-3 border-b border-border bg-muted/20 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <span>Path</span>
+                      <span className="text-right">Size</span>
+                      <span className="text-right">Download</span>
+                    </div>
+                    {filesLoading && files.length === 0 ? (
+                      <div className="p-6 text-sm text-muted-foreground">Loading files...</div>
+                    ) : visibleFiles.length === 0 ? (
+                      <div className="p-8 text-center">
+                        <FileText className="mx-auto mb-3 size-7 text-muted-foreground/60" />
+                        <p className="text-sm font-medium">
+                          {files.length === 0 ? "No workspace files" : "No matching files"}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {files.length === 0
+                            ? "Upload or persist files to make them available on future runs."
+                            : "Adjust the search to broaden the file list."}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="max-h-[360px] divide-y divide-border overflow-y-auto">
+                        {visibleFiles.map((file) => (
+                          <div
+                            key={file.path}
+                            className="grid grid-cols-[minmax(0,1fr)_72px_44px] items-center gap-3 px-3 py-2.5"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-mono text-xs" title={file.path}>
+                                {file.path}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                                {file.encoding === "base64" ? "Binary" : "Text"} · Updated {formatMemoryDate(file.updated_at)}
+                              </p>
+                            </div>
+                            <span className="text-right font-mono text-xs text-muted-foreground">
+                              {formatBytes(file.size_bytes)}
+                            </span>
+                            <div className="flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 w-8 p-0"
+                                onClick={() => handleDownloadFile(file)}
+                                disabled={downloadingPath === file.path}
+                                aria-label={`Download ${file.path}`}
+                              >
+                                <Download className="size-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </Card>
                 </section>
 

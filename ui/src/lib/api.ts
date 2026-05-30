@@ -1,4 +1,4 @@
-import type { Agent, HarnessMessage, Memory, OpencodeSession, Skill } from "./types";
+import type { Agent, AgentFile, HarnessMessage, Memory, OpencodeSession, Skill } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -443,6 +443,23 @@ export async function updateAgent(id: string, fields: Partial<Agent>): Promise<A
 
 export async function deleteAgent(id: string): Promise<void> {
   await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function listAgentFiles(agentId: string): Promise<AgentFile[]> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}/files`);
+  const data = await jsonOrThrow<{ files: AgentFile[] }>(res);
+  return data.files ?? [];
+}
+
+export async function downloadAgentFile(agentId: string, filePath: string): Promise<Blob> {
+  const res = await req(
+    `/api/agents/${encodeURIComponent(agentId)}/files/${encodeURIComponent(filePath)}`,
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new ApiError(res.status, body);
+  }
+  return res.blob();
 }
 
 // ── Skills list (DB-backed, /api/skills) ──────────────────────────────────────

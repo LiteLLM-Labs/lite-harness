@@ -40,7 +40,7 @@ import { createSkill, listSkills, getSkill, getSkillsByIds, updateSkill, deleteS
 import { storeMemory, listMemory, deleteMemory, deleteAllMemory } from "./memory-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer, setRunSandbox, getRunSandbox } from "./agent-run-store.mjs";
 import { buildDirectProvider } from "./sandbox-provider.mjs";
-import { upsertAgentFile, listAgentFiles, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS } from "./agent-file-store.mjs";
+import { upsertAgentFile, listAgentFiles, listAgentFilesWithContent, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS, isBinaryAgentFile } from "./agent-file-store.mjs";
 import {
   hydrateFromDb,
   persistSession,
@@ -58,6 +58,7 @@ const PORT = Number(process.env.PORT || 4096);
 const CHILD_PORT = Number(process.env.OPENCODE_CHILD_PORT || PORT + 1);
 const UP = `http://127.0.0.1:${CHILD_PORT}`;
 const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "skills");
+const SANDBOX_WORKSPACE_DIR = process.env.SANDBOX_WORKSPACE_DIR || "/home/user/workspace";
 
 // ---------------------------------------------------------------------------
 // LiteLLM → claude-code SDK wiring.
@@ -304,19 +305,9 @@ async function liteLlmChat(messages, model) {
 }
 
 async function runAgentForSlack(agentDef, slackEvent) {
-  const vaultPlugin = pluginRegistry.getPlugin("vault");
-  const mergedConfig = agentDef.config || {};
-  let agentPrompt = agentDef.prompt || agentDef.system || "";
-  if (vaultPlugin?.backend) {
-    agentPrompt = await resolveTemplates(agentPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend);
-  }
-  agentPrompt += skillsPromptNote(agentDef.skills);
-
   const userText = slackEvent.text || "";
   const threadTs = slackEvent.thread_ts || slackEvent.ts;
-  const slackPrompt = `${agentPrompt}
-
-Slack message received for this agent.
+  const slackPrompt = `Slack message received for this agent.
 
 Workspace team: ${slackEvent.team || "unknown"}
 Channel: ${slackEvent.channel || "unknown"}
@@ -325,20 +316,37 @@ User: ${slackEvent.user || "unknown"}
 Message:
 ${userText}
 
-Write the exact reply to send back in Slack. Return only the Slack message text.`;
+Carry out the agent task using this Slack message as the user-provided context. Return the exact reply to send back in Slack.`;
 
-  const directText = await liteLlmChat([
-    { role: "system", content: agentPrompt || "You are a helpful Slack agent." },
-    { role: "user", content: slackPrompt },
-  ], process.env.LITELLM_DEFAULT_MODEL || agentDef.model);
-
-  const runRecord = createAgentRun({
-    agentId: agentDef.id,
-    sessionId: `slack_direct_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
-    configOverrides: { slack: { channel: slackEvent.channel, user: slackEvent.user, ts: slackEvent.ts, direct_litellm: true } },
+  const resp = await fetch(`http://127.0.0.1:${PORT}/api/agents/${encodeURIComponent(agentDef.id)}/run`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(MASTER_KEY ? { authorization: `Bearer ${MASTER_KEY}` } : {}),
+    },
+    body: JSON.stringify({
+      prompt: slackPrompt,
+      config_overrides: { slack: { channel: slackEvent.channel, user: slackEvent.user, ts: slackEvent.ts } },
+    }),
   });
-  updateAgentRun(runRecord.id, { status: "completed", finishedAt: Date.now() });
-  return { runId: runRecord.id, text: directText };
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(body.error || `agent_run_http_${resp.status}`);
+
+  const runId = body.run_id;
+  const deadline = Date.now() + Math.max(1, Number(agentDef.max_runtime_minutes) || 30) * 60_000;
+  let run = null;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    run = getAgentRun(runId);
+    if (run?.status === "completed" || run?.status === "failed") break;
+  }
+  if (!run || run.status !== "completed") {
+    throw new Error(run?.error || "agent run did not complete");
+  }
+
+  const messages = await getOcMessages(run.session_id);
+  const text = latestAssistantText({ history: messages });
+  return { runId, text: text || `Agent run completed: ${runId}` };
 }
 
 async function handleSlackEventAsync(agentId, body) {
@@ -1199,6 +1207,42 @@ function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
 }
 
+function readBodyBuffer(req) {
+  return new Promise((res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    req.on("end", () => res(Buffer.concat(chunks)));
+  });
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+async function runShell(cmd, { cwd } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bash", ["-lc", cmd], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (c) => { out += c; });
+    child.stderr.on("data", (c) => { out += c; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(out);
+      else reject(new Error(`${out}\n[exit ${code}]`.trim()));
+    });
+  });
+}
+
+function materializeAgentFileLocal(root, file) {
+  const target = path.join(root, file.path);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (file.encoding === "base64") {
+    fs.writeFileSync(target, Buffer.from(file.content, "base64"));
+  } else {
+    fs.writeFileSync(target, file.content, "utf8");
+  }
+}
+
 // ── Opencode persistence helpers ─────────────────────────────────────────────
 
 // Fetch messages from the opencode child and save to our DB (idempotent).
@@ -1213,6 +1257,47 @@ async function snapshotOcMessages(ourSid) {
       });
     }).on("error", resolve);
   });
+}
+
+async function getOcMessages(ourSid) {
+  const childSid = ocSidRemap.get(ourSid) ?? ourSid;
+  return new Promise((resolve) => {
+    http.get(`${UP}/session/${encodeURIComponent(childSid)}/message`, (r) => {
+      let d = "";
+      r.on("data", c => d += c);
+      r.on("end", () => {
+        try {
+          const msgs = JSON.parse(d);
+          resolve(Array.isArray(msgs) ? msgs : []);
+        } catch {
+          resolve([]);
+        }
+      });
+    }).on("error", () => resolve([]));
+  });
+}
+
+async function pollOpencodeRunCompletion({ runId, runSid, maxRuntimeMinutes, onDone }) {
+  const deadline = Date.now() + Math.max(1, Number(maxRuntimeMinutes) || 30) * 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    const messages = await getOcMessages(runSid);
+    const lastAssistant = [...messages].reverse().find((m) => m?.info?.role === "assistant");
+    const finish = lastAssistant?.info?.finish;
+    if (finish === "stop") {
+      try { await snapshotOcMessages(runSid); } catch {}
+      updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
+      onDone?.();
+      return;
+    }
+    if (finish === "error") {
+      updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: "opencode run failed" });
+      onDone?.();
+      return;
+    }
+  }
+  updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: "agent run timed out" });
+  onDone?.();
 }
 
 // Translate opencode child session IDs in an SSE chunk to our session IDs.
@@ -2728,6 +2813,7 @@ const server = http.createServer(async (req, res) => {
     let body = {};
     try { body = JSON.parse(raw || "{}"); } catch {}
     const configOverrides = body.config_overrides || {};
+    const promptOverride = typeof body.prompt === "string" ? body.prompt : null;
 
     // Validate vault_keys exist before burning sandbox time
     const vaultPlugin = pluginRegistry.getPlugin("vault");
@@ -2758,7 +2844,9 @@ const server = http.createServer(async (req, res) => {
     // Resolve prompt templates ({{vault.X}} and {{config.X}}) in both the task
     // prompt and the composed system prompt.
     const mergedConfig = Object.assign({}, agentDef.config || {}, configOverrides);
-    let resolvedPrompt = (agentDef.prompt && agentDef.prompt.trim()) ? agentDef.prompt : "Proceed with your task.";
+    let resolvedPrompt = (promptOverride && promptOverride.trim())
+      ? promptOverride
+      : (agentDef.prompt && agentDef.prompt.trim()) ? agentDef.prompt : "Proceed with your task.";
     try {
       if (vaultPlugin && vaultPlugin.backend) {
         const uid = agentDef.owner_id || "default";
@@ -2874,9 +2962,32 @@ const server = http.createServer(async (req, res) => {
       `  To persist files you create in the sandbox back to the platform, call the\n` +
       `  persist_file MCP tool with your agent_id and the file path + content.\n---`;
 
-    // Provision sandbox and write agent files if any exist
-    const agentFiles = listAgentFiles(agentId);
-    if (agentFiles.length > 0) {
+    const agentFiles = listAgentFilesWithContent(agentId);
+    const setupCommands = Array.isArray(agentDef.setup_commands) ? agentDef.setup_commands.filter(Boolean) : [];
+    if (runHarness === "opencode" && (agentFiles.length > 0 || setupCommands.length > 0)) {
+      try {
+        const localRoot = path.join(process.env.OPENCODE_INLINE_WORKDIR || "/tmp", "agent-workspaces", agentId);
+        fs.rmSync(localRoot, { recursive: true, force: true });
+        fs.mkdirSync(localRoot, { recursive: true });
+        for (const file of agentFiles) materializeAgentFileLocal(localRoot, file);
+        for (const cmd of setupCommands) await runShell(cmd, { cwd: localRoot });
+        const fileList = agentFiles.map(f => `  - ${path.join(localRoot, f.path)}`).join("\n");
+        resolvedPrompt +=
+          `\n\n---\nLocal workspace root: ${localRoot}\n` +
+          (agentFiles.length ? `Files written under the local workspace root:\n${fileList}\n` : "") +
+          (setupCommands.length ? `Setup commands already ran in ${localRoot}:\n${setupCommands.map(c => `  - ${c}`).join("\n")}\n` : "") +
+          `Use the normal file tools against this local workspace. After editing any file, call persist_file\n` +
+          `to save changes so they survive future runs.\n---`;
+      } catch (e) {
+        updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `local workspace setup failed: ${e.message}` });
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `local workspace setup failed: ${e.message}` }));
+        return;
+      }
+    }
+
+    // Provision sandbox and write agent files/setup commands if any exist.
+    if (runHarness !== "opencode" && (agentFiles.length > 0 || setupCommands.length > 0)) {
       const { provider: sbProvider, error: sbError } = buildDirectProvider();
       if (sbError) {
         updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `sandbox not configured: ${sbError}` });
@@ -2889,12 +3000,27 @@ const server = http.createServer(async (req, res) => {
         setRunSandbox(runId, sbProvider, sbId);
         updateAgentRun(runId, { sandboxId: sbId });
         for (const file of agentFiles) {
-          await sbProvider.writeFile(sbId, `/workspace/${file.path}`, file.content);
+          const target = `${SANDBOX_WORKSPACE_DIR}/${file.path}`;
+          const dir = target.split("/").slice(0, -1).join("/") || SANDBOX_WORKSPACE_DIR;
+          await sbProvider.execute(sbId, `mkdir -p ${shellQuote(dir)}`);
+          if (file.encoding === "base64") {
+            await sbProvider.execute(sbId, `printf %s ${shellQuote(file.content)} | base64 -d > ${shellQuote(target)}`);
+          } else {
+            await sbProvider.writeFile(sbId, target, file.content);
+          }
         }
-        const fileList = agentFiles.map(f => `  - /workspace/${f.path}`).join("\n");
+        for (const cmd of setupCommands) {
+          const output = await sbProvider.execute(sbId, `cd ${shellQuote(SANDBOX_WORKSPACE_DIR)} && ${cmd}`);
+          if (/\[exit [1-9]\d*\]\s*$/.test(output.trim())) {
+            throw new Error(`setup command failed: ${cmd}\n${output}`);
+          }
+        }
+        const fileList = agentFiles.map(f => `  - ${SANDBOX_WORKSPACE_DIR}/${f.path}`).join("\n");
         resolvedPrompt +=
           `\n\n---\nSandbox provisioned (${sbProvider.providerName}). ID: ${sbId}.\n` +
-          `Files written to /workspace/:\n${fileList}\n` +
+          `Workspace root: ${SANDBOX_WORKSPACE_DIR}\n` +
+          (agentFiles.length ? `Files written under the workspace root:\n${fileList}\n` : "") +
+          (setupCommands.length ? `Setup commands already ran in ${SANDBOX_WORKSPACE_DIR}:\n${setupCommands.map(c => `  - ${c}`).join("\n")}\n` : "") +
           `Use sandbox tools to execute them. After editing any file, call persist_file\n` +
           `to save changes so they survive sandbox teardown.\n---`;
       } catch (e) {
@@ -2913,6 +3039,20 @@ const server = http.createServer(async (req, res) => {
       pluginGlobalBus.delete(runEventListener);
       ocGlobalBus.delete(runEventListener);
     });
+    if (runHarness === "opencode") {
+      pollOpencodeRunCompletion({
+        runId,
+        runSid,
+        maxRuntimeMinutes: agentDef.max_runtime_minutes,
+        onDone: () => {
+          ccGlobalBus.delete(runEventListener);
+          pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
+        },
+      }).catch((e) => {
+        log(`run ${runId} completion poll error: ${e.message}`);
+      });
+    }
 
     const host = req.headers.host || "localhost";
     res.writeHead(202, { "content-type": "application/json" });
@@ -2985,22 +3125,35 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "PUT" && filePath) {
-      const raw = await readBody(req);
+      const rawBuffer = await readBodyBuffer(req);
+      const raw = rawBuffer.toString("utf8");
       let content;
+      let encoding = isBinaryAgentFile(filePath) ? "base64" : "utf8";
       const ct = (req.headers["content-type"] || "").toLowerCase();
       if (ct.includes("application/json")) {
-        try { content = JSON.parse(raw).content; } catch {}
+        try {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed.content_base64 === "string") {
+            content = parsed.content_base64;
+            encoding = "base64";
+          } else {
+            content = parsed.content;
+            encoding = parsed.encoding === "base64" ? "base64" : "utf8";
+          }
+        } catch {}
       }
-      if (content === undefined) content = raw; // raw text fallback
+      if (content === undefined) {
+        content = encoding === "base64" ? rawBuffer.toString("base64") : raw;
+      }
       if (!content && content !== "") {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "content required" }));
         return;
       }
       try {
-        const file = upsertAgentFile(agentId, filePath, content);
+        const file = upsertAgentFile(agentId, filePath, content, { encoding });
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, path: file.path, size_bytes: file.size_bytes }));
+        res.end(JSON.stringify({ ok: true, path: file.path, encoding: file.encoding, size_bytes: file.size_bytes }));
       } catch (e) {
         res.writeHead(e.status || 400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: e.message }));
@@ -3020,6 +3173,11 @@ const server = http.createServer(async (req, res) => {
       if (!file) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "file not found" }));
+        return;
+      }
+      if (file.encoding === "base64") {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        res.end(Buffer.from(file.content, "base64"));
         return;
       }
       res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });

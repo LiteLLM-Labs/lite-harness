@@ -68,6 +68,15 @@ export interface Agent {
   [k: string]: unknown;
 }
 
+export interface AgentFile {
+  agent_id: string;
+  path: string;
+  encoding?: "utf8" | "base64" | string;
+  size_bytes: number;
+  created_at: number;
+  updated_at: number;
+}
+
 /** A reusable, DB-backed skill (capability doc) attachable to an agent. */
 export interface Skill {
   id: string;
