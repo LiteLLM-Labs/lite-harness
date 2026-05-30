@@ -53,7 +53,17 @@ try {
 
 async function getVaultEnvs() {
   if (!_vaultBackend) return {};
-  try { return await _vaultBackend.getAll(); } catch { return {}; }
+  try {
+    const all = await _vaultBackend.getAll();
+    // Vault stores keys as "owner_id:KEY_NAME". Strip the prefix so env vars
+    // are available as plain KEY_NAME inside the sandbox.
+    const out = {};
+    for (const [k, v] of Object.entries(all)) {
+      const colon = k.indexOf(":");
+      out[colon >= 0 ? k.slice(colon + 1) : k] = v;
+    }
+    return out;
+  } catch { return {}; }
 }
 
 const SANDBOX_TIMEOUT_MS = 1_800_000; // 30 min idle keepalive
