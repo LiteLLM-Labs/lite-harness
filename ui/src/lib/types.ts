@@ -50,3 +50,16 @@ export interface HarnessMessage {
   info: MessageInfo;
   parts: HarnessMessagePart[];
 }
+
+export interface Agent {
+  id: string;
+  name: string;
+  model?: string;
+  prompt?: string;
+  description?: string;
+  cron?: string | null;
+  status?: string;
+  owner_id?: string | null;
+  created_at?: number;
+  [k: string]: unknown;
+}
