@@ -115,6 +115,8 @@ function authOk(req, urlObj) {
 // cc sessions live entirely in-process.
 const sessionAgent = new Map(); // id → "opencode" | "cc"
 const sessionHarness = sessionAgent; // alias — same map, two names from merged branches
+const sessionSystemPrompt = new Map(); // sid -> system prompt for opencode agents (applied on first turn)
+const ocSysPromptDelivered = new Set();
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -1473,34 +1475,36 @@ const server = http.createServer(async (req, res) => {
 
     const sessionTz = body.timezone || null;
     let systemPromptOverride = body.systemPrompt || null;
-    let harnessOverride = null;
 
+    let storedBaseAgent = null;
     if (!builtin) {
+      // Resolve the agent name/id against BOTH stores: the save_agent MCP store
+      // (system_prompt) and the /api/agents store (prompt). The UI creates
+      // agents in the latter, so a single-store lookup 404s on UI agents.
       let savedAgent = null;
       try { savedAgent = getSavedAgent(agentParam); } catch {}
-      if (savedAgent) {
-        systemPromptOverride = savedAgent.system_prompt;
-        body.title = body.title || savedAgent.name;
-      } else {
-        // Fall back to the rich /api/agents store so agents created in the
-        // Agents UI are startable interactively, carrying their prompt, skills,
-        // and configured harness. Attached skills live in the shared catalog,
-        // so opencode/cc discover them from disk; the note tells the model.
-        let richAgent = null;
-        try { richAgent = getAgent(agentParam); } catch {}
-        if (!richAgent) {
-          res.writeHead(404, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
-          return;
-        }
-        systemPromptOverride = (richAgent.prompt || richAgent.system || "") + skillsPromptNote(richAgent.skills);
-        body.title = body.title || richAgent.name;
-        harnessOverride = richAgent.harness === "claude-code" ? "cc"
-          : richAgent.harness === "github-copilot" ? "github-copilot"
-          : richAgent.harness === "codex" ? "codex" : "opencode";
+      let apiAgent = null;
+      if (!savedAgent) { try { apiAgent = getAgent(agentParam); } catch {} }
+      if (!savedAgent && !apiAgent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
+        return;
       }
+      // The /api/agents store can attach skills; surface them in the prompt so
+      // the model knows to invoke them (the files live in the shared catalog on
+      // disk, where opencode/cc discover them).
+      systemPromptOverride = savedAgent
+        ? savedAgent.system_prompt
+        : (apiAgent.prompt || apiAgent.system || "") + skillsPromptNote(apiAgent.skills);
+      body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
+      // Honor the agent's base harness. The MCP store calls it base_agent; the
+      // /api/agents store calls it harness ("claude-code" -> "cc"). Default to
+      // opencode (always available) rather than cc, which needs the claude-code
+      // SDK to be installed.
+      const rawHarness = (savedAgent && savedAgent.base_agent) || (apiAgent && apiAgent.harness) || "opencode";
+      storedBaseAgent = rawHarness === "claude-code" ? "cc" : rawHarness;
     }
-    const resolvedAgent = builtin ?? harnessOverride ?? "cc";
+    const resolvedAgent = builtin ?? storedBaseAgent ?? "cc";
 
     if (resolvedAgent === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
@@ -1573,6 +1577,7 @@ const server = http.createServer(async (req, res) => {
           if (parsed.id) {
             sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
+            if (systemPromptOverride) sessionSystemPrompt.set(parsed.id, systemPromptOverride);
             persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz });
           }
         } catch {}
@@ -1777,6 +1782,16 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       if (sessionHarness.get(sid) === "opencode") {
         const { childSid, preamble } = await ensureOcChildAlive(sid);
+        const _sysPrompt = sessionSystemPrompt.get(sid);
+        if (_sysPrompt && !ocSysPromptDelivered.has(sid)) {
+          try {
+            const _b = JSON.parse(forwardBody);
+            const _ut = (_b.parts || []).filter(pt => pt.type === "text").map(pt => pt.text).join("\n");
+            _b.parts = [{ type: "text", text: `${_sysPrompt}\n\n---\n\n${_ut}` }];
+            forwardBody = JSON.stringify(_b);
+            ocSysPromptDelivered.add(sid);
+          } catch {}
+        }
         if (preamble) {
           try {
             const b = JSON.parse(forwardBody);

@@ -44,6 +44,7 @@ function ChatInner() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const eventBufferRef = useRef<Frame[]>([]);
   const [sessionHarness, setSessionHarness] = useState<string>("opencode");
+  const [sessionTitle, setSessionTitle] = useState<string>("");
   const [savedAgents, setSavedAgents] = useState<{ id: string; name: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
@@ -75,6 +76,7 @@ function ChatInner() {
     getSession(sid).then(s => {
       const a = s.agent ?? s.harness;
       if (a) setSessionHarness(a);
+      if (s.title) setSessionTitle(s.title);
     }).catch(() => {});
   }, [sid]);
 
@@ -250,6 +252,9 @@ function ChatInner() {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
+            {sessionTitle && (
+              <span className="text-sm font-medium" title={sessionTitle}>{sessionTitle}</span>
+            )}
             <span className="text-xs font-mono text-muted-foreground">{shortSid}</span>
             {sessionStatus === "busy" ? (
               <button
