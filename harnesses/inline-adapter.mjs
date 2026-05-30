@@ -1248,6 +1248,31 @@ function materializeAgentFileLocal(root, file) {
   }
 }
 
+function opencodeAgentWorkspaceRoot(agentId) {
+  return path.join(process.env.OPENCODE_INLINE_WORKDIR || "/tmp", "agent-workspaces", agentId);
+}
+
+function materializeOpencodeAgentWorkspace(agentId, { includePersistNote = true } = {}) {
+  const agentFiles = listAgentFilesWithContent(agentId);
+  if (agentFiles.length === 0) return "";
+
+  const localRoot = opencodeAgentWorkspaceRoot(agentId);
+  fs.rmSync(localRoot, { recursive: true, force: true });
+  fs.mkdirSync(localRoot, { recursive: true });
+  for (const file of agentFiles) materializeAgentFileLocal(localRoot, file);
+
+  const fileList = agentFiles.map((f) => `  - ${path.join(localRoot, f.path)}`).join("\n");
+  return (
+    `\n\n---\nLocal workspace root: ${localRoot}\n` +
+    `Files written under the local workspace root:\n${fileList}\n` +
+    (includePersistNote
+      ? `Use the normal file tools against this local workspace. After editing any file, call persist_file\n` +
+        `to save changes so they survive future runs.\n`
+      : "") +
+    `---`
+  );
+}
+
 // ── Opencode persistence helpers ─────────────────────────────────────────────
 
 // Fetch messages from the opencode child and save to our DB (idempotent).
@@ -1820,6 +1845,7 @@ const server = http.createServer(async (req, res) => {
     let systemPromptOverride = body.systemPrompt || null;
 
     let storedBaseAgent = null;
+    let apiAgentForSession = null;
     if (!builtin) {
       // Resolve the agent name/id against BOTH stores: the save_agent MCP store
       // (system_prompt) and the /api/agents store (prompt). The UI creates
@@ -1843,6 +1869,7 @@ const server = http.createServer(async (req, res) => {
             listSkills(),
           ) + memoryPromptNote(apiAgent.id);
       body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
+      apiAgentForSession = apiAgent;
       // Honor the agent's base harness. The MCP store calls it base_agent; the
       // /api/agents store calls it harness ("claude-code" -> "cc"). Default to
       // opencode (always available) rather than cc, which needs the claude-code
@@ -1851,6 +1878,17 @@ const server = http.createServer(async (req, res) => {
       storedBaseAgent = rawHarness === "claude-code" ? "cc" : rawHarness;
     }
     const resolvedAgent = builtin ?? storedBaseAgent ?? "cc";
+
+    if (apiAgentForSession && resolvedAgent === "opencode") {
+      try {
+        const workspaceNote = materializeOpencodeAgentWorkspace(apiAgentForSession.id);
+        if (workspaceNote) systemPromptOverride = `${systemPromptOverride || ""}${workspaceNote}`;
+      } catch (e) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `local workspace setup failed: ${e.message}` }));
+        return;
+      }
+    }
 
     if (resolvedAgent === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
@@ -2971,15 +3009,13 @@ const server = http.createServer(async (req, res) => {
     const setupCommands = Array.isArray(agentDef.setup_commands) ? agentDef.setup_commands.filter(Boolean) : [];
     if (runHarness === "opencode" && (agentFiles.length > 0 || setupCommands.length > 0)) {
       try {
-        const localRoot = path.join(process.env.OPENCODE_INLINE_WORKDIR || "/tmp", "agent-workspaces", agentId);
-        fs.rmSync(localRoot, { recursive: true, force: true });
+        const localRoot = opencodeAgentWorkspaceRoot(agentId);
         fs.mkdirSync(localRoot, { recursive: true });
-        for (const file of agentFiles) materializeAgentFileLocal(localRoot, file);
+        const workspaceNote = agentFiles.length
+          ? materializeOpencodeAgentWorkspace(agentId, { includePersistNote: false })
+          : `\n\n---\nLocal workspace root: ${localRoot}\n`;
         for (const cmd of setupCommands) await runShell(cmd, { cwd: localRoot });
-        const fileList = agentFiles.map(f => `  - ${path.join(localRoot, f.path)}`).join("\n");
-        resolvedPrompt +=
-          `\n\n---\nLocal workspace root: ${localRoot}\n` +
-          (agentFiles.length ? `Files written under the local workspace root:\n${fileList}\n` : "") +
+        resolvedPrompt += workspaceNote.replace(/\n---$/, "") +
           (setupCommands.length ? `Setup commands already ran in ${localRoot}:\n${setupCommands.map(c => `  - ${c}`).join("\n")}\n` : "") +
           `Use the normal file tools against this local workspace. After editing any file, call persist_file\n` +
           `to save changes so they survive future runs.\n---`;
