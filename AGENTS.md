@@ -96,6 +96,15 @@ human ──HTTP──▶ /api/inbox, /api/approvals/:id/{accept,reject}, /api/i
 - **Schema change:** edit `initInboxSchema` in `loop-store.mjs`; use idempotent
   `ALTER TABLE … ` in a try/catch for added columns (SQLite has no `IF NOT EXISTS`).
 
+## Pull requests
+
+- **UI PRs:** include screenshots in the PR before handing it off.
+- **Merge readiness:** before saying a PR is ready, merge or rebase the latest
+  `origin/main`, resolve conflicts, push the branch, and verify GitHub no longer
+  reports merge conflicts.
+- **Verification:** run the relevant build or tests and note any repo-level
+  command caveats in the PR.
+
 ## Tests
 
 ```bash

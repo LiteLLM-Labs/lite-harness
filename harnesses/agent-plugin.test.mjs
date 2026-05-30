@@ -81,6 +81,7 @@ test("buildAgentRecord: fields mirror /v1/agents + cadence", () => {
   });
   assert.deepEqual(Object.keys(rec).sort(), [
     "cadence",
+    "cronExpr",
     "intervalSeconds",
     "model",
     "name",

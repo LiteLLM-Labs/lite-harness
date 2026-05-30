@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-push: run unit tests before pushing to any remote.
+# Catches regressions before they hit CI and trigger a broken deploy.
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+echo "[pre-push] running unit tests..."
+
+if [ ! -d harnesses/node_modules ]; then
+  echo "[pre-push] installing harness deps..."
+  npm install --no-audit --no-fund --prefix harnesses --silent
+fi
+
+node --test mcp/sandbox.test.mjs mcp/approvals.test.mjs harnesses/agent-plugin.test.mjs
+echo "[pre-push] tests passed — pushing"

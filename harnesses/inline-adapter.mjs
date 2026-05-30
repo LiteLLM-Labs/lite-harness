@@ -1989,6 +1989,15 @@ const server = http.createServer(async (req, res) => {
     const keys = all
       .filter(r => r.key.startsWith(prefix))
       .map(r => ({ key: r.key.slice(prefix.length), updated_at: r.updatedAt }));
+    // Also surface env vars so the UI shows them as set (values never sent to client)
+    const vaultKeySet = new Set(keys.map(r => r.key));
+    if (typeof vaultPlugin.backend.envFallbackKeys === "function") {
+      for (const k of vaultPlugin.backend.envFallbackKeys(userId)) {
+        if (!vaultKeySet.has(k)) {
+          keys.push({ key: k, updated_at: 0, source: "env" });
+        }
+      }
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ keys }));
     return;
