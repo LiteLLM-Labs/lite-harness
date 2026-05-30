@@ -50,3 +50,25 @@ export interface HarnessMessage {
   info: MessageInfo;
   parts: HarnessMessagePart[];
 }
+
+export interface Agent {
+  id: string;
+  name: string;
+  model?: string;
+  prompt?: string;
+  description?: string;
+  cron?: string | null;
+  status?: string;
+  owner_id?: string | null;
+  skills?: string[];
+  vault_keys?: string[];
+  created_at?: number;
+  [k: string]: unknown;
+}
+
+/** A skill in the server catalog (~/.claude/skills), attachable to an agent. */
+export interface Skill {
+  slug: string;
+  name: string;
+  description: string;
+}
