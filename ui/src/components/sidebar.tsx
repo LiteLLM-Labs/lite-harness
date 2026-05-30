@@ -117,6 +117,20 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
           )}
         </Button>
         <Button
+          onClick={() => router.push("/inbox/")}
+          variant={pathname?.startsWith("/inbox") ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          size="sm"
+        >
+          <Inbox className="size-4" />
+          Inbox
+          {inboxCount > 0 && (
+            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
+              {inboxCount}
+            </span>
+          )}
+        </Button>
+        <Button
           onClick={() => router.push("/agents/")}
           variant={pathname?.startsWith("/agents") ? "secondary" : "ghost"}
           className="w-full justify-center sm:justify-start"
