@@ -182,7 +182,14 @@ async function callPromptAsync(sessionId, prompt) {
     const req = http.request(
       `${UP}/session/${sessionId}/prompt_async`,
       { method: "POST", headers: { "content-type": "application/json" } },
-      (res) => { res.resume(); resolve(); },
+      (res) => {
+        res.resume();
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`opencode child rejected prompt: HTTP ${res.statusCode}`));
+        } else {
+          resolve();
+        }
+      },
     );
     req.on("error", reject);
     req.end(body);
@@ -2162,6 +2169,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: `failed to create opencode session: ${e.message}` }));
         return;
       }
+      sessionAgent.set(runSid, "opencode");
       sessionHarness.set(runSid, "opencode");
     } else {
       runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
