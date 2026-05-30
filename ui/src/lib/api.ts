@@ -1,4 +1,4 @@
-import type { HarnessMessage, OpencodeSession } from "./types";
+import type { Agent, HarnessMessage, OpencodeSession } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -93,9 +93,10 @@ export async function createSession(title?: string, agent?: string): Promise<Ope
   return jsonOrThrow<OpencodeSession>(res);
 }
 
-export async function listAgents(): Promise<{ id: string; name: string; base_agent: string; created_at: number }[]> {
-  const res = await req("/agents");
-  return jsonOrThrow(res);
+export async function listAgents(): Promise<Agent[]> {
+  const res = await req("/api/agents");
+  const data = await jsonOrThrow<{ agents: Agent[] }>(res);
+  return data.agents;
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -322,4 +323,29 @@ export function subscribeEvents(opts: {
       /* noop */
     }
   };
+}
+
+// ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
+export async function createAgent(
+  input: { name: string; owner_id: string } & Partial<Agent>,
+): Promise<Agent> {
+  const res = await req("/api/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function updateAgent(id: string, fields: Partial<Agent>): Promise<Agent> {
+  const res = await req(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

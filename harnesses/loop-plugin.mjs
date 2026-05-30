@@ -50,6 +50,7 @@ export class LoopPlugin extends AdapterPlugin {
     initDb(dbPath);
     this._callPromptAsync = callPromptAsync;
     this._isSessionActive = isSessionActive;
+    this._running = new Set(); // loop IDs currently executing — prevents concurrent fires
     const timer = setInterval(() => this._tick(), 10_000);
     timer.unref();
   }
@@ -205,7 +206,9 @@ export class LoopPlugin extends AdapterPlugin {
   async _tick() {
     const due = dueLoops(Date.now());
     for (const loop of due) {
+      if (this._running.has(loop.id)) continue; // already executing, skip
       if (!this._isSessionActive(loop.session_id)) continue;
+      this._running.add(loop.id);
       try {
         await this._callPromptAsync(loop.session_id, loop.prompt);
         tickLoop(loop.id, computeNextRunAt(loop));
@@ -219,6 +222,8 @@ export class LoopPlugin extends AdapterPlugin {
         }
       } catch (e) {
         console.error(`[LoopPlugin] tick error loop=${loop.id}:`, e.message);
+      } finally {
+        this._running.delete(loop.id);
       }
     }
   }

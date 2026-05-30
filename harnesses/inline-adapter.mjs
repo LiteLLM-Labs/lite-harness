@@ -33,7 +33,8 @@ import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSav
 import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
 import {
@@ -82,6 +83,14 @@ let CAPABILITIES_CACHE = null;
 // Initialize DB synchronously so session hydration runs before any request.
 // LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
 initDb(DB_PATH);
+
+// Mark any runs stuck in "starting" for >10 min as timed_out. Happens when
+// the server restarts mid-run or session.idle was never caught (e.g. pre-ocGlobalBus).
+try {
+  getDb().prepare(
+    `UPDATE agent_runs SET status = 'timed_out', finished_at = ? WHERE status = 'starting' AND started_at < ?`
+  ).run(Date.now(), Date.now() - 10 * 60 * 1000);
+} catch {}
 
 // Plugin registry — handles /vault, /help, and future slash commands at the
 // adapter level before any harness sees the message.
@@ -148,6 +157,7 @@ try {
 const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
 const ccGlobalBus = new Set(); // SSE response writers for cc events
 const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
+const ocGlobalBus = new Set(); // SSE writers for opencode child events
 
 // In-process state for github-copilot sessions (declared early so callPromptAsync can close over it).
 // The full copilotSessions Map is re-used below; this forward reference is safe because
@@ -180,7 +190,14 @@ async function callPromptAsync(sessionId, prompt) {
     const req = http.request(
       `${UP}/session/${sessionId}/prompt_async`,
       { method: "POST", headers: { "content-type": "application/json" } },
-      (res) => { res.resume(); resolve(); },
+      (res) => {
+        res.resume();
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`opencode child rejected prompt: HTTP ${res.statusCode}`));
+        } else {
+          resolve();
+        }
+      },
     );
     req.on("error", reject);
     req.end(body);
@@ -946,6 +963,11 @@ function tapOcSseChunk(chunk) {
   const now = Date.now();
   for (const line of text.split("\n")) {
     if (!line.startsWith("data: ")) continue;
+    // Distribute raw opencode event to any agent run listeners.
+    if (ocGlobalBus.size > 0) {
+      const fwd = line + "\n";
+      for (const cb of ocGlobalBus) { try { cb(fwd); } catch {} }
+    }
     try {
       const ev = JSON.parse(line.slice(6));
       const sid = ev.properties?.sessionID ?? ev.properties?.part?.sessionID;
@@ -1512,7 +1534,9 @@ const server = http.createServer(async (req, res) => {
     const codexList = [...codexSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, agent: "codex",
     }));
-    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList]
+      .filter(s => s.id != null)
+      .sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(all));
     return;
@@ -2051,6 +2075,29 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     updateAgent(agentId, { status: "active" });
+
+    // Wire up cron loop if agent has a schedule but no loop yet.
+    if (existing.cron && !existing.loop_id) {
+      try {
+        const tz = existing.timezone || "UTC";
+        const job = new Cron(existing.cron, { timezone: tz, paused: true });
+        const nextRun = job.nextRun();
+        const nextRunAt = nextRun ? nextRun.getTime() : Date.now() + 60_000;
+        const agentPrompt = existing.prompt || existing.system || "";
+        const loop = createLoop({
+          sessionId: existing.session_id,
+          prompt: agentPrompt,
+          cronExpr: existing.cron,
+          tz,
+          nextRunAt,
+        });
+        setAgentLoop(agentId, loop.id);
+        log(`[resume] created loop ${loop.id} for agent ${agentId} cron=${existing.cron} tz=${tz}`);
+      } catch (e) {
+        log(`[resume] failed to create loop for agent ${agentId}:`, e.message);
+      }
+    }
+
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ id: agentId, status: "active" }));
     return;
@@ -2105,21 +2152,58 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Create ephemeral cc session for this run
-    if (!ccQuery) {
+    // Create ephemeral session for this run using the agent's configured harness
+    const runHarness = agentDef.harness === "claude-code" ? "cc" : agentDef.harness === "github-copilot" ? "github-copilot" : agentDef.harness === "codex" ? "codex" : "opencode";
+    if (runHarness === "cc" && !ccQuery) {
       res.writeHead(503, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "claude-code SDK not available" }));
       return;
     }
-    const runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    let runSid;
     const runNow = Date.now();
-    ccSessions.set(runSid, {
-      id: runSid, title: `agent-run-${agentId}`,
-      time: { created: runNow }, harness: "claude-code",
-      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
-    });
-    sessionHarness.set(runSid, "cc");
-    persistSession({ id: runSid, harness: "cc", title: `agent-run-${agentId}`, createdAt: runNow });
+    if (runHarness === "opencode") {
+      // Create the session in the opencode child first so prompt_async finds it.
+      try {
+        const ocSessResp = await new Promise((resolve, reject) => {
+          let data = "";
+          const r = http.request(`${UP}/session`, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+            res.on("data", c => data += c);
+            res.on("end", () => {
+              try {
+                const parsed = JSON.parse(data);
+                if (!parsed.id || (parsed.success === false)) {
+                  const msg = parsed.error?.[0]?.message ?? parsed.error ?? "session creation rejected";
+                  reject(new Error(`opencode POST /session failed: ${msg}`));
+                } else {
+                  resolve(parsed);
+                }
+              } catch { reject(new Error("bad json from child")); }
+            });
+          });
+          r.on("error", reject);
+          // Don't pass model at session creation — opencode rejects all model formats.
+          // The model is applied by the adapter's FORCE_MODEL logic when the prompt fires.
+          r.end(JSON.stringify({ title: `agent-run-${agentId}` }));
+        });
+        runSid = ocSessResp.id;
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `failed to create opencode session: ${e.message}` }));
+        return;
+      }
+      sessionAgent.set(runSid, "opencode");
+      sessionHarness.set(runSid, "opencode");
+    } else {
+      runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      ccSessions.set(runSid, {
+        id: runSid, title: `agent-run-${agentId}`,
+        time: { created: runNow }, harness: agentDef.harness || "claude-code",
+        sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+      });
+      sessionAgent.set(runSid, runHarness);
+      sessionHarness.set(runSid, runHarness);
+    }
+    persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
 
     const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
     const runId = runRecord.id;
@@ -2137,6 +2221,7 @@ const server = http.createServer(async (req, res) => {
           updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
         } else if (evt.type === "session.error") {
           const errMsg = (evt.properties && evt.properties.error && evt.properties.error.message) || "unknown error";
           updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: errMsg });
@@ -2145,11 +2230,13 @@ const server = http.createServer(async (req, res) => {
           }
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
         }
       } catch {}
     };
     ccGlobalBus.add(runEventListener);
     pluginGlobalBus.add(runEventListener);
+    if (runHarness === "opencode") ocGlobalBus.add(runEventListener);
 
     // Fire prompt async — non-blocking
     callPromptAsync(runSid, resolvedPrompt).catch((e) => {
@@ -2157,6 +2244,7 @@ const server = http.createServer(async (req, res) => {
       updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: e.message });
       ccGlobalBus.delete(runEventListener);
       pluginGlobalBus.delete(runEventListener);
+      ocGlobalBus.delete(runEventListener);
     });
 
     const host = req.headers.host || "localhost";
