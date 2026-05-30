@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Play, Pencil, Trash2 } from "lucide-react";
+import { Plus, Play, Pencil, Trash2, X } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,9 @@ import {
   deleteAgent,
   createSession,
   listSkills,
+  listIntegrationKeys,
+  saveIntegrationKey,
+  deleteIntegrationKey,
 } from "@/lib/api";
 import type { Agent, Skill } from "@/lib/types";
 
@@ -34,9 +37,10 @@ interface FormState {
   description: string;
   prompt: string;
   skills: string[];
+  vault_keys: string[];
 }
 
-const EMPTY: FormState = { name: "", owner_id: "local", description: "", prompt: "", skills: [] };
+const EMPTY: FormState = { name: "", owner_id: "local", description: "", prompt: "", skills: [], vault_keys: [] };
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -48,6 +52,9 @@ export default function AgentsPage() {
   const [form, setForm] = useState<FormState>(EMPTY);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [vaultKeyInput, setVaultKeyInput] = useState("");
+  const [vaultValues, setVaultValues] = useState<Record<string, string>>({});
+  const [storedKeys, setStoredKeys] = useState<string[]>([]);
 
   const load = async () => {
     try {
@@ -60,7 +67,31 @@ export default function AgentsPage() {
   useEffect(() => {
     load();
     listSkills().then(setSkills).catch(() => setSkills([]));
+    listIntegrationKeys().then(setStoredKeys).catch(() => setStoredKeys([]));
   }, []);
+
+  const addVaultKey = () => {
+    const k = vaultKeyInput.trim();
+    if (!k) return;
+    setForm((f) => (f.vault_keys.includes(k) ? f : { ...f, vault_keys: [...f.vault_keys, k] }));
+    setVaultKeyInput("");
+  };
+  const removeVaultKey = (k: string) => {
+    setForm((f) => ({ ...f, vault_keys: f.vault_keys.filter((x) => x !== k) }));
+    deleteIntegrationKey(k).then(() => setStoredKeys((p) => p.filter((x) => x !== k))).catch(() => {});
+    setVaultValues(({ [k]: _drop, ...rest }) => rest);
+  };
+  const saveVaultValue = async (k: string) => {
+    const v = vaultValues[k];
+    if (!v) return;
+    try {
+      await saveIntegrationKey(k, v);
+      setStoredKeys((p) => (p.includes(k) ? p : [...p, k]));
+      setVaultValues(({ [k]: _drop, ...rest }) => rest);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const toggleSkill = (slug: string) =>
     setForm((f) => ({
@@ -74,6 +105,8 @@ export default function AgentsPage() {
     setEditingId(null);
     setForm(EMPTY);
     setFormError(null);
+    setVaultKeyInput("");
+    setVaultValues({});
     setOpen(true);
   };
   const openEdit = (ag: Agent) => {
@@ -84,8 +117,11 @@ export default function AgentsPage() {
       description: ag.description ?? "",
       prompt: ag.prompt ?? "",
       skills: Array.isArray(ag.skills) ? ag.skills : [],
+      vault_keys: Array.isArray(ag.vault_keys) ? ag.vault_keys : [],
     });
     setFormError(null);
+    setVaultKeyInput("");
+    setVaultValues({});
     setOpen(true);
   };
 
@@ -100,6 +136,7 @@ export default function AgentsPage() {
           description: form.description,
           prompt: form.prompt,
           skills: form.skills,
+          vault_keys: form.vault_keys,
         });
       } else {
         await createAgent({
@@ -108,6 +145,7 @@ export default function AgentsPage() {
           description: form.description,
           prompt: form.prompt,
           skills: form.skills,
+          vault_keys: form.vault_keys,
         });
       }
       setOpen(false);
@@ -295,6 +333,67 @@ export default function AgentsPage() {
                 <p className="text-[11px] text-muted-foreground">
                   {form.skills.length} skill{form.skills.length === 1 ? "" : "s"} attached
                 </p>
+              )}
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Vault credentials</Label>
+              <p className="text-[11px] text-muted-foreground -mt-1">
+                Secrets this agent can use. Reference them in the prompt as{" "}
+                <span className="font-mono">{"{{vault.KEY_NAME}}"}</span>.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  value={vaultKeyInput}
+                  onChange={(e) => setVaultKeyInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addVaultKey(); } }}
+                  placeholder="BROWSER_USE_API_KEY"
+                  className="font-mono text-xs"
+                />
+                <Button type="button" variant="outline" size="sm" onClick={addVaultKey}>
+                  Add
+                </Button>
+              </div>
+              {form.vault_keys.length > 0 && (
+                <div className="rounded-md border border-border divide-y divide-border">
+                  {form.vault_keys.map((k) => {
+                    const isSet = storedKeys.includes(k);
+                    return (
+                      <div key={k} className="flex items-center gap-2 px-2.5 py-1.5">
+                        <span className="text-xs font-mono min-w-0 flex-1 truncate">{k}</span>
+                        <Badge variant={isSet ? "secondary" : "outline"} className="text-[10px]">
+                          {isSet ? "set" : "no value"}
+                        </Badge>
+                        <Input
+                          type="password"
+                          value={vaultValues[k] ?? ""}
+                          onChange={(e) => setVaultValues((v) => ({ ...v, [k]: e.target.value }))}
+                          placeholder={isSet ? "update value" : "set value"}
+                          className="h-7 w-36 text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7"
+                          disabled={!vaultValues[k]}
+                          onClick={() => saveVaultValue(k)}
+                        >
+                          Save
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2"
+                          onClick={() => removeVaultKey(k)}
+                          aria-label={`Remove ${k}`}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
             {formError && <p className="text-sm text-destructive">{formError}</p>}
