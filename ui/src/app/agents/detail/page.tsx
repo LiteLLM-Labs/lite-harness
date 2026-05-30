@@ -9,6 +9,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getAgent, deleteAgent, createSession, listSessions } from "@/lib/api";
+import { scheduleLabel } from "@/lib/schedule";
 import type { Agent, OpencodeSession } from "@/lib/types";
 
 function timeAgo(ms: number): string {
@@ -119,6 +120,15 @@ function AgentDetail() {
                       <dd className="font-mono text-xs">{String(agent.model)}</dd></>)}
                     {agent.owner_id && (<><dt className="text-muted-foreground font-medium">Owner</dt>
                       <dd className="font-mono text-xs">{String(agent.owner_id)}</dd></>)}
+                    <dt className="text-muted-foreground font-medium">Run schedule</dt>
+                    <dd className="flex flex-col gap-1">
+                      <span className="font-mono text-xs">{scheduleLabel(agent.cron, agent.timezone)}</span>
+                      {agent.cron && (
+                        <span className="font-mono text-[11px] text-muted-foreground">
+                          {String(agent.cron)}
+                        </span>
+                      )}
+                    </dd>
                     {agent.prompt && (<><dt className="text-muted-foreground font-medium pt-1">System prompt</dt>
                       <dd><pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">{String(agent.prompt)}</pre></dd></>)}
                   </dl>
