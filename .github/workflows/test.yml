@@ -1,0 +1,24 @@
+name: Unit tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install harness deps
+        run: npm install --no-audit --no-fund
+        working-directory: harnesses
+
+      - name: Run unit tests
+        run: |
+          node --test mcp/sandbox.test.mjs mcp/approvals.test.mjs harnesses/agent-plugin.test.mjs
