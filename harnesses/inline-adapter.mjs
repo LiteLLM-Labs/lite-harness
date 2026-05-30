@@ -37,6 +37,7 @@ import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun,
 import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
 import { createSkill, listSkills, getSkill, getSkillsByIds, updateSkill, deleteSkill } from "./skills-store.mjs";
+import { storeMemory, listMemory, deleteMemory, deleteAllMemory } from "./memory-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
 import {
   hydrateFromDb,
@@ -166,6 +167,20 @@ function composeAgentSystem(agentSystem, attachedSkills, allSkills) {
   }
   if (agentSystem && agentSystem.trim()) parts.push(agentSystem.trim());
   return parts.join("\n\n---\n\n");
+}
+
+// A system-prompt note telling an agent its own id and how to use the memory
+// tools. The platform memory_* tools are shared across all agents, so each call
+// must be scoped by agent_id — we hand the agent its id here so it can pass it.
+function memoryPromptNote(agentId) {
+  if (!agentId) return "";
+  return (
+    `\n\n---\n\n## Your memory\nYour agent_id is "${agentId}". You have a durable memory ` +
+    `(key→value notes) that persists across sessions and scheduled runs. Pass this exact ` +
+    `agent_id to the memory tools: memory_list (recall everything — do this at the start of a ` +
+    `task), memory_get (read one key), memory_store (save/overwrite a key), memory_delete ` +
+    `(forget a key). Use memory to remember facts, preferences, and decisions worth keeping.`
+  );
 }
 
 // Load the claude-code SDK from ./claude-code/node_modules/ relative to this
@@ -1526,12 +1541,12 @@ const server = http.createServer(async (req, res) => {
       // The /api/agents store can attach DB-backed skills (skill_ids); compose
       // their full content into the system prompt so the model follows them.
       systemPromptOverride = savedAgent
-        ? savedAgent.system_prompt
+        ? savedAgent.system_prompt + memoryPromptNote(savedAgent.id)
         : composeAgentSystem(
             apiAgent.system || apiAgent.prompt || "",
             getSkillsByIds(apiAgent.skill_ids || []),
             listSkills(),
-          );
+          ) + memoryPromptNote(apiAgent.id);
       body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
       // Honor the agent's base harness. The MCP store calls it base_agent; the
       // /api/agents store calls it harness ("claude-code" -> "cc"). Default to
@@ -2110,8 +2125,47 @@ const server = http.createServer(async (req, res) => {
   const _agentRunMatch     = p.match(/^\/api\/agents\/([^/]+)\/run$/);
   const _agentPauseMatch   = p.match(/^\/api\/agents\/([^/]+)\/pause$/);
   const _agentResumeMatch  = p.match(/^\/api\/agents\/([^/]+)\/resume$/);
+  const _agentMemoryKeyMatch = p.match(/^\/api\/agents\/([^/]+)\/memory\/(.+)$/);
+  const _agentMemoryMatch    = p.match(/^\/api\/agents\/([^/]+)\/memory$/);
   const _agentIdMatch      = p.match(/^\/api\/agents\/([^/]+)$/);
   const _agentsMatch       = p === "/api/agents";
+
+  // ── Agent memory ──────────────────────────────────────────────────────────────
+  // The same per-agent key→value store the memory_* MCP tools read & write, so
+  // the UI can show (and curate) what an agent has remembered.
+  if (_agentMemoryMatch && req.method === "GET") {
+    const agentId = _agentMemoryMatch[1];
+    if (!getAgent(agentId)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ memories: listMemory(agentId) }));
+    return;
+  }
+
+  if (_agentMemoryMatch && req.method === "POST") {
+    const agentId = _agentMemoryMatch[1];
+    if (!getAgent(agentId)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    const raw = await readBody(req);
+    let b = {}; try { b = JSON.parse(raw || "{}"); } catch {}
+    const { key, value } = b;
+    if (!key || value == null) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "key and value required" }));
+      return;
+    }
+    const row = storeMemory({ agentId, key: String(key), value: String(value) });
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify(row));
+    return;
+  }
+
+  if (_agentMemoryKeyMatch && req.method === "DELETE") {
+    const agentId = _agentMemoryKeyMatch[1];
+    const key = decodeURIComponent(_agentMemoryKeyMatch[2]);
+    const deleted = deleteMemory(agentId, key);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, deleted }));
+    return;
+  }
 
   if (_agentsMatch && req.method === "POST") {
     const raw = await readBody(req);
@@ -2234,6 +2288,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     deleteAgent(agentId);
+    deleteAllMemory(agentId);   // an agent's memory dies with it
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -2328,7 +2383,7 @@ const server = http.createServer(async (req, res) => {
     // the agent's own system. The user message is the agent's `prompt` (task).
     const attachedSkills = getSkillsByIds(agentDef.skill_ids || []);
     const allSkills = listSkills();
-    let effectiveSystem = composeAgentSystem(agentDef.system, attachedSkills, allSkills);
+    let effectiveSystem = composeAgentSystem(agentDef.system, attachedSkills, allSkills) + memoryPromptNote(agentId);
 
     // Resolve prompt templates ({{vault.X}} and {{config.X}}) in both the task
     // prompt and the composed system prompt.
