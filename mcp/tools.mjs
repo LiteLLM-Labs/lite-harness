@@ -8,5 +8,6 @@
 import "./tools/save-agent.mjs";
 import "./tools/agent-files.mjs";
 import "./tools/human-approval.mjs";
+import "./tools/file-issue.mjs";
 import "./tools/memory.mjs";
 import "./tools/sandbox.mjs";

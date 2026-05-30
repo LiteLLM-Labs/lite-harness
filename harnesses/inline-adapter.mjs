@@ -30,7 +30,7 @@ import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
 import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSavedAgents, deleteAgent as deleteSavedAgent } from "../mcp/agents/store.mjs";
-import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
+import { wireInbox, handleInboxRoute } from "./inbox-service.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
@@ -269,19 +269,29 @@ pluginRegistry.setup({
     ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionAgent.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
-// Push human-in-the-loop approval lifecycle events to every connected /event
-// client (CLI and web UI), reusing the plugin SSE bus. Envelope matches the
-// shape clients already parse: { id, type, properties }.
-setApprovalBroadcaster((event) => {
-  const { type, ...rest } = event;
-  const envelope = {
-    id: `evt_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
-    type,
-    properties: rest,
-  };
+// Best-effort human-readable label for the session that owns an inbox item —
+// the session title if we have it in-process, else the harness/agent tag.
+// Hoisted (function declaration) so the broadcaster below can use it even though
+// some session Maps are declared further down; it only reads them at call time.
+function sessionLabel(sid) {
+  if (!sid) return null;
+  const s = ccSessions.get(sid) || copilotSessions.get(sid) || codexSessions.get(sid);
+  if (s?.title) return s.title;
+  const agent = sessionAgent.get(sid);
+  return agent || null;
+}
+
+// Broadcast a raw lifecycle event to every connected /event client (CLI + web
+// UI) via the plugin SSE bus, in the { id, type, properties } envelope clients
+// already parse.
+function broadcastEvent(type, properties) {
+  const envelope = { id: `evt_${randomUUID().replace(/-/g, "").slice(0, 20)}`, type, properties };
   const line = `data: ${JSON.stringify(envelope)}\n\n`;
   for (const cb of pluginGlobalBus) { try { cb(line); } catch {} }
-});
+}
+
+// Wire the agent inbox: bridge approval/issue lifecycle to persistence + SSE.
+wireInbox({ broadcast: broadcastEvent, sessionLabel });
 
 // Returns true if a plugin handled the message (response already sent).
 async function tryPlugin(text, sid, harness, res) {
@@ -620,7 +630,7 @@ async function codexRunTurn(s, userText) {
       // Inject the platform MCP server so codex sessions can call save_agent.
       // Uses the same -c override mechanism as the model config above.
       // TOML path matches what `codex mcp add --url` writes: [mcp_servers.<name>] / url = "..."
-      "-c", `mcp_servers.platform.url="${PLATFORM_MCP_URL}"`,
+      "-c", `mcp_servers.platform.url="${PLATFORM_MCP_URL}?session=${encodeURIComponent(s.id)}"`,
       "-m", model,
       "--dangerously-bypass-approvals-and-sandbox",
       fullPrompt,
@@ -778,9 +788,11 @@ async function ccRunTurn(s, userText, modelId) {
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
       // The claude-code SDK ignores `system`; it appends extra system-prompt
       // text via `appendSystemPrompt`. This is how an agent's skills + system
-      // prompt actually reach the model.
+      // prompt (incl. the memory agent_id note) actually reach the model.
       ...(s.systemPrompt ? { appendSystemPrompt: s.systemPrompt } : {}),
-      mcpServers: [{ type: "http", url: PLATFORM_MCP_URL }],
+      // Session-scoped MCP URL so platform tools (approvals, file_issue) know
+      // which session they're acting for.
+      mcpServers: [{ type: "http", url: `${PLATFORM_MCP_URL}?session=${encodeURIComponent(s.id)}` }],
     }});
     for await (const m of stream) {
       if (m.type === "system" && m.subtype === "init" && m.session_id && !s.sdkSessionId) s.sdkSessionId = m.session_id;
@@ -1431,7 +1443,9 @@ const server = http.createServer(async (req, res) => {
     const raw = await readBody(req);
     let mcpBody = {};
     try { mcpBody = JSON.parse(raw || "{}"); } catch {}
-    const response = await handleMcpRequest(mcpBody);
+    // Agents connect with ?session=<id> appended to the MCP URL so tools like
+    // request_human_approval / file_issue can attribute the item to its session.
+    const response = await handleMcpRequest(mcpBody, { session: url.searchParams.get("session") || null });
     if (response === null) { res.writeHead(204); res.end(); return; }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(response));
@@ -1457,39 +1471,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Human-in-the-loop approvals — list pending tool-call approvals.
-  if (p === "/api/approvals" && req.method === "GET") {
-    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ approvals: listPending() }));
-    return;
-  }
-
-  // Accept a pending approval, optionally with human-edited arguments.
-  const _approvalAcceptMatch = p.match(/^\/api\/approvals\/([^/]+)\/accept$/);
-  if (_approvalAcceptMatch && req.method === "POST") {
-    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    const raw = await readBody(req);
-    let body = {};
-    try { body = JSON.parse(raw || "{}"); } catch {}
-    const ok = acceptApproval(_approvalAcceptMatch[1], body.arguments);
-    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
-    return;
-  }
-
-  // Reject a pending approval, optionally with feedback returned to the agent.
-  const _approvalRejectMatch = p.match(/^\/api\/approvals\/([^/]+)\/reject$/);
-  if (_approvalRejectMatch && req.method === "POST") {
-    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    const raw = await readBody(req);
-    let body = {};
-    try { body = JSON.parse(raw || "{}"); } catch {}
-    const ok = rejectApproval(_approvalRejectMatch[1], body.feedback);
-    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
-    return;
-  }
+  // Agent inbox — approvals (live + history) and agent-filed issues. All routes
+  // (/api/approvals*, /api/inbox*) live in inbox-service.mjs.
+  if (await handleInboxRoute(req, res, url, { authOk, readBody })) return;
 
   if (p === "/agents" && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }

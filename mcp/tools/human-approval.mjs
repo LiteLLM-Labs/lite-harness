@@ -27,8 +27,8 @@ registerTool(
       required: ["action"],
     },
   },
-  async ({ action, arguments: actionArgs }) => {
-    const outcome = await requestApproval(action, actionArgs || {});
+  async ({ action, arguments: actionArgs }, ctx) => {
+    const outcome = await requestApproval(action, actionArgs || {}, { session: ctx?.session });
     if (outcome.decision === "accept") {
       return { approved: true, arguments: outcome.args || {} };
     }
