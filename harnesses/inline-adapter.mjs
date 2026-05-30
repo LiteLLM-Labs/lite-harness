@@ -104,6 +104,7 @@ function authOk(req, urlObj) {
 // Per-session harness tag. opencode sessions exist in the child's DB;
 // cc sessions live entirely in-process.
 const sessionAgent = new Map(); // id → "opencode" | "cc"
+const sessionHarness = sessionAgent; // alias — same map, two names from merged branches
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
