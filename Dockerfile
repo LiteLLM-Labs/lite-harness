@@ -181,7 +181,8 @@ COPY --chown=sandbox:sandbox mcp/approvals.mjs /opt/mcp/approvals.mjs
 COPY --chown=sandbox:sandbox mcp/agents/store.mjs /opt/mcp/agents/store.mjs
 COPY --chown=sandbox:sandbox mcp/sandbox.mjs /opt/mcp/sandbox.mjs
 
-RUN ln -s /opt/lap /opt/harnesses
+RUN ln -s /opt/lap /opt/harnesses \
+ && ln -s /opt/lap/opencode-sandbox-mcp/node_modules /opt/mcp/node_modules
 
 COPY --from=ui-builder --chown=sandbox:sandbox /ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out
