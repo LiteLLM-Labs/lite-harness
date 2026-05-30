@@ -26,10 +26,16 @@ export function makeRenderer() {
   }
 
   // Stream `text`, prefixing every fresh line with `prefix` (margin + color).
+  // Splits on newlines rather than iterating char-by-char to reduce syscall count.
   function feed(text, prefix) {
-    for (const ch of text) {
-      if (ch === "\n") { out(R); out("\n"); atLineStart = true; }
-      else { if (atLineStart) { out(prefix); atLineStart = false; } out(ch); }
+    const parts = text.split("\n");
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) { out(R + "\n"); atLineStart = true; }
+      const seg = parts[i];
+      if (seg) {
+        if (atLineStart) { out(prefix); atLineStart = false; }
+        out(seg);
+      }
     }
   }
 

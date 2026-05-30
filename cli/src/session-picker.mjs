@@ -71,12 +71,13 @@ export function sessionPicker(sessions) {
         return;
       }
 
-      if (s === "\x1b" || s === "\x03" || s === "\x04") {
+      if (s === "\x1b" || s === "\x04") {
         cleanup();
         out("\n");
         resolve(null);
         return;
       }
+      if (s === "\x03") { cleanup(); process.stdout.write("\n"); process.exit(0); }
     }
 
     stdin.setRawMode(true);

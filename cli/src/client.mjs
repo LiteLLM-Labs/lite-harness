@@ -38,11 +38,17 @@ export class LiteClient {
     return (d?.data ?? []).map((m) => m.id).filter(Boolean);
   }
 
+  async listAgents() {
+    const r = await fetch(`${this.url}/agents`, { headers: this.authHdr });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
   async createSession(harness) {
     const r = await fetch(`${this.url}/session`, {
       method: "POST",
       headers: this.jsonHdr,
-      body: JSON.stringify({ title: "CLI session", harness }),
+      body: JSON.stringify({ title: "CLI session", agent: harness }),
     });
     if (!r.ok) {
       const body = await r.text().catch(() => "");
@@ -68,6 +74,12 @@ export class LiteClient {
   deleteSession(id) {
     return fetch(`${this.url}/session/${encodeURIComponent(id)}`, {
       method: "DELETE", headers: this.authHdr,
+    }).catch(() => {});
+  }
+
+  abort(id) {
+    return fetch(`${this.url}/session/${encodeURIComponent(id)}/abort`, {
+      method: "POST", headers: this.authHdr,
     }).catch(() => {});
   }
 

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Puzzle } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { readHarness } from "@/lib/use-harness";
@@ -22,6 +23,7 @@ function timeAgo(ts?: number): string {
 
 export function Sidebar({ activeId }: { activeId?: string | null }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [sessions, setSessions] = useState<OpencodeSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -74,7 +76,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         <SettingsDialog />
       </div>
 
-      <div className="px-3 py-3 border-b border-border">
+      <div className="px-3 py-3 border-b border-border space-y-2">
         <Button
           onClick={onNew}
           disabled={creating}
@@ -83,6 +85,15 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         >
           <Plus className="size-4" />
           New session
+        </Button>
+        <Button
+          onClick={() => router.push("/integrations/")}
+          variant={pathname?.startsWith("/integrations") ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          size="sm"
+        >
+          <Puzzle className="size-4" />
+          Integrations
         </Button>
       </div>
 
@@ -115,7 +126,7 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{title}</div>
                 <div className="font-mono text-[10px] text-muted-foreground truncate">
-                  {s.harness === "claude-code" ? "cc" : s.harness === "github-copilot" ? "gh" : "oc"} · {short} · {timeAgo(s.time?.created)}
+                  {(s.agent ?? s.harness) === "claude-code" ? "cc" : (s.agent ?? s.harness) === "github-copilot" ? "gh" : "oc"} · {short} · {timeAgo(s.time?.created)}
                 </div>
               </div>
               <button

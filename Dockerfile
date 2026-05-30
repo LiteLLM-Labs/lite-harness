@@ -169,7 +169,15 @@ COPY --chown=sandbox:sandbox harnesses/loop-store.mjs /opt/lap/loop-store.mjs
 COPY --chown=sandbox:sandbox harnesses/loop-plugin.mjs /opt/lap/loop-plugin.mjs
 COPY --chown=sandbox:sandbox harnesses/session-store.mjs /opt/lap/session-store.mjs
 COPY --chown=sandbox:sandbox harnesses/agent-store.mjs /opt/lap/agent-store.mjs
+COPY --chown=sandbox:sandbox harnesses/agent-run-store.mjs /opt/lap/agent-run-store.mjs
 COPY --chown=sandbox:sandbox harnesses/agent-plugin.mjs /opt/lap/agent-plugin.mjs
+
+COPY --chown=sandbox:sandbox mcp/index.mjs /opt/mcp/index.mjs
+COPY --chown=sandbox:sandbox mcp/server.mjs /opt/mcp/server.mjs
+COPY --chown=sandbox:sandbox mcp/tools.mjs /opt/mcp/tools.mjs
+COPY --chown=sandbox:sandbox mcp/agents/store.mjs /opt/mcp/agents/store.mjs
+
+RUN ln -s /opt/lap /opt/harnesses
 
 COPY --from=ui-builder --chown=sandbox:sandbox /ui/out /opt/lap/ui/out
 ENV UI_DIST=/opt/lap/ui/out

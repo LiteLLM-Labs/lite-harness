@@ -5,7 +5,9 @@
  *   id               TEXT PRIMARY KEY  -- "loop_" + 6 random alphanum chars
  *   session_id       TEXT NOT NULL
  *   prompt           TEXT NOT NULL
- *   interval_seconds INTEGER NOT NULL
+ *   interval_seconds INTEGER NOT NULL  -- -1 for cron-only loops
+ *   cron_expr        TEXT              -- cron expression, e.g. "0 9 * * 1-5"
+ *   tz               TEXT              -- IANA timezone, e.g. "America/New_York"
  *   max_iterations   INTEGER           -- NULL = infinite
  *   iteration_count  INTEGER NOT NULL DEFAULT 0
  *   next_run_at      INTEGER NOT NULL  -- epoch ms
@@ -154,8 +156,12 @@ export function initDb(dbPath) {
       config_overrides TEXT NOT NULL DEFAULT '{}'
     )
   `);
+  // Migrations — idempotent (ALTER TABLE fails silently if column exists).
+  try { _db.exec("ALTER TABLE loops ADD COLUMN cron_expr TEXT"); } catch {}
+  try { _db.exec("ALTER TABLE loops ADD COLUMN tz TEXT"); } catch {}
   initSessionSchema(_db);
   initAgentSchema(_db);
+  try { _db.exec("ALTER TABLE sessions ADD COLUMN tz TEXT"); } catch {}
 
   return _db;
 }
@@ -163,20 +169,23 @@ export function initDb(dbPath) {
 /**
  * Insert a new loop row and return the full row object.
  *
- * @param {{ sessionId: string, prompt: string, intervalSeconds: number, maxIterations?: number|null }} opts
+ * @param {{ sessionId: string, prompt: string, intervalSeconds?: number|null, cronExpr?: string|null, tz?: string|null, nextRunAt?: number|null, maxIterations?: number|null }} opts
  * @returns {object}
  */
-export function createLoop({ sessionId, prompt, intervalSeconds, maxIterations = null }) {
+export function createLoop({ sessionId, prompt, intervalSeconds = null, cronExpr = null, tz = null, nextRunAt = null, maxIterations = null }) {
   assertDb();
 
   const id = generateId();
   const now = Date.now();
-  const nextRunAt = now + intervalSeconds * 1000;
+  // Caller must supply nextRunAt for cron loops; interval loops compute it here.
+  const resolvedNextRunAt = nextRunAt ?? (now + (intervalSeconds ?? 0) * 1000);
+  // -1 sentinel for cron-only loops (interval_seconds is NOT NULL in schema).
+  const storedInterval = cronExpr ? -1 : (intervalSeconds ?? 0);
 
   _db.prepare(`
-    INSERT INTO loops (id, session_id, prompt, interval_seconds, max_iterations, iteration_count, next_run_at, created_at)
-    VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-  `).run(id, sessionId, prompt, intervalSeconds, maxIterations ?? null, nextRunAt, now);
+    INSERT INTO loops (id, session_id, prompt, interval_seconds, cron_expr, tz, max_iterations, iteration_count, next_run_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+  `).run(id, sessionId, prompt, storedInterval, cronExpr ?? null, tz ?? null, maxIterations ?? null, resolvedNextRunAt, now);
 
   return _db.prepare("SELECT * FROM loops WHERE id = ?").get(id);
 }
@@ -198,20 +207,20 @@ export function dueLoops(nowMs) {
 }
 
 /**
- * Atomically increment iteration_count and advance next_run_at by
- * interval_seconds * 1000 ms.
+ * Increment iteration_count and set next_run_at to the provided value.
+ * Caller is responsible for computing nextRunAt (supports both interval and cron).
  *
  * @param {string} id
- * @param {number} nowMs  Current epoch ms (used as the base for next_run_at).
+ * @param {number} nextRunAt  Next fire time in epoch ms.
  */
-export function tickLoop(id, nowMs) {
+export function tickLoop(id, nextRunAt) {
   assertDb();
   _db.prepare(`
     UPDATE loops
     SET iteration_count = iteration_count + 1,
-        next_run_at     = ? + interval_seconds * 1000
+        next_run_at     = ?
     WHERE id = ?
-  `).run(nowMs, id);
+  `).run(nextRunAt, id);
 }
 
 /**

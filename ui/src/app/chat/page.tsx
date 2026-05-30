@@ -18,7 +18,9 @@ import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
-import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession } from "@/lib/api";
+import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession, listAgents, listApprovals, acceptApproval, rejectApproval } from "@/lib/api";
+import type { PendingApproval } from "@/lib/api";
+import { ToolApprovalPanel } from "@/components/tool-approval-panel";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 import type { Frame } from "@/components/inspector-panel";
 
@@ -37,9 +39,12 @@ function ChatInner() {
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
   const [model, setModel] = useState(FALLBACK_MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const eventBufferRef = useRef<Frame[]>([]);
-  const [sessionHarness, setSessionHarness] = useState<"opencode" | "claude-code" | "github-copilot">("opencode");
+  const [sessionHarness, setSessionHarness] = useState<string>("opencode");
+  const [savedAgents, setSavedAgents] = useState<{ id: string; name: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
 
@@ -64,16 +69,22 @@ function ChatInner() {
     }).catch(() => {});
   }, []);
 
-  // Fetch session metadata to get the locked harness
+  // Fetch session metadata to get the locked agent
   useEffect(() => {
     if (!sid) return;
     getSession(sid).then(s => {
-      if (s.harness === "claude-code" || s.harness === "opencode" || s.harness === "github-copilot") setSessionHarness(s.harness);
+      const a = s.agent ?? s.harness;
+      if (a) setSessionHarness(a);
     }).catch(() => {});
   }, [sid]);
 
-  // On harness change before first message: delete current empty session, create new, redirect
-  const onHarnessChange = useCallback(async (next: "opencode" | "claude-code" | "github-copilot") => {
+  // Fetch saved agents for dropdown
+  useEffect(() => {
+    listAgents().then(setSavedAgents).catch(() => {});
+  }, []);
+
+  // On agent change before first message: delete current empty session, create new, redirect
+  const onHarnessChange = useCallback(async (next: string) => {
     if (!sid || next === sessionHarness) return;
     await deleteSession(sid);
     const s = await createSession(undefined, next);
@@ -165,11 +176,46 @@ function ChatInner() {
           setError(`Error: ${msg}`);
           setSessionStatus("idle");
           refetch();
+        } else if (ev.type === "tool.approval.requested") {
+          const { id, tool, arguments: args, createdAt } = ev.properties as unknown as PendingApproval;
+          if (!id) return;
+          setApprovals((prev) =>
+            prev.some((a) => a.id === id) ? prev : [...prev, { id, tool, arguments: args ?? {}, createdAt }],
+          );
+        } else if (ev.type === "tool.approval.resolved") {
+          const { id } = ev.properties as { id?: string };
+          if (id) setApprovals((prev) => prev.filter((a) => a.id !== id));
         }
       },
     });
+    // Catch up on any approvals already pending before this client connected.
+    listApprovals().then(setApprovals).catch(() => {});
     return unsub;
   }, [sid, refetch]);
+
+  const onApprovalAccept = useCallback(async (id: string, args: Record<string, unknown>) => {
+    setApprovalBusy(true);
+    try {
+      await acceptApproval(id, args);
+      setApprovals((prev) => prev.filter((a) => a.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApprovalBusy(false);
+    }
+  }, []);
+
+  const onApprovalReject = useCallback(async (id: string, feedback: string) => {
+    setApprovalBusy(true);
+    try {
+      await rejectApproval(id, feedback);
+      setApprovals((prev) => prev.filter((a) => a.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApprovalBusy(false);
+    }
+  }, []);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -225,18 +271,29 @@ function ChatInner() {
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-muted-foreground">harness</span>
+              <span className="text-[11px] text-muted-foreground">agent</span>
               {messages && messages.length > 0 ? (
                 <span className="h-8 px-3 flex items-center text-xs font-mono border border-border rounded-md bg-muted text-muted-foreground">{sessionHarness}</span>
               ) : (
-                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v as "opencode" | "claude-code" | "github-copilot")}>
-                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                <Select value={sessionHarness} onValueChange={(v) => v && onHarnessChange(v)}>
+                  <SelectTrigger className="h-8 text-xs w-[150px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="opencode" className="text-xs font-mono">opencode</SelectItem>
                     <SelectItem value="claude-code" className="text-xs font-mono">claude code</SelectItem>
                     <SelectItem value="github-copilot" className="text-xs font-mono">github copilot</SelectItem>
+                    {savedAgents.length > 0 && (
+                      <>
+                        <div className="px-2 py-1.5 text-[10px] text-muted-foreground uppercase tracking-wider border-t mt-1 pt-2">Saved agents</div>
+                        {savedAgents.map(a => (
+                          <SelectItem key={a.id} value={a.name} className="text-xs font-mono">{a.name}</SelectItem>
+                        ))}
+                      </>
+                    )}
+                    <div className="px-2 py-2 text-[10px] text-muted-foreground border-t mt-1">
+                      💡 Say <span className="font-mono">&quot;save this agent&quot;</span> to save a session
+                    </div>
                   </SelectContent>
                 </Select>
               )}
@@ -281,6 +338,15 @@ function ChatInner() {
               <MessageBlock
                 key={(m.info.id as string | undefined) ?? i}
                 msg={m}
+              />
+            ))}
+            {approvals.map((a) => (
+              <ToolApprovalPanel
+                key={a.id}
+                approval={a}
+                onAccept={onApprovalAccept}
+                onReject={onApprovalReject}
+                busy={approvalBusy}
               />
             ))}
           </div>
