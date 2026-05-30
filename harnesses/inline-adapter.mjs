@@ -33,7 +33,7 @@ import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSav
 import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
 import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
@@ -83,6 +83,14 @@ let CAPABILITIES_CACHE = null;
 // Initialize DB synchronously so session hydration runs before any request.
 // LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
 initDb(DB_PATH);
+
+// Mark any runs stuck in "starting" for >10 min as timed_out. Happens when
+// the server restarts mid-run or session.idle was never caught (e.g. pre-ocGlobalBus).
+try {
+  getDb().prepare(
+    `UPDATE agent_runs SET status = 'timed_out', finished_at = ? WHERE status = 'starting' AND started_at < ?`
+  ).run(Date.now(), Date.now() - 10 * 60 * 1000);
+} catch {}
 
 // Plugin registry — handles /vault, /help, and future slash commands at the
 // adapter level before any harness sees the message.
