@@ -149,6 +149,7 @@ try {
 const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
 const ccGlobalBus = new Set(); // SSE response writers for cc events
 const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
+const ocGlobalBus = new Set(); // SSE writers for opencode child events
 
 // In-process state for github-copilot sessions (declared early so callPromptAsync can close over it).
 // The full copilotSessions Map is re-used below; this forward reference is safe because
@@ -947,6 +948,11 @@ function tapOcSseChunk(chunk) {
   const now = Date.now();
   for (const line of text.split("\n")) {
     if (!line.startsWith("data: ")) continue;
+    // Distribute raw opencode event to any agent run listeners.
+    if (ocGlobalBus.size > 0) {
+      const fwd = line + "\n";
+      for (const cb of ocGlobalBus) { try { cb(fwd); } catch {} }
+    }
     try {
       const ev = JSON.parse(line.slice(6));
       const sid = ev.properties?.sessionID ?? ev.properties?.part?.sessionID;
@@ -2185,6 +2191,7 @@ const server = http.createServer(async (req, res) => {
           updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
         } else if (evt.type === "session.error") {
           const errMsg = (evt.properties && evt.properties.error && evt.properties.error.message) || "unknown error";
           updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: errMsg });
@@ -2193,11 +2200,13 @@ const server = http.createServer(async (req, res) => {
           }
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
         }
       } catch {}
     };
     ccGlobalBus.add(runEventListener);
     pluginGlobalBus.add(runEventListener);
+    if (runHarness === "opencode") ocGlobalBus.add(runEventListener);
 
     // Fire prompt async — non-blocking
     callPromptAsync(runSid, resolvedPrompt).catch((e) => {
@@ -2205,6 +2214,7 @@ const server = http.createServer(async (req, res) => {
       updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: e.message });
       ccGlobalBus.delete(runEventListener);
       pluginGlobalBus.delete(runEventListener);
+      ocGlobalBus.delete(runEventListener);
     });
 
     const host = req.headers.host || "localhost";
