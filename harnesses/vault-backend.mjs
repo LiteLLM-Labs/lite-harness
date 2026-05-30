@@ -125,7 +125,11 @@ export class SqliteBackend extends VaultBackend {
     const row = this._db
       .prepare("SELECT enc_value, iv, tag, plaintext FROM vault_secrets WHERE key = ?")
       .get(key);
-    if (!row) return null;
+    if (!row) {
+      // Fall back to process.env — strip any userId prefix (e.g. "local:GITHUB_TOKEN" → "GITHUB_TOKEN")
+      const envKey = key.includes(":") ? key.slice(key.lastIndexOf(":") + 1) : key;
+      return process.env[envKey] ?? null;
+    }
     return this._decode(row);
   }
 
@@ -133,18 +137,37 @@ export class SqliteBackend extends VaultBackend {
     const rows = this._db
       .prepare("SELECT key, enc_value, iv, tag, plaintext FROM vault_secrets")
       .all();
+    // Start with process.env as low-priority baseline (vault values override)
     const out = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) out[k] = v;
+    }
     for (const row of rows) {
-      try { out[row.key] = this._decode(row); } catch {}
+      // Strip userId prefix so callers get bare key names
+      const keyName = row.key.includes(":") ? row.key.slice(row.key.lastIndexOf(":") + 1) : row.key;
+      try { out[keyName] = this._decode(row); } catch {}
     }
     return out;
   }
 
   async list() {
-    return this._db
+    const dbRows = this._db
       .prepare("SELECT key, updated_at FROM vault_secrets ORDER BY key")
       .all()
       .map(r => ({ key: r.key, updatedAt: r.updated_at }));
+    return dbRows;
+  }
+
+  // Returns env var key names (bare, no userId prefix) not already stored in vault
+  envFallbackKeys(userId) {
+    const prefix = userId ? `${userId}:` : "";
+    const dbKeys = new Set(
+      this._db
+        .prepare("SELECT key FROM vault_secrets")
+        .all()
+        .map(r => (r.key.startsWith(prefix) ? r.key.slice(prefix.length) : r.key))
+    );
+    return Object.keys(process.env).filter(k => !dbKeys.has(k) && process.env[k]);
   }
 
   async delete(key) {

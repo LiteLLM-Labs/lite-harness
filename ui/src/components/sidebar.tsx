@@ -76,27 +76,45 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
   };
 
   return (
-    <aside className="w-64 shrink-0 border-r border-border bg-background flex flex-col h-screen">
-      <div className="flex items-center justify-between px-4 h-12 border-b border-border">
+    <aside className="flex h-screen w-16 shrink-0 flex-col border-r border-border bg-background sm:w-64">
+      <div className="flex h-12 items-center justify-center border-b border-border px-2 sm:justify-between sm:px-4">
         <div
-          className="flex items-center gap-2 cursor-pointer min-w-0"
+          className="flex min-w-0 cursor-pointer items-center gap-2"
           onClick={() => router.push("/sessions/")}
         >
           <span className="text-xl leading-none">🚄</span>
-          <span className="font-semibold text-sm">LiteLLM</span>
+          <span className="hidden text-sm font-semibold sm:inline">LiteLLM</span>
         </div>
-        <SettingsDialog />
+        <div className="hidden sm:block">
+          <SettingsDialog />
+        </div>
       </div>
 
-      <div className="px-3 py-3 border-b border-border space-y-2">
+      <div className="space-y-2 border-b border-border px-2 py-3 sm:px-3">
         <Button
           onClick={onNew}
           disabled={creating}
-          className="w-full justify-start"
+          className="relative w-full justify-center sm:justify-start"
           size="sm"
+          aria-label="New session"
         >
           <Plus className="size-4" />
-          New session
+          <span className="hidden sm:inline">New session</span>
+        </Button>
+        <Button
+          onClick={() => router.push("/inbox/")}
+          variant={pathname?.startsWith("/inbox") ? "secondary" : "ghost"}
+          className="relative w-full justify-center sm:justify-start"
+          size="sm"
+          aria-label="Inbox"
+        >
+          <Inbox className="size-4" />
+          <span className="hidden sm:inline">Inbox</span>
+          {inboxCount > 0 && (
+            <span className="absolute ml-7 mt-[-18px] flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white sm:static sm:ml-auto sm:mt-0 sm:h-5 sm:min-w-5 sm:px-1.5 sm:text-[11px]">
+              {inboxCount}
+            </span>
+          )}
         </Button>
         <Button
           onClick={() => router.push("/inbox/")}
@@ -115,24 +133,26 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         <Button
           onClick={() => router.push("/agents/")}
           variant={pathname?.startsWith("/agents") ? "secondary" : "ghost"}
-          className="w-full justify-start"
+          className="w-full justify-center sm:justify-start"
           size="sm"
+          aria-label="Agents"
         >
           <Bot className="size-4" />
-          Agents
+          <span className="hidden sm:inline">Agents</span>
         </Button>
         <Button
           onClick={() => router.push("/integrations/")}
           variant={pathname?.startsWith("/integrations") ? "secondary" : "ghost"}
-          className="w-full justify-start"
+          className="w-full justify-center sm:justify-start"
           size="sm"
+          aria-label="Integrations"
         >
           <Puzzle className="size-4" />
-          Integrations
+          <span className="hidden sm:inline">Integrations</span>
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="hidden flex-1 overflow-y-auto py-2 sm:block">
         {error && (
           <div className="px-3 py-2 text-xs text-destructive">{error}</div>
         )}

@@ -376,6 +376,11 @@ export async function createAgent(
   return jsonOrThrow<Agent>(res);
 }
 
+export async function getAgent(id: string): Promise<Agent> {
+  const res = await req(`/api/agents/${encodeURIComponent(id)}`);
+  return jsonOrThrow<Agent>(res);
+}
+
 export async function updateAgent(id: string, fields: Partial<Agent>): Promise<Agent> {
   const res = await req(`/api/agents/${encodeURIComponent(id)}`, {
     method: "PATCH",

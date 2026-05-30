@@ -208,19 +208,23 @@ export default function AgentsPage() {
               </div>
             )}
             {agents?.map((ag) => (
-              <Card key={String(ag.id)} className="p-4 flex items-start justify-between gap-4">
+              <Card
+                key={String(ag.id)}
+                className="p-4 flex items-start justify-between gap-4 cursor-pointer hover:bg-muted/40 transition-colors"
+                onClick={() => router.push(`/agents/${encodeURIComponent(ag.id)}`)}
+              >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm truncate">{String(ag.name)}</span>
-                    {Boolean(ag.base_agent) && (
-                      <span className="font-mono text-[10px] text-muted-foreground">{String(ag.base_agent)}</span>
+                    {Boolean(ag.model) && (
+                      <span className="font-mono text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">{String(ag.model)}</span>
                     )}
                   </div>
                   {Boolean(ag.description) && (
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{String(ag.description)}</p>
                   )}
                   {Boolean(ag.prompt) && (
-                    <p className="text-xs text-muted-foreground/70 mt-1 line-clamp-2 font-mono">{String(ag.prompt)}</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1 line-clamp-1 font-mono">{String(ag.prompt)}</p>
                   )}
                   {Array.isArray(ag.skills) && ag.skills.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
@@ -231,17 +235,16 @@ export default function AgentsPage() {
                       ))}
                     </div>
                   )}
-                  <p className="font-mono text-[10px] text-muted-foreground mt-1">{String(ag.id)}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <Button size="sm" variant="default" onClick={() => startSession(ag)}>
+                  <Button size="sm" variant="default" onClick={(e) => { e.stopPropagation(); startSession(ag); }}>
                     <Play className="size-3.5" />
                     Start session
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => openEdit(ag)} aria-label="Edit">
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); openEdit(ag); }} aria-label="Edit">
                     <Pencil className="size-3.5" />
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => remove(ag)} aria-label="Delete">
+                  <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); remove(ag); }} aria-label="Delete">
                     <Trash2 className="size-3.5" />
                   </Button>
                 </div>
