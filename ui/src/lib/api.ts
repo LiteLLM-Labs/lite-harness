@@ -1,4 +1,4 @@
-import type { HarnessMessage, OpencodeSession } from "./types";
+import type { Agent, HarnessMessage, OpencodeSession, Skill } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -93,9 +93,10 @@ export async function createSession(title?: string, agent?: string): Promise<Ope
   return jsonOrThrow<OpencodeSession>(res);
 }
 
-export async function listAgents(): Promise<{ id: string; name: string; base_agent: string; created_at: number }[]> {
-  const res = await req("/agents");
-  return jsonOrThrow(res);
+export async function listAgents(): Promise<Agent[]> {
+  const res = await req("/api/agents");
+  const data = await jsonOrThrow<{ agents: Agent[] }>(res);
+  return data.agents;
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -163,6 +164,40 @@ export async function listModels(): Promise<string[]> {
   const data = await res.json().catch(() => null);
   const items: Array<{ id: string }> = data?.data ?? [];
   return items.map((m) => m.id).filter(Boolean);
+}
+
+export interface PendingApproval {
+  id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  createdAt: number;
+}
+
+export async function listApprovals(): Promise<PendingApproval[]> {
+  const res = await req("/api/approvals");
+  const data = await jsonOrThrow<{ approvals: PendingApproval[] }>(res);
+  return data.approvals ?? [];
+}
+
+export async function acceptApproval(
+  id: string,
+  args?: Record<string, unknown>,
+): Promise<void> {
+  const res = await req(`/api/approvals/${encodeURIComponent(id)}/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(args ? { arguments: args } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
+export async function rejectApproval(id: string, feedback?: string): Promise<void> {
+  const res = await req(`/api/approvals/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(feedback ? { feedback } : {}),
+  });
+  await jsonOrThrow(res);
 }
 
 // ── Integrations / vault ──────────────────────────────────────────────────────
@@ -255,32 +290,9 @@ export async function listIntegrationKeys(): Promise<string[]> {
   return [...keys];
 }
 
-// ── Skills + managed agents ───────────────────────────────────────────────────
-
-export interface Skill {
-  id: string;
-  name: string;
-  description: string | null;
-  content: string;
-  owner_id: string | null;
-  created_at: number;
-}
-
-export interface ManagedAgent {
-  id: string;
-  name: string;
-  description?: string | null;
-  owner_id: string | null;
-  status?: string;
-  skill_ids: string[];
-  created_at: number;
-}
-
-export async function listSkills(): Promise<Skill[]> {
-  const res = await req("/api/skills");
-  const data = await jsonOrThrow<{ skills: Skill[] }>(res);
-  return data.skills ?? [];
-}
+// ── Skills CRUD (DB-backed, /api/skills) ──────────────────────────────────────
+// Skills are reusable capability docs persisted in the harness DB and attached
+// to agents via agents.skill_ids.
 
 export async function createSkill(input: {
   name: string;
@@ -316,16 +328,10 @@ export async function deleteSkill(id: string): Promise<void> {
   await req(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-export async function listManagedAgents(): Promise<ManagedAgent[]> {
-  const res = await req("/api/agents");
-  const data = await jsonOrThrow<{ agents: ManagedAgent[] }>(res);
-  return data.agents ?? [];
-}
-
 /** Attach a skill to an agent (idempotent — no-op if already attached). */
 export async function attachSkillToAgent(agentId: string, skillId: string): Promise<void> {
   const res = await req(`/api/agents/${encodeURIComponent(agentId)}`);
-  const agent = await jsonOrThrow<ManagedAgent>(res);
+  const agent = await jsonOrThrow<Agent>(res);
   const next = Array.from(new Set([...(agent.skill_ids ?? []), skillId]));
   await req(`/api/agents/${encodeURIComponent(agentId)}`, {
     method: "PATCH",
@@ -367,4 +373,36 @@ export function subscribeEvents(opts: {
       /* noop */
     }
   };
+}
+
+// ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
+export async function createAgent(
+  input: { name: string; owner_id: string } & Partial<Agent>,
+): Promise<Agent> {
+  const res = await req("/api/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function updateAgent(id: string, fields: Partial<Agent>): Promise<Agent> {
+  const res = await req(`/api/agents/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return jsonOrThrow<Agent>(res);
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── Skills list (DB-backed, /api/skills) ──────────────────────────────────────
+export async function listSkills(): Promise<Skill[]> {
+  const res = await req("/api/skills");
+  const data = await jsonOrThrow<{ skills: Skill[] }>(res);
+  return data.skills ?? [];
 }

@@ -18,7 +18,9 @@ import { Composer } from "@/components/composer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Sidebar } from "@/components/sidebar";
 import { InspectorPanel } from "@/components/inspector-panel";
-import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession, listAgents } from "@/lib/api";
+import { getMessages, getSession, createSession, deleteSession, subscribeEvents, listModels, abortSession, listAgents, listApprovals, acceptApproval, rejectApproval } from "@/lib/api";
+import type { PendingApproval } from "@/lib/api";
+import { ToolApprovalPanel } from "@/components/tool-approval-panel";
 import type { HarnessMessage, HarnessMessagePart, MessageInfo } from "@/lib/types";
 import type { Frame } from "@/components/inspector-panel";
 
@@ -37,9 +39,12 @@ function ChatInner() {
   const [models, setModels] = useState<string[]>(FALLBACK_MODELS);
   const [model, setModel] = useState(FALLBACK_MODELS[0]);
   const [sessionStatus, setSessionStatus] = useState<"idle" | "busy">("idle");
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const eventBufferRef = useRef<Frame[]>([]);
   const [sessionHarness, setSessionHarness] = useState<string>("opencode");
+  const [sessionTitle, setSessionTitle] = useState<string>("");
   const [savedAgents, setSavedAgents] = useState<{ id: string; name: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasNearBottomRef = useRef(true);
@@ -48,7 +53,17 @@ function ChatInner() {
     if (!sid) return;
     try {
       const list = await getMessages(sid);
-      setMessages(list);
+      // The backend only persists an assistant message once its turn completes,
+      // so GET /message omits the in-progress (streaming) assistant turn. A blind
+      // setMessages(list) here would wipe the shell created by the message.updated
+      // event and drop every subsequent message.part.delta. Merge instead: keep any
+      // locally-known messages the server hasn't persisted yet so streaming survives.
+      setMessages((prev) => {
+        if (!prev) return list;
+        const serverIds = new Set(list.map((m) => m.info.id));
+        const inflight = prev.filter((m) => !serverIds.has(m.info.id));
+        return [...list, ...inflight];
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -71,6 +86,7 @@ function ChatInner() {
     getSession(sid).then(s => {
       const a = s.agent ?? s.harness;
       if (a) setSessionHarness(a);
+      if (s.title) setSessionTitle(s.title);
     }).catch(() => {});
   }, [sid]);
 
@@ -172,11 +188,46 @@ function ChatInner() {
           setError(`Error: ${msg}`);
           setSessionStatus("idle");
           refetch();
+        } else if (ev.type === "tool.approval.requested") {
+          const { id, tool, arguments: args, createdAt } = ev.properties as unknown as PendingApproval;
+          if (!id) return;
+          setApprovals((prev) =>
+            prev.some((a) => a.id === id) ? prev : [...prev, { id, tool, arguments: args ?? {}, createdAt }],
+          );
+        } else if (ev.type === "tool.approval.resolved") {
+          const { id } = ev.properties as { id?: string };
+          if (id) setApprovals((prev) => prev.filter((a) => a.id !== id));
         }
       },
     });
+    // Catch up on any approvals already pending before this client connected.
+    listApprovals().then(setApprovals).catch(() => {});
     return unsub;
   }, [sid, refetch]);
+
+  const onApprovalAccept = useCallback(async (id: string, args: Record<string, unknown>) => {
+    setApprovalBusy(true);
+    try {
+      await acceptApproval(id, args);
+      setApprovals((prev) => prev.filter((a) => a.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApprovalBusy(false);
+    }
+  }, []);
+
+  const onApprovalReject = useCallback(async (id: string, feedback: string) => {
+    setApprovalBusy(true);
+    try {
+      await rejectApproval(id, feedback);
+      setApprovals((prev) => prev.filter((a) => a.id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApprovalBusy(false);
+    }
+  }, []);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -211,6 +262,9 @@ function ChatInner() {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2">
+            {sessionTitle && (
+              <span className="text-sm font-medium" title={sessionTitle}>{sessionTitle}</span>
+            )}
             <span className="text-xs font-mono text-muted-foreground">{shortSid}</span>
             {sessionStatus === "busy" ? (
               <button
@@ -299,6 +353,15 @@ function ChatInner() {
               <MessageBlock
                 key={(m.info.id as string | undefined) ?? i}
                 msg={m}
+              />
+            ))}
+            {approvals.map((a) => (
+              <ToolApprovalPanel
+                key={a.id}
+                approval={a}
+                onAccept={onApprovalAccept}
+                onReject={onApprovalReject}
+                busy={approvalBusy}
               />
             ))}
           </div>
