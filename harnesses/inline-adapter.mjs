@@ -1724,8 +1724,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Create ephemeral cc session for this run
-    if (!ccQuery) {
+    // Create ephemeral session for this run using the agent's configured harness
+    const runHarness = agentDef.harness === "claude-code" ? "cc" : agentDef.harness === "github-copilot" ? "github-copilot" : agentDef.harness === "codex" ? "codex" : "opencode";
+    if (runHarness === "cc" && !ccQuery) {
       res.writeHead(503, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "claude-code SDK not available" }));
       return;
@@ -1734,11 +1735,11 @@ const server = http.createServer(async (req, res) => {
     const runNow = Date.now();
     ccSessions.set(runSid, {
       id: runSid, title: `agent-run-${agentId}`,
-      time: { created: runNow }, harness: "claude-code",
+      time: { created: runNow }, harness: agentDef.harness || "claude-code",
       sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
     });
-    sessionHarness.set(runSid, "cc");
-    persistSession({ id: runSid, harness: "cc", title: `agent-run-${agentId}`, createdAt: runNow });
+    sessionHarness.set(runSid, runHarness);
+    persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
 
     const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
     const runId = runRecord.id;
