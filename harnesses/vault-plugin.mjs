@@ -8,6 +8,8 @@ export class VaultPlugin extends AdapterPlugin {
     this._backend = buildBackend(masterKey);
   }
 
+  get backend() { return this._backend ?? null; }
+
   matches(text, ctx) {
     return text.trim().startsWith("/vault");
   }
