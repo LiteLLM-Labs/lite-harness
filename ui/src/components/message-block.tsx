@@ -6,10 +6,16 @@ import remarkGfm from "remark-gfm";
 import {
   Check,
   ChevronDown,
+  CircleAlert,
+  FileText,
+  Globe,
   Loader2,
+  Search,
+  Terminal,
   Wrench,
   X,
 } from "lucide-react";
+import { BrandIcon } from "@/components/brand-icons";
 import type { HarnessMessage, HarnessMessagePart } from "@/lib/types";
 
 // Adapter: derive the local-message shape LAP's components consume from our
@@ -28,6 +34,10 @@ interface LocalMessage {
   tokens?: { input: number; output: number; total: number; cache?: { read: number; write: number } };
   cost?: number;
 }
+
+type RenderItem =
+  | { type: "part"; part: HarnessMessagePart; key: string }
+  | { type: "toolGroup"; parts: HarnessMessagePart[]; key: string };
 
 function toLocal(m: HarnessMessage): LocalMessage {
   const role = m.info.role;
@@ -103,12 +113,14 @@ function UserPromptBlock({
   emphasized: boolean;
 }) {
   return (
-    <div
-      className={`bg-muted/30 border border-border rounded-xl p-4 text-[14px] text-foreground leading-relaxed ${
-        emphasized ? "shadow-sm" : ""
-      }`}
-    >
-      {content && <div className="whitespace-pre-wrap">{content}</div>}
+    <div className="flex justify-end">
+      <div
+        className={`max-w-[min(740px,82%)] rounded-[18px] border border-border/80 bg-muted/65 px-5 py-3 text-[15px] leading-relaxed text-foreground shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:bg-muted/45 ${
+          emphasized ? "ring-1 ring-ring/30" : ""
+        }`}
+      >
+        {content && <div className="whitespace-pre-wrap">{content}</div>}
+      </div>
     </div>
   );
 }
@@ -135,12 +147,14 @@ function AssistantBlock({
       t === "image"
     );
   });
+  const renderItems = groupRenderItems(visibleParts);
+  const details = messageDetails(msg);
 
   return (
-    <div className="flex flex-col gap-3">
+    <article className="group/turn flex flex-col gap-3 py-1">
       {failed && msg.text ? (
         <div
-          className="sessions-md text-[14px] leading-relaxed"
+          className="sessions-md max-w-[920px] text-[15px] leading-7"
           style={{ color: "#b91c1c" }}
         >
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
@@ -163,7 +177,7 @@ function AssistantBlock({
         </div>
       ) : inProgress && visibleParts.length === 0 ? (
         msg.text ? (
-          <div className="sessions-md text-[14px] text-foreground leading-relaxed">
+          <div className="sessions-md max-w-[920px] text-[15px] leading-7 text-foreground">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
           </div>
         ) : (
@@ -174,7 +188,13 @@ function AssistantBlock({
         )
       ) : (
         <>
-          {visibleParts.map((p, i) => <PartBlock key={i} part={p} />)}
+          {renderItems.map((item) =>
+            item.type === "toolGroup" ? (
+              <ToolCluster key={item.key} parts={item.parts} />
+            ) : (
+              <PartBlock key={item.key} part={item.part} />
+            ),
+          )}
           {inProgress && (
             <div className="flex items-center gap-1.5 pt-1">
               <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-pulse" />
@@ -190,9 +210,9 @@ function AssistantBlock({
       )}
 
       {!inProgress && !failed && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mono text-[11px] text-muted-foreground">
+        <div className="mono flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] text-muted-foreground/75 transition-colors group-hover/turn:text-muted-foreground">
           {msg.harness && (
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium ${
+            <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-mono font-medium ${
               msg.harness === "github-copilot"
                 ? "bg-sky-500/15 text-sky-600 dark:text-sky-400"
                 : msg.harness === "claude-code"
@@ -202,23 +222,56 @@ function AssistantBlock({
               {msg.harness}
             </span>
           )}
-          {msg.model && <span>{msg.model}</span>}
-          {typeof msg.latency_ms === "number" && <span>{formatLatency(msg.latency_ms)}</span>}
-          {msg.tokens && (
-            <span>
-              ↑{msg.tokens.input.toLocaleString()} ↓{msg.tokens.output.toLocaleString()}
-              {msg.tokens.cache && msg.tokens.cache.read > 0 && (
-                <span className="text-sky-500"> cache:{msg.tokens.cache.read.toLocaleString()}</span>
-              )}
-            </span>
-          )}
-          {typeof msg.cost === "number" && msg.cost > 0 && (
-            <span className="text-amber-500">${msg.cost.toFixed(4)}</span>
-          )}
+          {details.map((detail) => (
+            <span key={detail}>{detail}</span>
+          ))}
         </div>
       )}
-    </div>
+    </article>
   );
+}
+
+function groupRenderItems(parts: HarnessMessagePart[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  let toolRun: HarnessMessagePart[] = [];
+
+  const flushTools = () => {
+    if (toolRun.length === 0) return;
+    items.push({
+      type: "toolGroup",
+      parts: toolRun,
+      key: `tools-${items.length}`,
+    });
+    toolRun = [];
+  };
+
+  parts.forEach((part, index) => {
+    const t = typeof part?.type === "string" ? part.type : "";
+    if (t === "tool") {
+      toolRun.push(part);
+      return;
+    }
+    flushTools();
+    items.push({ type: "part", part, key: `${t || "part"}-${index}` });
+  });
+  flushTools();
+
+  return items;
+}
+
+function messageDetails(msg: LocalMessage): string[] {
+  const details: string[] = [];
+  if (msg.model) details.push(msg.model);
+  if (typeof msg.latency_ms === "number") details.push(formatLatency(msg.latency_ms));
+  if (msg.tokens) {
+    const tokenText = `↑${msg.tokens.input.toLocaleString()} ↓${msg.tokens.output.toLocaleString()}`;
+    const cacheText = msg.tokens.cache && msg.tokens.cache.read > 0
+      ? ` cache ${msg.tokens.cache.read.toLocaleString()}`
+      : "";
+    details.push(tokenText + cacheText);
+  }
+  if (typeof msg.cost === "number" && msg.cost > 0) details.push(`$${msg.cost.toFixed(4)}`);
+  return details;
 }
 
 function formatLatency(ms: number): string {
@@ -232,7 +285,7 @@ function PartBlock({ part }: { part: HarnessMessagePart }) {
     const text = typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "";
     if (!text) return null;
     return (
-      <div className="sessions-md text-[14px] text-foreground leading-relaxed">
+      <div className="sessions-md max-w-[920px] text-[15px] leading-7 text-foreground">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
     );
@@ -252,7 +305,7 @@ function ReasoningBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const preview = text.length > 360 ? text.slice(0, 360) + "…" : text;
   return (
-    <div className="border-l-2 border-border pl-3 text-[13px] text-muted-foreground italic leading-relaxed">
+    <div className="max-w-[920px] border-l-2 border-border pl-3 text-[13px] text-muted-foreground italic leading-relaxed">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -284,11 +337,86 @@ function toolDescriptor(tool: string, input: unknown): string {
   const n = tool.toLowerCase();
   if (n === "task") return pick("description");
   if (n === "bash") return pick("command", "description");
+  if (n.includes("gmail")) return pick("subject", "to", "thread_id", "message_id");
+  if (n.includes("pylon") || n.includes("linear")) return pick("issue_id", "title", "state");
   if (n.includes("read") || n.includes("edit") || n.includes("write") || n.includes("patch"))
     return pick("filePath", "file_path", "path");
   if (n.includes("grep") || n.includes("glob") || n.includes("find"))
     return pick("pattern", "query");
   return "";
+}
+
+function toolLabel(tool: string): string {
+  return tool
+    .replace(/^mcp__/i, "")
+    .replace(/^functions\s+/i, "")
+    .replace(/^mcp\s+/i, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function toolBrand(tool: string): string | null {
+  const n = tool.toLowerCase();
+  if (n.includes("gmail")) return "gmail";
+  if (n.includes("pylon")) return "pylon";
+  if (n.includes("linear")) return "linear";
+  return null;
+}
+
+function ToolIcon({
+  tool,
+  status,
+}: {
+  tool: string;
+  status: string;
+}) {
+  const brand = toolBrand(tool);
+  if (brand) {
+    return (
+      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border bg-background shadow-sm">
+        <BrandIcon id={brand} className="size-3.5" />
+      </span>
+    );
+  }
+
+  const n = tool.toLowerCase();
+  const Icon = n === "bash"
+    ? Terminal
+    : n.includes("read") || n.includes("write") || n.includes("edit")
+      ? FileText
+      : n.includes("grep") || n.includes("search") || n.includes("find")
+        ? Search
+        : n.includes("web") || n.includes("browser")
+          ? Globe
+          : status === "error"
+            ? CircleAlert
+            : Wrench;
+
+  return (
+    <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border bg-background text-muted-foreground shadow-sm">
+      <Icon className="size-3.5" />
+    </span>
+  );
+}
+
+function ToolCluster({ parts }: { parts: HarnessMessagePart[] }) {
+  return (
+    <div className="max-w-[920px] py-0.5">
+      <div className="mb-1 flex items-center gap-2 pl-2">
+        <span className="h-px w-5 bg-border" />
+        <span className="mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          Activity
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        {parts.map((part, index) => (
+          <ToolBlock key={`${(part as { id?: string }).id ?? "tool"}-${index}`} part={part} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ToolBlock({ part }: { part: HarnessMessagePart }) {
@@ -302,7 +430,7 @@ function ToolBlock({ part }: { part: HarnessMessagePart }) {
   const errorOut = state.error;
   const desc = toolDescriptor(toolName, input);
 
-  const label = toolName;
+  const label = toolLabel(toolName);
   const hasDetails =
     input !== undefined || output !== undefined || errorOut !== undefined;
 
@@ -314,30 +442,32 @@ function ToolBlock({ part }: { part: HarnessMessagePart }) {
         : "text-amber-600";
   const StatusIcon =
     status === "completed" ? Check : status === "error" ? X : Loader2;
+  const statusLabel = status === "completed" ? "done" : status;
 
   return (
-    <div className="border border-border rounded-md bg-muted/40 text-[13px] overflow-hidden">
+    <div className="max-w-[920px] text-[13px]">
       <button
         type="button"
         onClick={() => hasDetails && setOpen((v) => !v)}
-        className={`w-full flex items-center gap-2 px-3 py-2 text-left min-w-0 ${
-          hasDetails ? "hover:bg-muted cursor-pointer" : "cursor-default"
+        aria-expanded={hasDetails ? open : undefined}
+        className={`inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left ${
+          hasDetails ? "cursor-pointer transition-colors hover:bg-muted/55" : "cursor-default"
         }`}
       >
-        <Wrench className="w-3 h-3 text-muted-foreground shrink-0" />
-        <span className="mono text-foreground shrink-0">{label}</span>
+        <ToolIcon tool={toolName} status={status} />
+        <span className="shrink-0 text-[14px] font-medium text-foreground/90">{label}</span>
         {desc && (
-          <span className="mono text-muted-foreground truncate">{desc}</span>
+          <span className="mono min-w-0 max-w-[min(38rem,42vw)] truncate text-[12px] text-muted-foreground">{desc}</span>
         )}
-        <StatusIcon
-          className={`w-3 h-3 shrink-0 ${statusColor} ${status === "running" ? "animate-spin" : ""}`}
-        />
-        <span className={`mono text-[11px] shrink-0 ${statusColor}`}>
-          {status}
+        <span className={`mono inline-flex shrink-0 items-center gap-1 rounded-full border border-current/15 px-2 py-0.5 text-[10.5px] ${statusColor}`}>
+          <StatusIcon
+            className={`size-3 shrink-0 ${status === "running" ? "animate-spin" : ""}`}
+          />
+          {statusLabel}
         </span>
         {hasDetails && (
           <ChevronDown
-            className={`ml-auto w-3 h-3 shrink-0 text-muted-foreground transition-transform ${
+            className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${
               open ? "" : "-rotate-90"
             }`}
           />
@@ -345,7 +475,7 @@ function ToolBlock({ part }: { part: HarnessMessagePart }) {
       </button>
 
       {open && hasDetails && (
-        <div className="border-t border-border px-3 py-2 flex flex-col gap-2">
+        <div className="ml-8 mt-1 flex flex-col gap-2 rounded-lg border border-border bg-muted/25 p-3 shadow-sm">
           {input !== undefined && <ToolKv label="input" value={input} />}
           {output !== undefined && <ToolKv label="output" value={output} />}
           {errorOut !== undefined && <ToolKv label="error" value={errorOut} />}
@@ -363,7 +493,7 @@ function ToolKv({ label, value }: { label: string; value: unknown }) {
       <span className="mono text-[10px] uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <pre className="mono text-[11px] text-foreground whitespace-pre-wrap break-words bg-background border border-border rounded p-2 max-h-64 overflow-auto">
+      <pre className="mono max-h-64 overflow-auto rounded-md border border-border bg-background p-2 text-[11px] text-foreground whitespace-pre-wrap break-words">
         {text}
       </pre>
     </div>
