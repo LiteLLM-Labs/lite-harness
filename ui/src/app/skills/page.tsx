@@ -19,8 +19,8 @@ import {
   deleteSkill,
   createSkill,
   updateSkill,
-  type Skill,
 } from "@/lib/api";
+import type { Skill } from "@/lib/types";
 
 /** Pull name/description out of a SKILL.md YAML frontmatter block, if present. */
 function parseFrontmatter(md: string): { name?: string; description?: string } {
