@@ -1,4 +1,4 @@
-import type { Agent, HarnessMessage, OpencodeSession } from "./types";
+import type { Agent, HarnessMessage, OpencodeSession, Skill } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -348,4 +348,11 @@ export async function updateAgent(id: string, fields: Partial<Agent>): Promise<A
 
 export async function deleteAgent(id: string): Promise<void> {
   await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── Skills catalog (/api/skills) ────────────────────────────────────────────
+export async function listSkills(): Promise<Skill[]> {
+  const res = await req("/api/skills");
+  const data = await jsonOrThrow<{ skills: Skill[] }>(res);
+  return data.skills;
 }
