@@ -1,5 +1,6 @@
 import { registerTool } from "./server.mjs";
 import { saveAgent } from "./agents/store.mjs";
+import { requestApproval } from "./approvals.mjs";
 
 registerTool(
   {
@@ -23,5 +24,43 @@ registerTool(
   async ({ agent_name, system_prompt }) => {
     const row = saveAgent(agent_name, system_prompt);
     return { agent_id: row.id, name: row.name };
+  }
+);
+
+registerTool(
+  {
+    name: "request_human_approval",
+    description:
+      "Pause and ask a human to approve a sensitive action before you take it. Use this in autopilot when about to do something risky or irreversible (writing to an external system, sending a message, deleting data, spending money). Blocks until a human responds. Returns { approved, arguments, feedback }: when approved, `arguments` is the (possibly human-edited) action input you should use — perform the action exactly as edited; when not approved, do NOT perform the action and address the human's `feedback` instead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description:
+            "Short name of the action you want approval for (e.g. 'pylon_update_issue', 'send_email', 'delete_branch'). Shown to the human as the title.",
+        },
+        summary: {
+          type: "string",
+          description: "One-line, plain-English description of what this will do and why. Shown to the human.",
+        },
+        arguments: {
+          type: "object",
+          description:
+            "The concrete inputs for the action, as a flat object of named fields. Each field is shown to the human as an editable value; the human may change them before approving.",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  async ({ action, summary, arguments: actionArgs }) => {
+    const payload = summary ? { summary, ...(actionArgs || {}) } : actionArgs || {};
+    const outcome = await requestApproval(action, payload);
+    if (outcome.decision === "accept") {
+      // Strip the summary we injected; hand back only the action inputs.
+      const { summary: _omit, ...args } = outcome.args || {};
+      return { approved: true, arguments: args };
+    }
+    return { approved: false, feedback: outcome.feedback || "" };
   }
 );
