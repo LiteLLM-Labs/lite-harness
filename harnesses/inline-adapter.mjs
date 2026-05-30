@@ -1674,9 +1674,20 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "codex" }));
       return;
     }
-    // opencode: proxy and inject agent field
+    // opencode: proxy, fall back to SQLite metadata when child doesn't know the session
     const ocReq = http.request(UP + p, { method: "GET" }, (ocRes) => {
       let d = ""; ocRes.on("data", c => d += c); ocRes.on("end", () => {
+        if (ocRes.statusCode === 404) {
+          const row = loadOcSessions().find(r => r.id === sid);
+          if (row) {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ id: row.id, title: row.title, time: { created: row.created_at, ...(row.updated_at ? { updated: row.updated_at } : {}) }, agent: "opencode" }));
+            return;
+          }
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "session not found" }));
+          return;
+        }
         try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, agent: "opencode" })); }
         catch { res.writeHead(ocRes.statusCode || 502); res.end(d); }
       });
