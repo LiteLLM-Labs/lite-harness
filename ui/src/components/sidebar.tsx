@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Puzzle, Bot, Inbox } from "lucide-react";
+import { Plus, Trash2, Puzzle, FileText, Bot, Inbox } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -117,20 +117,6 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
           )}
         </Button>
         <Button
-          onClick={() => router.push("/inbox/")}
-          variant={pathname?.startsWith("/inbox") ? "secondary" : "ghost"}
-          className="w-full justify-start"
-          size="sm"
-        >
-          <Inbox className="size-4" />
-          Inbox
-          {inboxCount > 0 && (
-            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white">
-              {inboxCount}
-            </span>
-          )}
-        </Button>
-        <Button
           onClick={() => router.push("/agents/")}
           variant={pathname?.startsWith("/agents") ? "secondary" : "ghost"}
           className="w-full justify-center sm:justify-start"
@@ -149,6 +135,16 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         >
           <Puzzle className="size-4" />
           <span className="hidden sm:inline">Integrations</span>
+        </Button>
+        <Button
+          onClick={() => router.push("/skills/")}
+          variant={pathname?.startsWith("/skills") ? "secondary" : "ghost"}
+          className="w-full justify-center sm:justify-start"
+          size="sm"
+          aria-label="Skills"
+        >
+          <FileText className="size-4" />
+          <span className="hidden sm:inline">Skills</span>
         </Button>
       </div>
 
