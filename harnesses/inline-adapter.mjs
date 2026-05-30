@@ -722,7 +722,7 @@ async function ccRunTurn(s, userText, modelId) {
       abortController: ac,
       disallowedTools: ["AskUserQuestion"],
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
-      ...(s.systemPrompt ? { system: s.systemPrompt } : {}),
+      ...(s.systemPrompt ? { customSystemPrompt: s.systemPrompt } : {}),
       mcpServers: [{ type: "http", url: PLATFORM_MCP_URL }],
     }});
     for await (const m of stream) {
