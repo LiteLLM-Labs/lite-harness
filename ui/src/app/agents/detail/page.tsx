@@ -1,7 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Pencil, Play, Trash2, Clock } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -19,10 +20,10 @@ function timeAgo(ms: number): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-export default function AgentDetailPage() {
+function AgentDetail() {
   const router = useRouter();
-  const params = useParams();
-  const id = decodeURIComponent(params.id as string);
+  const searchParams = useSearchParams();
+  const id = decodeURIComponent(searchParams.get("id") ?? "");
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [sessions, setSessions] = useState<OpencodeSession[]>([]);
@@ -30,6 +31,7 @@ export default function AgentDetailPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!id) return;
     (async () => {
       try {
         const [ag, allSessions] = await Promise.all([getAgent(id), listSessions()]);
@@ -96,7 +98,7 @@ export default function AgentDetailPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => router.push(`/agents/${encodeURIComponent(id)}/edit`)}
+                  onClick={() => router.push(`/agents/edit/?id=${encodeURIComponent(id)}`)}
                 >
                   <Pencil className="size-3.5" />
                   Edit
@@ -123,7 +125,6 @@ export default function AgentDetailPage() {
 
             {agent && (
               <>
-                {/* Hero */}
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h1 className="text-xl font-semibold">{agent.name}</h1>
@@ -144,7 +145,6 @@ export default function AgentDetailPage() {
                   )}
                 </div>
 
-                {/* Configuration */}
                 <section>
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
                     Configuration
@@ -182,7 +182,6 @@ export default function AgentDetailPage() {
                   </Card>
                 </section>
 
-                {/* Sessions */}
                 <section>
                   <div className="flex items-center justify-between mb-2">
                     <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -223,5 +222,13 @@ export default function AgentDetailPage() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function AgentDetailPage() {
+  return (
+    <Suspense>
+      <AgentDetail />
+    </Suspense>
   );
 }

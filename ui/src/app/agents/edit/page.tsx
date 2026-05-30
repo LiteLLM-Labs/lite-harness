@@ -1,7 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import { useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -20,10 +21,10 @@ interface FormState {
   model: string;
 }
 
-export default function AgentEditPage() {
+function AgentEdit() {
   const router = useRouter();
-  const params = useParams();
-  const id = decodeURIComponent(params.id as string);
+  const searchParams = useSearchParams();
+  const id = decodeURIComponent(searchParams.get("id") ?? "");
 
   const [form, setForm] = useState<FormState>({ name: "", description: "", prompt: "", model: "" });
   const [models, setModels] = useState<string[]>([]);
@@ -33,6 +34,7 @@ export default function AgentEditPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!id) return;
     (async () => {
       try {
         const [ag, modelList] = await Promise.all([getAgent(id), listModels()]);
@@ -62,7 +64,7 @@ export default function AgentEditPage() {
         prompt: form.prompt,
         ...(form.model ? { model: form.model } : {}),
       });
-      router.push(`/agents/${encodeURIComponent(id)}`);
+      router.push(`/agents/detail/?id=${encodeURIComponent(id)}`);
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -79,7 +81,7 @@ export default function AgentEditPage() {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => router.push(`/agents/${encodeURIComponent(id)}`)}
+              onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(id)}`)}
               className="gap-1.5 text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="size-3.5" />
@@ -156,7 +158,7 @@ export default function AgentEditPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={() => router.push(`/agents/${encodeURIComponent(id)}`)}
+                    onClick={() => router.push(`/agents/detail/?id=${encodeURIComponent(id)}`)}
                     disabled={saving}
                   >
                     Cancel
@@ -168,5 +170,13 @@ export default function AgentEditPage() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function AgentEditPage() {
+  return (
+    <Suspense>
+      <AgentEdit />
+    </Suspense>
   );
 }
