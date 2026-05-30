@@ -300,11 +300,11 @@ export default function AgentsPage() {
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
+        <DialogContent className="w-[92vw] sm:max-w-2xl max-h-[88vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 p-0">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
             <DialogTitle>{editingId ? "Edit agent" : "New agent"}</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-3 py-2">
+          <div className="flex flex-col gap-4 px-6 py-4 overflow-y-auto">
             <div className="grid gap-1.5">
               <Label htmlFor="ag-name">Name</Label>
               <Input
@@ -339,7 +339,7 @@ export default function AgentsPage() {
                 id="ag-prompt"
                 value={form.prompt}
                 onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-                rows={6}
+                rows={10}
                 placeholder="You are a meticulous security reviewer…"
               />
             </div>
@@ -504,7 +504,7 @@ export default function AgentsPage() {
             )}
             {formError && <p className="text-sm text-destructive">{formError}</p>}
           </div>
-          <DialogFooter>
+          <DialogFooter className="m-0 rounded-b-xl px-6 py-4">
             <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>
               Cancel
             </Button>
