@@ -38,6 +38,7 @@ import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents
 import {
   hydrateFromDb,
   persistSession,
+  getSessionTz,
   appendMessage,
   deleteMessage,
   updateSdkSessionId,
@@ -1135,7 +1136,7 @@ async function buildCapabilities() {
   const scheduler = {
     available: true,
     min_interval_minutes: Number(process.env.SCHEDULER_MIN_INTERVAL_MINUTES ?? 1),
-    cron_supported: false,
+    cron_supported: true,
     manual_trigger: false,
   };
 
@@ -1321,6 +1322,7 @@ const server = http.createServer(async (req, res) => {
     const agentParam = body.agent ?? body.harness;
     const builtin = agentParam === "claude-code" ? "cc" : agentParam === "github-copilot" ? "github-copilot" : agentParam === "codex" ? "codex" : agentParam === "cc" ? "cc" : agentParam === "opencode" ? "opencode" : null;
 
+    const sessionTz = body.timezone || null;
     let systemPromptOverride = body.systemPrompt || null;
 
     if (!builtin) {
@@ -1348,7 +1350,7 @@ const server = http.createServer(async (req, res) => {
       copilotSessions.set(id, s);
       sessionAgent.set(id, "github-copilot");
       sessionHarness.set(id, "github-copilot");
-      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now });
+      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now, tz: sessionTz });
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "github-copilot" }));
@@ -1367,7 +1369,7 @@ const server = http.createServer(async (req, res) => {
       codexSessions.set(id, s);
       sessionAgent.set(id, "codex");
       sessionHarness.set(id, "codex");
-      persistSession({ id, harness: "codex", title: s.title, createdAt: now });
+      persistSession({ id, harness: "codex", title: s.title, createdAt: now, tz: sessionTz });
       log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "codex" }));
@@ -1386,7 +1388,7 @@ const server = http.createServer(async (req, res) => {
       ccSessions.set(id, s);
       sessionAgent.set(id, "cc");
       sessionHarness.set(id, "cc");
-      persistSession({ id, harness: "cc", title: s.title, createdAt: now });
+      persistSession({ id, harness: "cc", title: s.title, createdAt: now, tz: sessionTz });
       log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "claude-code" }));
@@ -1407,7 +1409,7 @@ const server = http.createServer(async (req, res) => {
           if (parsed.id) {
             sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
-            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now() });
+            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz });
           }
         } catch {}
         res.writeHead(upRes.statusCode || 200, upRes.headers);

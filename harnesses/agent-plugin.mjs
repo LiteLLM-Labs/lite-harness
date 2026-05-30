@@ -59,6 +59,18 @@ export function parseCadence(raw) {
   return n * 3600;
 }
 
+// Returns { type: "interval", seconds } | { type: "cron", expr } | null.
+export function parseCadenceFull(raw) {
+  if (raw == null) return null;
+  const r = String(raw).trim();
+  if (!r || /^(none|manual|once|on-?demand)$/i.test(r)) return null;
+  // Cron: 5 space-separated fields of digits/*/,-
+  if (/^[\d*/,\-]+([ \t]+[\d*/,\-]+){4}$/.test(r)) return { type: "cron", expr: r };
+  const seconds = parseCadence(r);
+  if (seconds === null) return null;
+  return { type: "interval", seconds };
+}
+
 /**
  * Split an `/agent ...` line into { sub, args, rest }.
  * @param {string} text
@@ -107,14 +119,15 @@ export function buildAgentRecord(spec, { defaultModel = DEFAULT_MODEL } = {}) {
     Array.isArray(spec.tools) && spec.tools.length ? spec.tools : DEFAULT_TOOLS;
 
   const rawCadence = spec.cadence == null ? null : String(spec.cadence).trim();
-  const intervalSeconds = parseCadence(rawCadence);
-  // A cadence was given but didn't parse and isn't an on-demand marker → error.
-  if (rawCadence && intervalSeconds === null && !/^(none|manual|once|on-?demand)$/i.test(rawCadence)) {
+  const cadenceParsed = parseCadenceFull(rawCadence);
+  if (rawCadence && !cadenceParsed && !/^(none|manual|once|on-?demand)$/i.test(rawCadence)) {
     throw new Error(`unknown cadence: ${rawCadence}`);
   }
-  const cadence = intervalSeconds === null ? null : rawCadence;
+  const cadence = cadenceParsed ? rawCadence : null;
+  const intervalSeconds = cadenceParsed?.type === "interval" ? cadenceParsed.seconds : null;
+  const cronExpr = cadenceParsed?.type === "cron" ? cadenceParsed.expr : null;
 
-  return { name, model, system, tools, cadence, intervalSeconds };
+  return { name, model, system, tools, cadence, intervalSeconds, cronExpr };
 }
 
 /** The user message fired into the harness on each scheduled run. */
@@ -205,11 +218,12 @@ export class AgentPlugin extends AdapterPlugin {
     }
 
     let loopId = null;
-    if (rec.intervalSeconds !== null) {
+    if (rec.intervalSeconds !== null || rec.cronExpr !== null) {
       const loop = createLoop({
         sessionId: ctx.sessionId,
         prompt: invocationPrompt(rec),
-        intervalSeconds: rec.intervalSeconds,
+        intervalSeconds: rec.intervalSeconds ?? null,
+        cronExpr: rec.cronExpr ?? null,
       });
       loopId = loop.id;
     }
