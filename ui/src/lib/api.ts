@@ -93,9 +93,10 @@ export async function createSession(title?: string, agent?: string): Promise<Ope
   return jsonOrThrow<OpencodeSession>(res);
 }
 
-export async function listAgents(): Promise<{ id: string; name: string; base_agent: string; created_at: number }[]> {
-  const res = await req("/agents");
-  return jsonOrThrow(res);
+export async function listAgents(): Promise<Agent[]> {
+  const res = await req("/api/agents");
+  const data = await jsonOrThrow<{ agents: Agent[] }>(res);
+  return data.agents;
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -325,8 +326,6 @@ export function subscribeEvents(opts: {
 }
 
 // ── Agent CRUD (/api/agents) ────────────────────────────────────────────────
-// listAgents() above reads the saved-agents store (/agents). These write/edit
-// against the richer /api/agents endpoints.
 export async function createAgent(
   input: { name: string; owner_id: string } & Partial<Agent>,
 ): Promise<Agent> {
