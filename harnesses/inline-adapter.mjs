@@ -2169,7 +2169,9 @@ const server = http.createServer(async (req, res) => {
             res.on("end", () => { try { resolve(JSON.parse(data)); } catch { reject(new Error("bad json from child")); } });
           });
           r.on("error", reject);
-          r.end(JSON.stringify({ title: `agent-run-${agentId}`, model: agentDef.model || undefined }));
+          const ocProvider = process.env.PROVIDER_NAME || "litellm";
+          const ocModel = agentDef.model ? `${ocProvider}/${agentDef.model}` : undefined;
+          r.end(JSON.stringify({ title: `agent-run-${agentId}`, ...(ocModel && { model: { id: ocModel } }) }));
         });
         runSid = ocSessResp.id;
       } catch (e) {
