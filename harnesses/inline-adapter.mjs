@@ -2166,12 +2166,22 @@ const server = http.createServer(async (req, res) => {
           let data = "";
           const r = http.request(`${UP}/session`, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
             res.on("data", c => data += c);
-            res.on("end", () => { try { resolve(JSON.parse(data)); } catch { reject(new Error("bad json from child")); } });
+            res.on("end", () => {
+              try {
+                const parsed = JSON.parse(data);
+                if (!parsed.id || (parsed.success === false)) {
+                  const msg = parsed.error?.[0]?.message ?? parsed.error ?? "session creation rejected";
+                  reject(new Error(`opencode POST /session failed: ${msg}`));
+                } else {
+                  resolve(parsed);
+                }
+              } catch { reject(new Error("bad json from child")); }
+            });
           });
           r.on("error", reject);
-          const ocProvider = process.env.PROVIDER_NAME || "litellm";
-          const ocModel = agentDef.model ? `${ocProvider}/${agentDef.model}` : undefined;
-          r.end(JSON.stringify({ title: `agent-run-${agentId}`, ...(ocModel && { model: { id: ocModel } }) }));
+          // Don't pass model at session creation — opencode rejects all model formats.
+          // The model is applied by the adapter's FORCE_MODEL logic when the prompt fires.
+          r.end(JSON.stringify({ title: `agent-run-${agentId}` }));
         });
         runSid = ocSessResp.id;
       } catch (e) {
