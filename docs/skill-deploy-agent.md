@@ -27,6 +27,12 @@ Check:
 - `scheduler.cron_supported` — can you schedule recurring runs?
 - `harnesses[]` — which harnesses are available (claude-code, opencode, codex)?
 
+List the skills this server can attach to an agent:
+
+```bash
+curl -s -H "Authorization: Bearer $KEY" $BASE_URL/api/skills | jq '.skills[] | .slug'
+```
+
 ---
 
 ## Step 2: Store vault secrets
@@ -85,6 +91,7 @@ curl -X POST $BASE_URL/api/agents \
 | `harness` | `"claude-code"` | Which harness runs the agent: `claude-code`, `opencode`, `codex` |
 | `model` | `"claude-sonnet-4-6"` | Model to use |
 | `vault_keys` | `[]` | List of vault key names to inject as env vars |
+| `skills` | `[]` | List of skill slugs (from `GET /api/skills`) to attach. Their files are discovered from the shared `~/.claude/skills` catalog and listed in the agent's effective prompt so it knows to invoke them |
 | `setup_commands` | `[]` | Shell commands to run before the agent starts |
 | `cron` | `null` | Cron expression for scheduling (e.g. `"0 */4 * * 1-5"`) |
 | `timezone` | `"UTC"` | Timezone for cron (e.g. `"America/Los_Angeles"`) |
