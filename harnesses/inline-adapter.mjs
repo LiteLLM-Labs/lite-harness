@@ -2684,8 +2684,17 @@ function startChild() {
     stdio: "inherit",
     env: process.env,
   });
-  child.on("exit", (code) => { log(`opencode serve exited (${code}) — shutting down`); process.exit(code ?? 1); });
+  currentChild = child;
+  child.on("exit", (code) => { currentChild = null; log(`opencode serve exited (${code}) — shutting down`); process.exit(code ?? 1); });
 }
+
+function killChild(signal) {
+  if (currentChild) { try { currentChild.kill(signal || "SIGTERM"); } catch {} }
+}
+
+process.on("SIGTERM", () => { killChild("SIGTERM"); process.exit(0); });
+process.on("SIGINT",  () => { killChild("SIGTERM"); process.exit(0); });
+process.on("exit",    () => { killChild("SIGTERM"); });
 
 async function waitChild() {
   for (let i = 0; i < 120; i++) {
