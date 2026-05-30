@@ -63,12 +63,18 @@ function initAgentFilesSchema(db) {
       agent_id   TEXT NOT NULL,
       path       TEXT NOT NULL,
       content    TEXT NOT NULL,
+      encoding   TEXT NOT NULL DEFAULT 'utf8',
       size_bytes INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (agent_id, path)
     )
   `);
+  for (const stmt of [
+    "ALTER TABLE agent_files ADD COLUMN encoding TEXT NOT NULL DEFAULT 'utf8'",
+  ]) {
+    try { db.exec(stmt); } catch {}
+  }
 }
 
 function initAgentSchema(db) {

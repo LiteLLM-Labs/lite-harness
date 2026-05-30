@@ -11,6 +11,18 @@
  */
 
 import { buildBackend, VAULT_DB_PATH } from "../harnesses/vault-backend.mjs";
+import { createRequire } from "node:module";
+
+const requireFromHarnesses = createRequire(new URL("../harnesses/package.json", import.meta.url));
+
+async function importE2b() {
+  try {
+    return await import("e2b");
+  } catch (e) {
+    if (e?.code !== "ERR_MODULE_NOT_FOUND") throw e;
+    return requireFromHarnesses("e2b");
+  }
+}
 
 export const SANDBOX_TIMEOUT_MS = 1_800_000; // 30 min idle keepalive
 export const EXECUTE_TIMEOUT_MS = 180_000;   // 3 min per command
@@ -58,7 +70,7 @@ export class E2bProvider extends SandboxProvider {
   }
 
   async create(_name, getVaultEnvs) {
-    const { Sandbox } = await import("e2b");
+    const { Sandbox } = await importE2b();
     const vaultEnvs = getVaultEnvs ? await getVaultEnvs() : {};
     const sandbox = await Sandbox.create(this._template, {
       apiKey: this._apiKey,
@@ -69,23 +81,30 @@ export class E2bProvider extends SandboxProvider {
   }
 
   async execute(id, cmd) {
-    const { Sandbox } = await import("e2b");
+    const { Sandbox } = await importE2b();
     const sandbox = await Sandbox.connect(id, { apiKey: this._apiKey });
     await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
-    const result = await sandbox.commands.run(cmd, { timeoutMs: EXECUTE_TIMEOUT_MS });
+    let result;
+    try {
+      result = await sandbox.commands.run(cmd, { timeoutMs: EXECUTE_TIMEOUT_MS });
+    } catch (e) {
+      const out = (e.stdout ?? "") + (e.stderr ?? "");
+      if (out) return `${out}\n[exit 1]`;
+      throw e;
+    }
     const out = (result.stdout ?? "") + (result.stderr ?? "");
     return result.exitCode !== 0 ? `${out}\n[exit ${result.exitCode}]` : out;
   }
 
   async readFile(id, path) {
-    const { Sandbox } = await import("e2b");
+    const { Sandbox } = await importE2b();
     const sandbox = await Sandbox.connect(id, { apiKey: this._apiKey });
     await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
     return sandbox.files.read(path);
   }
 
   async readBase64(id, path) {
-    const { Sandbox } = await import("e2b");
+    const { Sandbox } = await importE2b();
     const sandbox = await Sandbox.connect(id, { apiKey: this._apiKey });
     await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
     const bytes = await sandbox.files.read(path, { format: "bytes" });
@@ -93,14 +112,14 @@ export class E2bProvider extends SandboxProvider {
   }
 
   async writeFile(id, path, content) {
-    const { Sandbox } = await import("e2b");
+    const { Sandbox } = await importE2b();
     const sandbox = await Sandbox.connect(id, { apiKey: this._apiKey });
     await sandbox.setTimeout(SANDBOX_TIMEOUT_MS);
     await sandbox.files.write(path, content);
   }
 
   async terminate(id) {
-    const { Sandbox } = await import("e2b");
+    const { Sandbox } = await importE2b();
     await Sandbox.kill(id, { apiKey: this._apiKey });
   }
 }
