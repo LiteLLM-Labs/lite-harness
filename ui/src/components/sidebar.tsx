@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Puzzle } from "lucide-react";
+import { Plus, Trash2, Puzzle, FileText } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -94,6 +94,15 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         >
           <Puzzle className="size-4" />
           Integrations
+        </Button>
+        <Button
+          onClick={() => router.push("/skills/")}
+          variant={pathname?.startsWith("/skills") ? "secondary" : "ghost"}
+          className="w-full justify-start"
+          size="sm"
+        >
+          <FileText className="size-4" />
+          Skills
         </Button>
       </div>
 

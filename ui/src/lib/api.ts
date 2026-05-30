@@ -255,6 +255,85 @@ export async function listIntegrationKeys(): Promise<string[]> {
   return [...keys];
 }
 
+// ── Skills + managed agents ───────────────────────────────────────────────────
+
+export interface Skill {
+  id: string;
+  name: string;
+  description: string | null;
+  content: string;
+  owner_id: string | null;
+  created_at: number;
+}
+
+export interface ManagedAgent {
+  id: string;
+  name: string;
+  description?: string | null;
+  owner_id: string | null;
+  status?: string;
+  skill_ids: string[];
+  created_at: number;
+}
+
+export async function listSkills(): Promise<Skill[]> {
+  const res = await req("/api/skills");
+  const data = await jsonOrThrow<{ skills: Skill[] }>(res);
+  return data.skills ?? [];
+}
+
+export async function createSkill(input: {
+  name: string;
+  content: string;
+  description?: string | null;
+}): Promise<Skill> {
+  const res = await req("/api/skills", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Skill>(res);
+}
+
+export async function getSkill(id: string): Promise<Skill> {
+  const res = await req(`/api/skills/${encodeURIComponent(id)}`);
+  return jsonOrThrow<Skill>(res);
+}
+
+export async function updateSkill(
+  id: string,
+  fields: { name?: string; description?: string | null; content?: string },
+): Promise<Skill> {
+  const res = await req(`/api/skills/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return jsonOrThrow<Skill>(res);
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  await req(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function listManagedAgents(): Promise<ManagedAgent[]> {
+  const res = await req("/api/agents");
+  const data = await jsonOrThrow<{ agents: ManagedAgent[] }>(res);
+  return data.agents ?? [];
+}
+
+/** Attach a skill to an agent (idempotent — no-op if already attached). */
+export async function attachSkillToAgent(agentId: string, skillId: string): Promise<void> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}`);
+  const agent = await jsonOrThrow<ManagedAgent>(res);
+  const next = Array.from(new Set([...(agent.skill_ids ?? []), skillId]));
+  await req(`/api/agents/${encodeURIComponent(agentId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ skill_ids: next }),
+  });
+}
+
 export function subscribeEvents(opts: {
   sessionId: string;
   onEvent: (ev: unknown) => void;

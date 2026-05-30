@@ -90,10 +90,29 @@ function initAgentSchema(db) {
     "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'paused'",
     "ALTER TABLE agents ADD COLUMN description TEXT",
     "ALTER TABLE agents ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude-code'",
+    // skill_ids — JSON array of skills.id attached to this agent.
+    "ALTER TABLE agents ADD COLUMN skill_ids TEXT NOT NULL DEFAULT '[]'",
   ];
   for (const sql of _newAgentCols) {
     try { db.exec(sql); } catch {}
   }
+}
+
+function initSkillSchema(db) {
+  // Skills are reusable capability docs (a name + markdown content, e.g. a
+  // SKILL.md) that exist independently and can be attached to agents via
+  // agents.skill_ids. Separating skills from an agent's own `system`/`prompt`
+  // lets one skill be shared across many agents.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT,
+      content     TEXT NOT NULL,
+      owner_id    TEXT,
+      created_at  INTEGER NOT NULL
+    )
+  `);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -161,6 +180,7 @@ export function initDb(dbPath) {
   try { _db.exec("ALTER TABLE loops ADD COLUMN tz TEXT"); } catch {}
   initSessionSchema(_db);
   initAgentSchema(_db);
+  initSkillSchema(_db);
   try { _db.exec("ALTER TABLE sessions ADD COLUMN tz TEXT"); } catch {}
 
   return _db;
