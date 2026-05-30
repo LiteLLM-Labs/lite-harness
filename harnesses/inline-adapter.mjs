@@ -176,12 +176,22 @@ function composeAgentSystem(agentSystem, attachedSkills, allSkills) {
 // must be scoped by agent_id — we hand the agent its id here so it can pass it.
 function memoryPromptNote(agentId) {
   if (!agentId) return "";
+  let alwaysOnBlock = "";
+  try {
+    const alwaysOn = listMemory(agentId).filter((m) => Number(m.always_on) === 1);
+    if (alwaysOn.length > 0) {
+      alwaysOnBlock =
+        `\n\nAlways-on memories loaded for this session:\n` +
+        alwaysOn.map((m) => `- ${m.key}: ${m.value}`).join("\n");
+    }
+  } catch {}
   return (
     `\n\n---\n\n## Your memory\nYour agent_id is "${agentId}". You have a durable memory ` +
     `(key→value notes) that persists across sessions and scheduled runs. Pass this exact ` +
     `agent_id to the memory tools: memory_list (recall everything — do this at the start of a ` +
     `task), memory_get (read one key), memory_store (save/overwrite a key), memory_delete ` +
-    `(forget a key). Use memory to remember facts, preferences, and decisions worth keeping.`
+    `(forget a key). Use memory to remember facts, preferences, and decisions worth keeping.` +
+    alwaysOnBlock
   );
 }
 
@@ -2147,13 +2157,18 @@ const server = http.createServer(async (req, res) => {
     if (!getAgent(agentId)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
     const raw = await readBody(req);
     let b = {}; try { b = JSON.parse(raw || "{}"); } catch {}
-    const { key, value } = b;
+    const { key, value, always_on } = b;
     if (!key || value == null) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "key and value required" }));
       return;
     }
-    const row = storeMemory({ agentId, key: String(key), value: String(value) });
+    const row = storeMemory({
+      agentId,
+      key: String(key),
+      value: String(value),
+      alwaysOn: typeof always_on === "boolean" ? always_on : undefined,
+    });
     res.writeHead(201, { "content-type": "application/json" });
     res.end(JSON.stringify(row));
     return;
