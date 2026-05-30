@@ -1534,7 +1534,9 @@ const server = http.createServer(async (req, res) => {
     const codexList = [...codexSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, agent: "codex",
     }));
-    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList]
+      .filter(s => s.id != null)
+      .sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(all));
     return;
