@@ -2122,17 +2122,31 @@ const server = http.createServer(async (req, res) => {
         resolvedPrompt = await resolveTemplates(
           resolvedPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend
         );
-        // Prepend vault secrets as explicit env exports so Claude Code sets them
-        // in the sandbox before running any scripts.
+        // Inject vault secrets via a sourced .env file. Each Bash tool call is a
+        // fresh shell so a one-time `export` doesn't survive to the next call.
+        // Writing ~/.agent.env and sourcing it per-command is the only reliable way.
         if (agentDef.vault_keys && agentDef.vault_keys.length > 0) {
           const ownerId = agentDef.owner_id || "default";
-          const exports = [];
+          const lines = [];
           for (const k of agentDef.vault_keys) {
             const v = await vaultPlugin.backend.get(`${ownerId}:${k}`);
-            if (v !== null) exports.push(`export ${k}="${v.replace(/"/g, '\\"')}"`);
+            if (v !== null) lines.push(`${k}=${JSON.stringify(v)}`);
           }
-          if (exports.length > 0) {
-            resolvedPrompt = `Before running any code or scripts, set these environment variables in your sandbox shell:\n\`\`\`sh\n${exports.join("\n")}\n\`\`\`\n\n${resolvedPrompt}`;
+          if (lines.length > 0) {
+            const envFile = `/home/sandbox/.agent.env`;
+            resolvedPrompt = [
+              `CRITICAL SETUP — your very first bash command must be:`,
+              `\`\`\`bash`,
+              `cat > ${envFile} << 'ENVEOF'`,
+              ...lines,
+              `ENVEOF`,
+              `chmod 600 ${envFile}`,
+              `\`\`\``,
+              `Then prefix every subsequent bash command with: set -a && source ${envFile} && set +a &&`,
+              `Example: \`set -a && source ${envFile} && set +a && python3 script.py\``,
+              ``,
+              resolvedPrompt,
+            ].join("\n");
           }
         }
       }
