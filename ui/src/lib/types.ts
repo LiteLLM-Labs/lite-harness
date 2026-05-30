@@ -76,3 +76,13 @@ export interface Skill {
   owner_id: string | null;
   created_at: number;
 }
+
+/** A durable key→value note an agent has stored in its memory. */
+export interface Memory {
+  id: string;
+  agent_id: string;
+  key: string;
+  value: string;
+  created_at: number;
+  updated_at: number;
+}
