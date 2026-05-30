@@ -115,6 +115,26 @@ function initSkillSchema(db) {
   `);
 }
 
+function initMemorySchema(db) {
+  // Agent memory — durable key→value notes an agent stores and recalls across
+  // sessions/runs. Scoped per agent_id; (agent_id, key) is unique so a repeated
+  // store under the same key overwrites (upsert). This is what the platform's
+  // memory_store / memory_get / memory_list / memory_delete tools read & write.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_memories (
+      id          TEXT PRIMARY KEY,
+      agent_id    TEXT NOT NULL,
+      key         TEXT NOT NULL,
+      value       TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL,
+      UNIQUE (agent_id, key)
+    )
+  `);
+  // Listing an agent's memory is the hot path — index the scope column.
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories(agent_id)"); } catch {}
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -181,6 +201,7 @@ export function initDb(dbPath) {
   initSessionSchema(_db);
   initAgentSchema(_db);
   initSkillSchema(_db);
+  initMemorySchema(_db);
   try { _db.exec("ALTER TABLE sessions ADD COLUMN tz TEXT"); } catch {}
 
   return _db;
