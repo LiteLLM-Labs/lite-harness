@@ -30,11 +30,15 @@ import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
 import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSavedAgents, deleteAgent as deleteSavedAgent } from "../mcp/agents/store.mjs";
+import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
-import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer } from "./agent-run-store.mjs";
+import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer, setRunSandbox, getRunSandbox } from "./agent-run-store.mjs";
+import { buildDirectProvider } from "./sandbox-provider.mjs";
+import { upsertAgentFile, listAgentFiles, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS } from "./agent-file-store.mjs";
 import {
   hydrateFromDb,
   persistSession,
@@ -61,7 +65,10 @@ const SKILLS_ROOT = path.join(process.env.HOME || "/home/sandbox", ".claude", "s
 // provider config from opencode.json (explicit baseURL/apiKey), not env vars.
 // ---------------------------------------------------------------------------
 if (process.env.LITELLM_API_BASE) {
-  process.env.ANTHROPIC_BASE_URL = process.env.LITELLM_API_BASE.replace(/\/+$/, "");
+  // The Anthropic/claude-code SDK appends "/v1/messages" to ANTHROPIC_BASE_URL, so
+  // strip any trailing "/v1" from LITELLM_API_BASE to avoid a doubled "/v1/v1/messages"
+  // (which the gateway 404s). opencode keeps the "/v1" base via opencode.json.
+  process.env.ANTHROPIC_BASE_URL = process.env.LITELLM_API_BASE.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 if (process.env.LITELLM_API_KEY) {
   process.env.ANTHROPIC_API_KEY = process.env.LITELLM_API_KEY;
@@ -81,6 +88,14 @@ let CAPABILITIES_CACHE = null;
 // Initialize DB synchronously so session hydration runs before any request.
 // LoopPlugin.setup() calls initDb() too, but the idempotency guard makes that a no-op.
 initDb(DB_PATH);
+
+// Mark any runs stuck in "starting" for >10 min as timed_out. Happens when
+// the server restarts mid-run or session.idle was never caught (e.g. pre-ocGlobalBus).
+try {
+  getDb().prepare(
+    `UPDATE agent_runs SET status = 'timed_out', finished_at = ? WHERE status = 'starting' AND started_at < ?`
+  ).run(Date.now(), Date.now() - 10 * 60 * 1000);
+} catch {}
 
 // Plugin registry — handles /vault, /help, and future slash commands at the
 // adapter level before any harness sees the message.
@@ -105,6 +120,8 @@ function authOk(req, urlObj) {
 // cc sessions live entirely in-process.
 const sessionAgent = new Map(); // id → "opencode" | "cc"
 const sessionHarness = sessionAgent; // alias — same map, two names from merged branches
+const sessionSystemPrompt = new Map(); // sid -> system prompt for opencode agents (applied on first turn)
+const ocSysPromptDelivered = new Set();
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -147,6 +164,7 @@ try {
 const ccSessions = new Map(); // id → {id, title, time, sdkSessionId, history, busSubscribers}
 const ccGlobalBus = new Set(); // SSE response writers for cc events
 const pluginGlobalBus = new Set(); // SSE writers for plugin-emitted events
+const ocGlobalBus = new Set(); // SSE writers for opencode child events
 
 // In-process state for github-copilot sessions (declared early so callPromptAsync can close over it).
 // The full copilotSessions Map is re-used below; this forward reference is safe because
@@ -165,7 +183,7 @@ async function callPromptAsync(sessionId, prompt) {
   if (harness === "github-copilot") {
     const cs = copilotSessions.get(sessionId);
     if (!cs) throw new Error(`callPromptAsync: copilot session ${sessionId} not found`);
-    const modelId = process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
+    const modelId = process.env.GITHUB_COPILOT_MODEL || (process.env.LITELLM_API_BASE ? "claude-code-sonnet-4-6-converse" : "gpt-4o");
     return copilotRunTurn(cs, prompt, modelId);
   }
   if (harness === "codex") {
@@ -174,12 +192,26 @@ async function callPromptAsync(sessionId, prompt) {
     return codexRunTurn(cs, prompt);
   }
   // opencode — send via HTTP to the child process
-  const body = JSON.stringify({ parts: [{ type: "text", text: prompt }] });
+  // Include pinned model so the child doesn't fall back to anthropic/* (the boot_model
+  // from /v1/models which resolves to an unavailable model on this account).
+  const pinnedProvider = process.env.PROVIDER_NAME || "litellm";
+  const pinnedModel = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
+  const body = JSON.stringify({
+    parts: [{ type: "text", text: prompt }],
+    model: { providerID: pinnedProvider, modelID: pinnedModel },
+  });
   return new Promise((resolve, reject) => {
     const req = http.request(
       `${UP}/session/${sessionId}/prompt_async`,
       { method: "POST", headers: { "content-type": "application/json" } },
-      (res) => { res.resume(); resolve(); },
+      (res) => {
+        res.resume();
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`opencode child rejected prompt: HTTP ${res.statusCode}`));
+        } else {
+          resolve();
+        }
+      },
     );
     req.on("error", reject);
     req.end(body);
@@ -195,6 +227,20 @@ pluginRegistry.setup({
     ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionAgent.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
+// Push human-in-the-loop approval lifecycle events to every connected /event
+// client (CLI and web UI), reusing the plugin SSE bus. Envelope matches the
+// shape clients already parse: { id, type, properties }.
+setApprovalBroadcaster((event) => {
+  const { type, ...rest } = event;
+  const envelope = {
+    id: `evt_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    type,
+    properties: rest,
+  };
+  const line = `data: ${JSON.stringify(envelope)}\n\n`;
+  for (const cb of pluginGlobalBus) { try { cb(line); } catch {} }
+});
+
 // Returns true if a plugin handled the message (response already sent).
 async function tryPlugin(text, sid, harness, res) {
   if (!text.trim().startsWith("/")) return false;
@@ -207,8 +253,35 @@ async function tryPlugin(text, sid, harness, res) {
   return true;
 }
 
+// ── @github/copilot-sdk lazy init ────────────────────────────────────────────
+// One CopilotClient per process, shared across all copilot sessions.
+// The SDK wraps the Copilot CLI subprocess; mcpServers in createSession() wires
+// the platform MCP into every copilot session so all harnesses see sandbox tools.
+let _copilotClient = null;
+let _copilotClientPromise = null;
+
+async function getCopilotClient() {
+  if (_copilotClient) return _copilotClient;
+  if (_copilotClientPromise) return _copilotClientPromise;
+  _copilotClientPromise = (async () => {
+    let mod;
+    try {
+      mod = await import("@github/copilot-sdk");
+    } catch (e) {
+      throw new Error(`@github/copilot-sdk not installed: ${e.message}`);
+    }
+    const client = new mod.CopilotClient();
+    await client.start();
+    _copilotClient = client;
+    _copilotClientPromise = null;
+    log("@github/copilot-sdk client started");
+    return client;
+  })();
+  return _copilotClientPromise;
+}
+
 // In-process state for github-copilot sessions.
-const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers}
+const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers, sdkSession?}
 const copilotGlobalBus = new Set(); // SSE response writers
 
 // In-process state for codex sessions.
@@ -238,16 +311,7 @@ const ocSidRemapReverse = new Map(); // childSid → ourId
   if (total > 0) log(`hydrated ${total} session(s) from db (cc=${cc.size} copilot=${copilot.size} codex=${codex.size} opencode=${ocRows.length})`);
 }
 
-// Token cache for GitHub Copilot native mode (tokens expire ~30 min)
-let _copilotToken = null;
-let _copilotTokenExpiry = 0;
-
-const COPILOT_NATIVE_HEADERS = {
-  "Copilot-Integration-Id": "vscode-chat",
-  "Editor-Version": "vscode/1.85.0",
-  "Editor-Plugin-Version": "copilot-chat/0.12.0",
-  "Openai-Organization": "github-copilot",
-};
+// (Token cache removed — native auth now handled by @github/copilot-sdk CLI)
 
 function copilotEmit(sessionId, type, props) {
   const ev = { id: `evt_${randomUUID().replace(/-/g,"").slice(0,20)}`, type, properties: { ...props, sessionID: sessionId } };
@@ -258,18 +322,21 @@ function copilotEmit(sessionId, type, props) {
 }
 
 // Returns { url, key, extraHeaders } for the chat completions endpoint.
-// BYOK mode (LITELLM_API_BASE set): routes to LiteLLM proxy — no GitHub auth needed.
+// BYOK mode (LITELLM_API_BASE set): routes to LiteLLM proxy.
 // Native mode (GITHUB_TOKEN set): exchanges GitHub token for a short-lived Copilot token.
+let _copilotToken = null;
+let _copilotTokenExpiry = 0;
+const COPILOT_NATIVE_HEADERS = {
+  "Copilot-Integration-Id": "vscode-chat",
+  "Editor-Version": "vscode/1.85.0",
+  "Editor-Plugin-Version": "copilot-chat/0.12.0",
+  "Openai-Organization": "github-copilot",
+};
 async function getCopilotEndpoint() {
   const byokBase = process.env.LITELLM_API_BASE;
   if (byokBase) {
-    return {
-      url: byokBase.replace(/\/+$/, "") + "/chat/completions",
-      key: process.env.LITELLM_API_KEY || "",
-      extraHeaders: {},
-    };
+    return { url: byokBase.replace(/\/+$/, "") + "/chat/completions", key: process.env.LITELLM_API_KEY || "", extraHeaders: {} };
   }
-  // Native GitHub Copilot: exchange GitHub OAuth token for short-lived Copilot token
   if (_copilotToken && Date.now() < _copilotTokenExpiry - 60_000) {
     return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
   }
@@ -286,23 +353,32 @@ async function getCopilotEndpoint() {
   return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
 }
 
-// OpenAI-format tool definition for save_agent, injected into every copilot request.
-const SAVE_AGENT_TOOL = {
-  type: "function",
-  function: {
-    name: "save_agent",
-    description: "Save this session as a reusable named agent that can be launched from the CLI with `lite <agent_name>`",
-    parameters: {
-      type: "object",
-      properties: {
-        agent_name: { type: "string" },
-        system_prompt: { type: "string" },
-      },
-      required: ["agent_name", "system_prompt"],
-    },
-  },
-};
+/**
+ * Fetch all platform MCP tools and convert to OpenAI function-call format.
+ * Runs in-process against handleMcpRequest — no HTTP round-trip, no latency.
+ */
+async function getPlatformMcpToolsAsOpenAI() {
+  try {
+    const resp = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    return (resp?.result?.tools ?? []).map(t => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.inputSchema },
+    }));
+  } catch { return []; }
+}
 
+/**
+ * Run one copilot turn via raw chat/completions with ALL platform MCP tools injected.
+ *
+ * Tool routing: every tool_call is dispatched to handleMcpRequest() in-process.
+ * No hardcoded tool names — any tool registered in mcp/tools.mjs is automatically
+ * available (sandbox_provision, sandbox_execute, save_agent, request_human_approval…).
+ *
+ * Note: @github/copilot-sdk is installed and available, but its mcpServers option in
+ * createSession() does not yet connect to HTTP MCP servers in the current CLI version.
+ * This implementation uses raw chat/completions + in-process tool injection instead,
+ * which works reliably across BYOK (LiteLLM) and native (GITHUB_TOKEN) modes.
+ */
 async function copilotRunTurn(s, userText, modelId) {
   const startedAt = Date.now();
 
@@ -327,43 +403,36 @@ async function copilotRunTurn(s, userText, modelId) {
   const partID = `${asstMsgId}_b0`;
   let totalText = "";
   let lastError;
+  const parts = [];
 
   copilotEmit(s.id, "message.updated", { info: { id: asstMsgId, role: "assistant", time: { created: startedAt } } });
-  // Emit empty part BEFORE first delta so UI creates the slot
   copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: { id: partID, messageID: asstMsgId, type: "text", text: "" } });
 
-  const model = modelId || process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
+  const model = modelId || process.env.GITHUB_COPILOT_MODEL || (process.env.LITELLM_API_BASE ? "claude-code-sonnet-4-6-converse" : "gpt-4o");
   try {
     const endpoint = await getCopilotEndpoint();
+    // Fetch all platform MCP tools dynamically (in-process, no HTTP round-trip)
+    const tools = await getPlatformMcpToolsAsOpenAI();
 
-    // Agentic loop: re-run if model calls a tool (e.g. save_agent).
-    // On each iteration we stream text deltas; if a tool_call fires we
-    // execute it and append tool messages, then loop for the next reply.
     let loopMessages = [...messages];
     let toolCallsThisTurn = 0;
-    const MAX_TOOL_LOOPS = 5;
+    const MAX_TOOL_LOOPS = 8;
 
     while (true) {
       const resp = await fetch(endpoint.url, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${endpoint.key}`,
-          "Content-Type": "application/json",
-          ...endpoint.extraHeaders,
-        },
-        body: JSON.stringify({ model, messages: loopMessages, tools: [SAVE_AGENT_TOOL], stream: true }),
+        headers: { "Authorization": `Bearer ${endpoint.key}`, "Content-Type": "application/json", ...endpoint.extraHeaders },
+        body: JSON.stringify({ model, messages: loopMessages, ...(tools.length ? { tools } : {}), stream: true }),
       });
       if (!resp.ok) {
         const errText = await resp.text();
         throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
       }
 
-      // Parse SSE stream, accumulating both text deltas and tool_call deltas.
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      // tool_calls are streamed in chunks; accumulate by index.
-      const toolCallAccum = {}; // index → { id, name, argumentsRaw }
+      const toolCallAccum = {};
       let finishReason = null;
 
       while (true) {
@@ -383,12 +452,10 @@ async function copilotRunTurn(s, userText, modelId) {
             if (choice.finish_reason) finishReason = choice.finish_reason;
             const delta = choice.delta;
             if (!delta) continue;
-            // Accumulate text content
             if (delta.content) {
               totalText += delta.content;
               copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta: delta.content });
             }
-            // Accumulate tool_calls deltas
             if (Array.isArray(delta.tool_calls)) {
               for (const tc of delta.tool_calls) {
                 const idx = tc.index ?? 0;
@@ -403,53 +470,41 @@ async function copilotRunTurn(s, userText, modelId) {
       }
 
       const pendingToolCalls = Object.values(toolCallAccum);
-
-      // If the model did NOT call any tool, the turn is done.
       if (pendingToolCalls.length === 0 || finishReason !== "tool_calls" || toolCallsThisTurn >= MAX_TOOL_LOOPS) break;
 
-      // Build the assistant message with tool_calls for the next loop iteration.
       const assistantMsg = {
         role: "assistant",
         content: totalText || null,
-        tool_calls: pendingToolCalls.map(tc => ({
-          id: tc.id,
-          type: "function",
-          function: { name: tc.name, arguments: tc.argumentsRaw },
-        })),
+        tool_calls: pendingToolCalls.map(tc => ({ id: tc.id, type: "function", function: { name: tc.name, arguments: tc.argumentsRaw } })),
       };
       loopMessages.push(assistantMsg);
 
-      // Execute each tool call and append tool result messages.
       for (const tc of pendingToolCalls) {
+        const toolPartId = `tool_${tc.id || randomUUID().replace(/-/g,"").slice(0,8)}`;
+        let args = {};
+        try { args = JSON.parse(tc.argumentsRaw); } catch {}
+        const toolPart = { id: toolPartId, messageID: asstMsgId, type: "tool", tool: tc.name, callID: tc.id, state: { input: args, status: "running" } };
+        parts.push(toolPart);
+        copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: toolPart });
+
         let toolResult = "";
         try {
-          let args = {};
-          try { args = JSON.parse(tc.argumentsRaw); } catch {}
-          if (tc.name === "save_agent") {
-            log(`copilot tool call: save_agent agent_name=${args.agent_name}`);
-            const mcpResp = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...(MASTER_KEY ? { "Authorization": `Bearer ${MASTER_KEY}` } : {}) },
-              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "save_agent", arguments: args } }),
-            });
-            const mcpJson = await mcpResp.json();
-            const resultContent = mcpJson?.result?.content;
-            if (Array.isArray(resultContent)) {
-              toolResult = resultContent.map(c => c.text ?? JSON.stringify(c)).join("\n");
-            } else {
-              toolResult = JSON.stringify(mcpJson?.result ?? mcpJson);
-            }
-            log(`copilot save_agent result: ${toolResult.slice(0, 200)}`);
-          } else {
-            toolResult = `Unknown tool: ${tc.name}`;
-          }
+          log(`copilot tool call: ${tc.name}`);
+          const mcpResp = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tc.name, arguments: args } });
+          const resultContent = mcpResp?.result?.content;
+          toolResult = Array.isArray(resultContent)
+            ? resultContent.map(c => c.text ?? JSON.stringify(c)).join("\n")
+            : JSON.stringify(mcpResp?.result ?? mcpResp);
+          toolPart.state.status = "completed";
+          toolPart.state.output = toolResult.slice(0, 2000);
         } catch (toolErr) {
           toolResult = `Tool error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`;
-          log(`copilot tool error: ${toolResult}`);
+          toolPart.state.status = "error";
+          toolPart.state.output = toolResult;
         }
+        copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: toolPart });
         loopMessages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
       }
-
       toolCallsThisTurn++;
     }
   } catch (err) {
@@ -460,13 +515,14 @@ async function copilotRunTurn(s, userText, modelId) {
 
   const completedAt = Date.now();
   const textPart = { id: partID, messageID: asstMsgId, type: "text", text: totalText };
+  parts.push(textPart);
   const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "github-copilot", modelID: model, ...(lastError ? { error: lastError } : { finish: "stop" }) };
-  s.history.push({ info: fullInfo, parts: [textPart] });
-  appendMessage(s.id, { info: fullInfo, parts: [textPart] }, s.history.length - 1);
+  s.history.push({ info: fullInfo, parts });
+  appendMessage(s.id, { info: fullInfo, parts }, s.history.length - 1);
   s.time.updated = completedAt;
   copilotEmit(s.id, "message.updated", { info: fullInfo });
   copilotEmit(s.id, "session.idle", {});
-  log(`copilot turn done id=${s.id} model=${modelId} chars=${totalText.length}`);
+  log(`copilot turn done id=${s.id} model=${model} chars=${totalText.length}`);
 }
 
 function codexEmit(sessionId, type, props) {
@@ -819,6 +875,66 @@ function materializeSkills(files) {
   return written;
 }
 
+// Pull `name:` / `description:` out of a SKILL.md YAML frontmatter block.
+// Handles inline values and folded/literal block scalars (`>`/`|`), where the
+// value continues on following indented lines.
+function parseSkillFrontmatter(md) {
+  const m = md.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!m) return {};
+  const lines = m[1].split("\n");
+  const out = {};
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^(name|description):\s*(.*?)\s*$/);
+    if (!kv) continue;
+    const key = kv[1];
+    let val = kv[2];
+    if (val === ">" || val === "|" || val === ">-" || val === "|-") {
+      // Block scalar: gather subsequent indented lines, join on spaces.
+      const block = [];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
+        block.push(lines[++i].trim());
+      }
+      val = block.join(" ");
+    } else {
+      val = val.replace(/^["']|["']$/g, "");
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+// List the skills available on this server (the shared ~/.claude/skills catalog).
+// Returns [{ slug, name, description }] sorted by slug.
+function listPlatformSkills() {
+  let entries = [];
+  try { entries = fs.readdirSync(SKILLS_ROOT, { withFileTypes: true }); } catch { return []; }
+  const skills = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const slug = e.name;
+    const skillMd = path.join(SKILLS_ROOT, slug, "SKILL.md");
+    let meta = {};
+    try { meta = parseSkillFrontmatter(fs.readFileSync(skillMd, "utf8")); } catch { continue; }
+    skills.push({ slug, name: meta.name || slug, description: meta.description || "" });
+  }
+  return skills.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+// Build a system-prompt note describing the skills attached to an agent so the
+// model knows they exist and when to invoke them. Returns "" if none resolve.
+function skillsPromptNote(slugs) {
+  if (!Array.isArray(slugs) || slugs.length === 0) return "";
+  const catalog = new Map(listPlatformSkills().map((s) => [s.slug, s]));
+  const lines = [];
+  for (const slug of slugs) {
+    const s = catalog.get(slug);
+    if (!s) continue;
+    lines.push(`- ${s.slug}: ${s.description || s.name}`.trim());
+  }
+  if (!lines.length) return "";
+  return `\n\nAvailable skills (invoke when relevant):\n${lines.join("\n")}`;
+}
+
 function readBody(req) {
   return new Promise((res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => res(b)); });
 }
@@ -931,6 +1047,11 @@ function tapOcSseChunk(chunk) {
   const now = Date.now();
   for (const line of text.split("\n")) {
     if (!line.startsWith("data: ")) continue;
+    // Distribute raw opencode event to any agent run listeners.
+    if (ocGlobalBus.size > 0) {
+      const fwd = line + "\n";
+      for (const cb of ocGlobalBus) { try { cb(fwd); } catch {} }
+    }
     try {
       const ev = JSON.parse(line.slice(6));
       const sid = ev.properties?.sessionID ?? ev.properties?.part?.sessionID;
@@ -1138,7 +1259,7 @@ async function buildCapabilities() {
     available: true,
     min_interval_minutes: Number(process.env.SCHEDULER_MIN_INTERVAL_MINUTES ?? 1),
     cron_supported: true,
-    manual_trigger: false,
+    manual_trigger: true,
   };
 
   let sandbox = null;
@@ -1150,13 +1271,29 @@ async function buildCapabilities() {
     sandbox = { provider: "daytona", outbound_network: true, pip_install: true, npm_install: true, max_runtime_minutes: 30, persistent_storage: false };
   }
 
+  const { error: sbError } = buildDirectProvider();
+  const files = sbError
+    ? { available: false, reason: "no sandbox provider configured" }
+    : { available: true, ...FILE_LIMITS, sandbox_required: true };
+
   return {
     harnesses,
     mcp_servers,
     vault,
     scheduler,
+    files,
     ...(sandbox && { sandbox }),
-    agents: {},
+    agents: {
+      create:   "POST /api/agents",
+      list:     "GET /api/agents?owner_id={uid}",
+      get:      "GET /api/agents/{id}",
+      update:   "PATCH /api/agents/{id}",
+      delete:   "DELETE /api/agents/{id}",
+      trigger:  "POST /api/agents/{id}/run",
+      pause:    "POST /api/agents/{id}/pause",
+      resume:   "POST /api/agents/{id}/resume",
+      runs:     "GET /api/agents/{id}/runs",
+    },
   };
 }
 
@@ -1275,6 +1412,40 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Human-in-the-loop approvals — list pending tool-call approvals.
+  if (p === "/api/approvals" && req.method === "GET") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ approvals: listPending() }));
+    return;
+  }
+
+  // Accept a pending approval, optionally with human-edited arguments.
+  const _approvalAcceptMatch = p.match(/^\/api\/approvals\/([^/]+)\/accept$/);
+  if (_approvalAcceptMatch && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const ok = acceptApproval(_approvalAcceptMatch[1], body.arguments);
+    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
+    return;
+  }
+
+  // Reject a pending approval, optionally with feedback returned to the agent.
+  const _approvalRejectMatch = p.match(/^\/api\/approvals\/([^/]+)\/reject$/);
+  if (_approvalRejectMatch && req.method === "POST") {
+    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const ok = rejectApproval(_approvalRejectMatch[1], body.feedback);
+    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
+    return;
+  }
+
   if (p === "/agents" && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
     res.writeHead(200, { "content-type": "application/json" });
@@ -1326,18 +1497,35 @@ const server = http.createServer(async (req, res) => {
     const sessionTz = body.timezone || null;
     let systemPromptOverride = body.systemPrompt || null;
 
+    let storedBaseAgent = null;
     if (!builtin) {
+      // Resolve the agent name/id against BOTH stores: the save_agent MCP store
+      // (system_prompt) and the /api/agents store (prompt). The UI creates
+      // agents in the latter, so a single-store lookup 404s on UI agents.
       let savedAgent = null;
       try { savedAgent = getSavedAgent(agentParam); } catch {}
-      if (!savedAgent) {
+      let apiAgent = null;
+      if (!savedAgent) { try { apiAgent = getAgent(agentParam); } catch {} }
+      if (!savedAgent && !apiAgent) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
         return;
       }
-      systemPromptOverride = savedAgent.system_prompt;
-      body.title = body.title || savedAgent.name;
+      // The /api/agents store can attach skills; surface them in the prompt so
+      // the model knows to invoke them (the files live in the shared catalog on
+      // disk, where opencode/cc discover them).
+      systemPromptOverride = savedAgent
+        ? savedAgent.system_prompt
+        : (apiAgent.prompt || apiAgent.system || "") + skillsPromptNote(apiAgent.skills);
+      body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
+      // Honor the agent's base harness. The MCP store calls it base_agent; the
+      // /api/agents store calls it harness ("claude-code" -> "cc"). Default to
+      // opencode (always available) rather than cc, which needs the claude-code
+      // SDK to be installed.
+      const rawHarness = (savedAgent && savedAgent.base_agent) || (apiAgent && apiAgent.harness) || "opencode";
+      storedBaseAgent = rawHarness === "claude-code" ? "cc" : rawHarness;
     }
-    const resolvedAgent = builtin ?? "cc";
+    const resolvedAgent = builtin ?? storedBaseAgent ?? "cc";
 
     if (resolvedAgent === "github-copilot") {
       if (!process.env.LITELLM_API_BASE && !process.env.GITHUB_TOKEN) {
@@ -1410,6 +1598,7 @@ const server = http.createServer(async (req, res) => {
           if (parsed.id) {
             sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
+            if (systemPromptOverride) sessionSystemPrompt.set(parsed.id, systemPromptOverride);
             persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz });
           }
         } catch {}
@@ -1453,7 +1642,9 @@ const server = http.createServer(async (req, res) => {
     const codexList = [...codexSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, agent: "codex",
     }));
-    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList].sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    const all = [...tagged, ...dbOcExtra, ...ccList, ...copilotList, ...codexList]
+      .filter(s => s.id != null)
+      .sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(all));
     return;
@@ -1566,7 +1757,7 @@ const server = http.createServer(async (req, res) => {
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
         if (await tryPlugin(text, sid, "github-copilot", res)) return;
-        const modelId = body.model?.modelID ?? (process.env.GITHUB_COPILOT_MODEL || "gpt-4o");
+        const modelId = body.model?.modelID ?? (process.env.GITHUB_COPILOT_MODEL || (process.env.LITELLM_API_BASE ? "claude-code-sonnet-4-6-converse" : "gpt-4o"));
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`copilot prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
@@ -1623,6 +1814,16 @@ const server = http.createServer(async (req, res) => {
       const now = Date.now();
       if (sessionHarness.get(sid) === "opencode") {
         const { childSid, preamble } = await ensureOcChildAlive(sid);
+        const _sysPrompt = sessionSystemPrompt.get(sid);
+        if (_sysPrompt && !ocSysPromptDelivered.has(sid)) {
+          try {
+            const _b = JSON.parse(forwardBody);
+            const _ut = (_b.parts || []).filter(pt => pt.type === "text").map(pt => pt.text).join("\n");
+            _b.parts = [{ type: "text", text: `${_sysPrompt}\n\n---\n\n${_ut}` }];
+            forwardBody = JSON.stringify(_b);
+            ocSysPromptDelivered.add(sid);
+          } catch {}
+        }
         if (preamble) {
           try {
             const b = JSON.parse(forwardBody);
@@ -1766,27 +1967,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── GET /api/capabilities ────────────────────────────────────────────────────
-  if (req.method === "GET" && p === "/api/capabilities") {
-    const vaultPlugin = pluginRegistry.getPlugin("vault");
-    const loopPlugin = pluginRegistry.getPlugin("loop");
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({
-      harnesses: [{ name: "claude-code", version: "1.0" }],
-      mcp_servers: [],
-      vault: { available: !!(vaultPlugin && vaultPlugin.backend) },
-      scheduler: { available: !!loopPlugin, min_interval_minutes: 1 },
-      sandbox: {
-        provider: process.env.E2B_API_KEY ? "e2b" : null,
-        pip_install: true,
-        outbound_network: true,
-        persistent_storage: false,
-        max_runtime_minutes: 30,
-      },
-    }));
-    return;
-  }
-
   // ── Vault HTTP endpoints ──────────────────────────────────────────────────────
   const _vaultUserMatch = p.match(/^\/api\/vault\/([^/]+)$/);
   const _vaultKeyMatch  = p.match(/^\/api\/vault\/([^/]+)\/([^/]+)$/);
@@ -1847,6 +2027,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Skills catalog ────────────────────────────────────────────────────────────
+  // GET /api/skills — list the skills available on this server so the UI can
+  // offer them when attaching skills to an agent.
+  if (p === "/api/skills" && req.method === "GET") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ skills: listPlatformSkills() }));
+    return;
+  }
+
   // ── Agent CRUD + run routes ───────────────────────────────────────────────────
   const _agentRunLogsMatch = p.match(/^\/api\/agents\/([^/]+)\/runs\/([^/]+)\/logs$/);
   const _agentRunsMatch    = p.match(/^\/api\/agents\/([^/]+)\/runs$/);
@@ -1870,6 +2059,7 @@ const server = http.createServer(async (req, res) => {
       config = {},
       model = "claude-sonnet-4-6",
       system = "",
+      skills = [],
     } = body;
     if (!name || !owner_id) {
       res.writeHead(400, { "content-type": "application/json" });
@@ -1913,6 +2103,7 @@ const server = http.createServer(async (req, res) => {
       vault_keys, setup_commands, max_runtime_minutes, on_failure,
       config, owner_id, status: "paused", description: description || null,
       harness: agentHarness,
+      skills: Array.isArray(skills) ? skills : [],
     });
     const host = req.headers.host || "localhost";
     res.writeHead(201, { "content-type": "application/json" });
@@ -2003,6 +2194,29 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     updateAgent(agentId, { status: "active" });
+
+    // Wire up cron loop if agent has a schedule but no loop yet.
+    if (existing.cron && !existing.loop_id) {
+      try {
+        const tz = existing.timezone || "UTC";
+        const job = new Cron(existing.cron, { timezone: tz, paused: true });
+        const nextRun = job.nextRun();
+        const nextRunAt = nextRun ? nextRun.getTime() : Date.now() + 60_000;
+        const agentPrompt = existing.prompt || existing.system || "";
+        const loop = createLoop({
+          sessionId: existing.session_id,
+          prompt: agentPrompt,
+          cronExpr: existing.cron,
+          tz,
+          nextRunAt,
+        });
+        setAgentLoop(agentId, loop.id);
+        log(`[resume] created loop ${loop.id} for agent ${agentId} cron=${existing.cron} tz=${tz}`);
+      } catch (e) {
+        log(`[resume] failed to create loop for agent ${agentId}:`, e.message);
+      }
+    }
+
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ id: agentId, status: "active" }));
     return;
@@ -2057,21 +2271,63 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Create ephemeral cc session for this run
-    if (!ccQuery) {
+    // Surface attached skills to the agent: they already live on disk in the
+    // shared catalog (so opencode/cc discover them), and we append a note to
+    // the prompt so the model knows which to invoke.
+    resolvedPrompt += skillsPromptNote(agentDef.skills);
+
+    // Create ephemeral session for this run using the agent's configured harness
+    const runHarness = agentDef.harness === "claude-code" ? "cc" : agentDef.harness === "github-copilot" ? "github-copilot" : agentDef.harness === "codex" ? "codex" : "opencode";
+    if (runHarness === "cc" && !ccQuery) {
       res.writeHead(503, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "claude-code SDK not available" }));
       return;
     }
-    const runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    let runSid;
     const runNow = Date.now();
-    ccSessions.set(runSid, {
-      id: runSid, title: `agent-run-${agentId}`,
-      time: { created: runNow }, harness: "claude-code",
-      sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
-    });
-    sessionHarness.set(runSid, "cc");
-    persistSession({ id: runSid, harness: "cc", title: `agent-run-${agentId}`, createdAt: runNow });
+    if (runHarness === "opencode") {
+      // Create the session in the opencode child first so prompt_async finds it.
+      try {
+        const ocSessResp = await new Promise((resolve, reject) => {
+          let data = "";
+          const r = http.request(`${UP}/session`, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+            res.on("data", c => data += c);
+            res.on("end", () => {
+              try {
+                const parsed = JSON.parse(data);
+                if (!parsed.id || (parsed.success === false)) {
+                  const msg = parsed.error?.[0]?.message ?? parsed.error ?? "session creation rejected";
+                  reject(new Error(`opencode POST /session failed: ${msg}`));
+                } else {
+                  resolve(parsed);
+                }
+              } catch { reject(new Error("bad json from child")); }
+            });
+          });
+          r.on("error", reject);
+          // Don't pass model at session creation — opencode rejects all model formats.
+          // The model is applied by the adapter's FORCE_MODEL logic when the prompt fires.
+          r.end(JSON.stringify({ title: `agent-run-${agentId}` }));
+        });
+        runSid = ocSessResp.id;
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `failed to create opencode session: ${e.message}` }));
+        return;
+      }
+      sessionAgent.set(runSid, "opencode");
+      sessionHarness.set(runSid, "opencode");
+    } else {
+      runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      ccSessions.set(runSid, {
+        id: runSid, title: `agent-run-${agentId}`,
+        time: { created: runNow }, harness: agentDef.harness || "claude-code",
+        sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+      });
+      sessionAgent.set(runSid, runHarness);
+      sessionHarness.set(runSid, runHarness);
+    }
+    persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
 
     const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
     const runId = runRecord.id;
@@ -2087,21 +2343,66 @@ const server = http.createServer(async (req, res) => {
         bufferRunEvent(runId, line);
         if (evt.type === "session.idle") {
           updateAgentRun(runId, { status: "completed", finishedAt: Date.now() });
+          const { provider: _sbP, sandboxId: _sbId } = getRunSandbox(runId);
+          if (_sbP && _sbId) _sbP.terminate(_sbId).catch(() => {});
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
         } else if (evt.type === "session.error") {
           const errMsg = (evt.properties && evt.properties.error && evt.properties.error.message) || "unknown error";
           updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: errMsg });
+          const { provider: _sbP2, sandboxId: _sbId2 } = getRunSandbox(runId);
+          if (_sbP2 && _sbId2) _sbP2.terminate(_sbId2).catch(() => {});
           if (agentDef.on_failure === "pause_and_notify") {
             updateAgent(agentId, { status: "paused" });
           }
           ccGlobalBus.delete(runEventListener);
           pluginGlobalBus.delete(runEventListener);
+          ocGlobalBus.delete(runEventListener);
         }
       } catch {}
     };
     ccGlobalBus.add(runEventListener);
     pluginGlobalBus.add(runEventListener);
+    if (runHarness === "opencode") ocGlobalBus.add(runEventListener);
+
+    // Always inject agent identity so the agent can call persist_file
+    resolvedPrompt +=
+      `\n\n---\nAgent context:\n  agent_id: ${agentId}\n` +
+      `  run_id: ${runId}\n` +
+      `  To persist files you create in the sandbox back to the platform, call the\n` +
+      `  persist_file MCP tool with your agent_id and the file path + content.\n---`;
+
+    // Provision sandbox and write agent files if any exist
+    const agentFiles = listAgentFiles(agentId);
+    if (agentFiles.length > 0) {
+      const { provider: sbProvider, error: sbError } = buildDirectProvider();
+      if (sbError) {
+        updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `sandbox not configured: ${sbError}` });
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `sandbox not configured: ${sbError}` }));
+        return;
+      }
+      try {
+        const { id: sbId } = await sbProvider.create(`agent-run-${runId}`);
+        setRunSandbox(runId, sbProvider, sbId);
+        updateAgentRun(runId, { sandboxId: sbId });
+        for (const file of agentFiles) {
+          await sbProvider.writeFile(sbId, `/workspace/${file.path}`, file.content);
+        }
+        const fileList = agentFiles.map(f => `  - /workspace/${f.path}`).join("\n");
+        resolvedPrompt +=
+          `\n\n---\nSandbox provisioned (${sbProvider.providerName}). ID: ${sbId}.\n` +
+          `Files written to /workspace/:\n${fileList}\n` +
+          `Use sandbox tools to execute them. After editing any file, call persist_file\n` +
+          `to save changes so they survive sandbox teardown.\n---`;
+      } catch (e) {
+        updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: `sandbox setup failed: ${e.message}` });
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `sandbox setup failed: ${e.message}` }));
+        return;
+      }
+    }
 
     // Fire prompt async — non-blocking
     callPromptAsync(runSid, resolvedPrompt).catch((e) => {
@@ -2109,6 +2410,7 @@ const server = http.createServer(async (req, res) => {
       updateAgentRun(runId, { status: "failed", finishedAt: Date.now(), error: e.message });
       ccGlobalBus.delete(runEventListener);
       pluginGlobalBus.delete(runEventListener);
+      ocGlobalBus.delete(runEventListener);
     });
 
     const host = req.headers.host || "localhost";
@@ -2160,6 +2462,83 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ runs }));
     return;
+  }
+
+  // ── Agent file endpoints ──────────────────────────────────────────────────────
+  // PUT /api/agents/:id/files/* — upsert a file (wildcard path after /files/)
+  // GET /api/agents/:id/files   — list files (no content)
+  // GET /api/agents/:id/files/* — fetch single file with content
+  // DELETE /api/agents/:id/files/* — delete single file
+  // DELETE /api/agents/:id/files   — delete all files for agent
+  const _agentFilePrefixMatch = p.match(/^\/api\/agents\/([^/]+)\/files(\/.*)?$/);
+  if (_agentFilePrefixMatch) {
+    const agentId  = _agentFilePrefixMatch[1];
+    const fileSuffix = _agentFilePrefixMatch[2]; // "/path/to/file.py" or undefined
+    const filePath = fileSuffix ? decodeURIComponent(fileSuffix.slice(1)) : null; // strip leading /
+
+    const agentExists = getAgent(agentId);
+    if (!agentExists) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "agent not found" }));
+      return;
+    }
+
+    if (req.method === "PUT" && filePath) {
+      const raw = await readBody(req);
+      let content;
+      const ct = (req.headers["content-type"] || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        try { content = JSON.parse(raw).content; } catch {}
+      }
+      if (content === undefined) content = raw; // raw text fallback
+      if (!content && content !== "") {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "content required" }));
+        return;
+      }
+      try {
+        const file = upsertAgentFile(agentId, filePath, content);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, path: file.path, size_bytes: file.size_bytes }));
+      } catch (e) {
+        res.writeHead(e.status || 400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && !filePath) {
+      const files = listAgentFiles(agentId);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ files }));
+      return;
+    }
+
+    if (req.method === "GET" && filePath) {
+      const file = getAgentFile(agentId, filePath);
+      if (!file) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "file not found" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end(file.content);
+      return;
+    }
+
+    if (req.method === "DELETE" && filePath) {
+      deleteAgentFile(agentId, filePath);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (req.method === "DELETE" && !filePath) {
+      deleteAllAgentFiles(agentId);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
   }
 
   // Everything else (/event, /session/:id/*, ...) — transparent passthrough.

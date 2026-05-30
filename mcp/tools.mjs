@@ -1,5 +1,8 @@
 import { registerTool } from "./server.mjs";
 import { saveAgent } from "./agents/store.mjs";
+import { requestApproval } from "./approvals.mjs";
+import { registerSandboxTools } from "./sandbox.mjs";
+import { upsertAgentFile, listAgentFiles, deleteAgentFile } from "../harnesses/agent-file-store.mjs";
 
 registerTool(
   {
@@ -25,3 +28,111 @@ registerTool(
     return { agent_id: row.id, name: row.name };
   }
 );
+
+registerTool(
+  {
+    name: "persist_file",
+    description:
+      "Persist a file you created or modified in your sandbox back to the platform so it survives " +
+      "sandbox teardown and is automatically re-uploaded on your next run. " +
+      "Call this after writing or editing any file you want to keep. " +
+      "Your agent_id is injected into your context at run start — use it here.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "Your agent ID (provided in your run context as 'agent_id: ...')",
+        },
+        path: {
+          type: "string",
+          description: "Relative path of the file, e.g. 'outreach.py' or 'utils/helpers.py'. Must be a .py file.",
+        },
+        content: {
+          type: "string",
+          description: "Full text content of the file.",
+        },
+      },
+      required: ["agent_id", "path", "content"],
+    },
+  },
+  async ({ agent_id, path, content }) => {
+    const file = upsertAgentFile(agent_id, path, content);
+    return { ok: true, path: file.path, size_bytes: file.size_bytes };
+  },
+);
+
+registerTool(
+  {
+    name: "list_agent_files",
+    description: "List the files currently persisted for your agent. Shows path and size — not content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "Your agent ID (provided in your run context).",
+        },
+      },
+      required: ["agent_id"],
+    },
+  },
+  async ({ agent_id }) => {
+    const files = listAgentFiles(agent_id);
+    return { files };
+  },
+);
+
+registerTool(
+  {
+    name: "delete_agent_file",
+    description: "Remove a persisted file from your agent. It will no longer be uploaded on future runs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string" },
+        path: { type: "string", description: "Relative path of the file to delete." },
+      },
+      required: ["agent_id", "path"],
+    },
+  },
+  async ({ agent_id, path }) => {
+    deleteAgentFile(agent_id, path);
+    return { ok: true };
+  },
+);
+
+registerTool(
+  {
+    name: "request_human_approval",
+    description:
+      "Pause and ask a human to approve a sensitive action before you take it. Call this when your instructions tell you to keep a human in the loop — e.g. before writing to an external system, sending a message, deleting data, or spending money. Blocks until a human responds. Returns { approved, arguments, feedback }: when approved, `arguments` is the (possibly human-edited) action input you should use — perform the action exactly as edited; when not approved, do NOT perform the action and address the human's `feedback` instead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description:
+            "Name of the action you want approval for (e.g. 'pylon_update_issue', 'send_email', 'delete_branch'). Shown to the human as the title.",
+        },
+        arguments: {
+          type: "object",
+          description:
+            "The concrete inputs for the action, as a flat object of named fields. Each field is shown to the human as an editable value; the human may change them before approving.",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  async ({ action, arguments: actionArgs }) => {
+    const outcome = await requestApproval(action, actionArgs || {});
+    if (outcome.decision === "accept") {
+      return { approved: true, arguments: outcome.args || {} };
+    }
+    return { approved: false, feedback: outcome.feedback || "" };
+  }
+);
+
+// Sandbox tools (provision, execute, read_file, upload_artifact) — available
+// to ALL harnesses via PLATFORM_MCP_URL. No-op when no sandbox provider is configured.
+registerSandboxTools(registerTool);
