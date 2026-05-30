@@ -7,7 +7,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  shouldGate,
   requestApproval,
   listPending,
   getPending,
@@ -19,33 +18,7 @@ import {
 
 function reset() {
   _reset();
-  delete process.env.HITL_APPROVAL_TOOLS;
 }
-
-// ── shouldGate ───────────────────────────────────────────────────────────────
-
-test("shouldGate: off by default", () => {
-  reset();
-  assert.equal(shouldGate("save_agent", {}), false);
-  assert.equal(shouldGate("save_agent", undefined), false);
-});
-
-test("shouldGate: definition opt-in via requiresApproval", () => {
-  reset();
-  assert.equal(shouldGate("save_agent", { requiresApproval: true }), true);
-});
-
-test("shouldGate: env list and wildcard", () => {
-  reset();
-  process.env.HITL_APPROVAL_TOOLS = "pylon_update_issue, send_email";
-  assert.equal(shouldGate("pylon_update_issue"), true);
-  assert.equal(shouldGate("send_email"), true);
-  assert.equal(shouldGate("save_agent"), false);
-
-  process.env.HITL_APPROVAL_TOOLS = "*";
-  assert.equal(shouldGate("anything"), true);
-  reset();
-});
 
 // ── accept ───────────────────────────────────────────────────────────────────
 

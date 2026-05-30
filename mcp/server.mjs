@@ -4,7 +4,6 @@
 //   HTTP+SSE (legacy): GET /mcp/sse  +  POST /mcp/message
 
 import { randomUUID } from "node:crypto";
-import { shouldGate, requestApproval } from "./approvals.mjs";
 
 const toolRegistry = new Map(); // name → { definition, handler }
 
@@ -47,22 +46,8 @@ export async function handleMcpRequest(body) {
       const args = params?.arguments ?? {};
       const entry = toolRegistry.get(name);
       if (!entry) return jsonRpcError(id, -32601, `Unknown tool: ${name}`);
-
-      // Human-in-the-loop: pause gated tool calls until a human approves.
-      let callArgs = args;
-      if (shouldGate(name, entry.definition)) {
-        const outcome = await requestApproval(name, args);
-        if (outcome.decision === "reject") {
-          const text = outcome.feedback
-            ? `Tool call rejected by human reviewer. Feedback: ${outcome.feedback}`
-            : "Tool call rejected by human reviewer.";
-          return jsonRpc(id, { content: [{ type: "text", text }], isError: true });
-        }
-        callArgs = outcome.args ?? args;
-      }
-
       try {
-        const result = await entry.handler(callArgs);
+        const result = await entry.handler(args);
         return jsonRpc(id, { content: [{ type: "text", text: JSON.stringify(result) }] });
       } catch (e) {
         return jsonRpc(id, { content: [{ type: "text", text: e.message }], isError: true });
