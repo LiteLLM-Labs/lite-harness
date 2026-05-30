@@ -1337,15 +1337,19 @@ const server = http.createServer(async (req, res) => {
     let systemPromptOverride = body.systemPrompt || null;
 
     if (!builtin) {
+      // Resolve against both agent stores: the save_agent MCP store (system_prompt)
+      // and the /api/agents store (prompt). The UI creates agents in the latter.
       let savedAgent = null;
       try { savedAgent = getSavedAgent(agentParam); } catch {}
-      if (!savedAgent) {
+      let apiAgent = null;
+      if (!savedAgent) { try { apiAgent = getAgent(agentParam); } catch {} }
+      if (!savedAgent && !apiAgent) {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
         return;
       }
-      systemPromptOverride = savedAgent.system_prompt;
-      body.title = body.title || savedAgent.name;
+      systemPromptOverride = savedAgent ? savedAgent.system_prompt : apiAgent.prompt;
+      body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
     }
     const resolvedAgent = builtin ?? "cc";
 
