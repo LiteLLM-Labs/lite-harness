@@ -31,6 +31,8 @@ jobs:
             -p 10000:10000 \
             -e LITELLM_API_BASE=https://api.anthropic.com \
             -e LITELLM_API_KEY=test-key \
+            -e LITELLM_DEFAULT_MODEL=smoke-model \
+            -e LITE_HARNESS_SMOKE=1 \
             -e MASTER_KEY=smoke-test \
             -e PORT=10000 \
             lite-harness:smoke
