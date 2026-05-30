@@ -1,6 +1,7 @@
 import { registerTool } from "./server.mjs";
 import { saveAgent } from "./agents/store.mjs";
 import { requestApproval } from "./approvals.mjs";
+import { registerSandboxTools } from "./sandbox.mjs";
 import { upsertAgentFile, listAgentFiles, deleteAgentFile } from "../harnesses/agent-file-store.mjs";
 
 registerTool(
@@ -131,3 +132,7 @@ registerTool(
     return { approved: false, feedback: outcome.feedback || "" };
   }
 );
+
+// Sandbox tools (provision, execute, read_file, upload_artifact) — available
+// to ALL harnesses via PLATFORM_MCP_URL. No-op when no sandbox provider is configured.
+registerSandboxTools(registerTool);

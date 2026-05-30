@@ -183,7 +183,7 @@ async function callPromptAsync(sessionId, prompt) {
   if (harness === "github-copilot") {
     const cs = copilotSessions.get(sessionId);
     if (!cs) throw new Error(`callPromptAsync: copilot session ${sessionId} not found`);
-    const modelId = process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
+    const modelId = process.env.GITHUB_COPILOT_MODEL || (process.env.LITELLM_API_BASE ? "claude-code-sonnet-4-6-converse" : "gpt-4o");
     return copilotRunTurn(cs, prompt, modelId);
   }
   if (harness === "codex") {
@@ -253,8 +253,35 @@ async function tryPlugin(text, sid, harness, res) {
   return true;
 }
 
+// ── @github/copilot-sdk lazy init ────────────────────────────────────────────
+// One CopilotClient per process, shared across all copilot sessions.
+// The SDK wraps the Copilot CLI subprocess; mcpServers in createSession() wires
+// the platform MCP into every copilot session so all harnesses see sandbox tools.
+let _copilotClient = null;
+let _copilotClientPromise = null;
+
+async function getCopilotClient() {
+  if (_copilotClient) return _copilotClient;
+  if (_copilotClientPromise) return _copilotClientPromise;
+  _copilotClientPromise = (async () => {
+    let mod;
+    try {
+      mod = await import("@github/copilot-sdk");
+    } catch (e) {
+      throw new Error(`@github/copilot-sdk not installed: ${e.message}`);
+    }
+    const client = new mod.CopilotClient();
+    await client.start();
+    _copilotClient = client;
+    _copilotClientPromise = null;
+    log("@github/copilot-sdk client started");
+    return client;
+  })();
+  return _copilotClientPromise;
+}
+
 // In-process state for github-copilot sessions.
-const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers}
+const copilotSessions = new Map(); // id → {id, title, time, history, busSubscribers, sdkSession?}
 const copilotGlobalBus = new Set(); // SSE response writers
 
 // In-process state for codex sessions.
@@ -284,16 +311,7 @@ const ocSidRemapReverse = new Map(); // childSid → ourId
   if (total > 0) log(`hydrated ${total} session(s) from db (cc=${cc.size} copilot=${copilot.size} codex=${codex.size} opencode=${ocRows.length})`);
 }
 
-// Token cache for GitHub Copilot native mode (tokens expire ~30 min)
-let _copilotToken = null;
-let _copilotTokenExpiry = 0;
-
-const COPILOT_NATIVE_HEADERS = {
-  "Copilot-Integration-Id": "vscode-chat",
-  "Editor-Version": "vscode/1.85.0",
-  "Editor-Plugin-Version": "copilot-chat/0.12.0",
-  "Openai-Organization": "github-copilot",
-};
+// (Token cache removed — native auth now handled by @github/copilot-sdk CLI)
 
 function copilotEmit(sessionId, type, props) {
   const ev = { id: `evt_${randomUUID().replace(/-/g,"").slice(0,20)}`, type, properties: { ...props, sessionID: sessionId } };
@@ -304,18 +322,21 @@ function copilotEmit(sessionId, type, props) {
 }
 
 // Returns { url, key, extraHeaders } for the chat completions endpoint.
-// BYOK mode (LITELLM_API_BASE set): routes to LiteLLM proxy — no GitHub auth needed.
+// BYOK mode (LITELLM_API_BASE set): routes to LiteLLM proxy.
 // Native mode (GITHUB_TOKEN set): exchanges GitHub token for a short-lived Copilot token.
+let _copilotToken = null;
+let _copilotTokenExpiry = 0;
+const COPILOT_NATIVE_HEADERS = {
+  "Copilot-Integration-Id": "vscode-chat",
+  "Editor-Version": "vscode/1.85.0",
+  "Editor-Plugin-Version": "copilot-chat/0.12.0",
+  "Openai-Organization": "github-copilot",
+};
 async function getCopilotEndpoint() {
   const byokBase = process.env.LITELLM_API_BASE;
   if (byokBase) {
-    return {
-      url: byokBase.replace(/\/+$/, "") + "/chat/completions",
-      key: process.env.LITELLM_API_KEY || "",
-      extraHeaders: {},
-    };
+    return { url: byokBase.replace(/\/+$/, "") + "/chat/completions", key: process.env.LITELLM_API_KEY || "", extraHeaders: {} };
   }
-  // Native GitHub Copilot: exchange GitHub OAuth token for short-lived Copilot token
   if (_copilotToken && Date.now() < _copilotTokenExpiry - 60_000) {
     return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
   }
@@ -332,23 +353,32 @@ async function getCopilotEndpoint() {
   return { url: "https://api.githubcopilot.com/chat/completions", key: _copilotToken, extraHeaders: COPILOT_NATIVE_HEADERS };
 }
 
-// OpenAI-format tool definition for save_agent, injected into every copilot request.
-const SAVE_AGENT_TOOL = {
-  type: "function",
-  function: {
-    name: "save_agent",
-    description: "Save this session as a reusable named agent that can be launched from the CLI with `lite <agent_name>`",
-    parameters: {
-      type: "object",
-      properties: {
-        agent_name: { type: "string" },
-        system_prompt: { type: "string" },
-      },
-      required: ["agent_name", "system_prompt"],
-    },
-  },
-};
+/**
+ * Fetch all platform MCP tools and convert to OpenAI function-call format.
+ * Runs in-process against handleMcpRequest — no HTTP round-trip, no latency.
+ */
+async function getPlatformMcpToolsAsOpenAI() {
+  try {
+    const resp = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    return (resp?.result?.tools ?? []).map(t => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.inputSchema },
+    }));
+  } catch { return []; }
+}
 
+/**
+ * Run one copilot turn via raw chat/completions with ALL platform MCP tools injected.
+ *
+ * Tool routing: every tool_call is dispatched to handleMcpRequest() in-process.
+ * No hardcoded tool names — any tool registered in mcp/tools.mjs is automatically
+ * available (sandbox_provision, sandbox_execute, save_agent, request_human_approval…).
+ *
+ * Note: @github/copilot-sdk is installed and available, but its mcpServers option in
+ * createSession() does not yet connect to HTTP MCP servers in the current CLI version.
+ * This implementation uses raw chat/completions + in-process tool injection instead,
+ * which works reliably across BYOK (LiteLLM) and native (GITHUB_TOKEN) modes.
+ */
 async function copilotRunTurn(s, userText, modelId) {
   const startedAt = Date.now();
 
@@ -373,43 +403,36 @@ async function copilotRunTurn(s, userText, modelId) {
   const partID = `${asstMsgId}_b0`;
   let totalText = "";
   let lastError;
+  const parts = [];
 
   copilotEmit(s.id, "message.updated", { info: { id: asstMsgId, role: "assistant", time: { created: startedAt } } });
-  // Emit empty part BEFORE first delta so UI creates the slot
   copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: { id: partID, messageID: asstMsgId, type: "text", text: "" } });
 
-  const model = modelId || process.env.GITHUB_COPILOT_MODEL || "gpt-4o";
+  const model = modelId || process.env.GITHUB_COPILOT_MODEL || (process.env.LITELLM_API_BASE ? "claude-code-sonnet-4-6-converse" : "gpt-4o");
   try {
     const endpoint = await getCopilotEndpoint();
+    // Fetch all platform MCP tools dynamically (in-process, no HTTP round-trip)
+    const tools = await getPlatformMcpToolsAsOpenAI();
 
-    // Agentic loop: re-run if model calls a tool (e.g. save_agent).
-    // On each iteration we stream text deltas; if a tool_call fires we
-    // execute it and append tool messages, then loop for the next reply.
     let loopMessages = [...messages];
     let toolCallsThisTurn = 0;
-    const MAX_TOOL_LOOPS = 5;
+    const MAX_TOOL_LOOPS = 8;
 
     while (true) {
       const resp = await fetch(endpoint.url, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${endpoint.key}`,
-          "Content-Type": "application/json",
-          ...endpoint.extraHeaders,
-        },
-        body: JSON.stringify({ model, messages: loopMessages, tools: [SAVE_AGENT_TOOL], stream: true }),
+        headers: { "Authorization": `Bearer ${endpoint.key}`, "Content-Type": "application/json", ...endpoint.extraHeaders },
+        body: JSON.stringify({ model, messages: loopMessages, ...(tools.length ? { tools } : {}), stream: true }),
       });
       if (!resp.ok) {
         const errText = await resp.text();
         throw new Error(`Copilot API ${resp.status}: ${errText.slice(0, 300)}`);
       }
 
-      // Parse SSE stream, accumulating both text deltas and tool_call deltas.
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      // tool_calls are streamed in chunks; accumulate by index.
-      const toolCallAccum = {}; // index → { id, name, argumentsRaw }
+      const toolCallAccum = {};
       let finishReason = null;
 
       while (true) {
@@ -429,12 +452,10 @@ async function copilotRunTurn(s, userText, modelId) {
             if (choice.finish_reason) finishReason = choice.finish_reason;
             const delta = choice.delta;
             if (!delta) continue;
-            // Accumulate text content
             if (delta.content) {
               totalText += delta.content;
               copilotEmit(s.id, "message.part.delta", { messageID: asstMsgId, partID, field: "text", delta: delta.content });
             }
-            // Accumulate tool_calls deltas
             if (Array.isArray(delta.tool_calls)) {
               for (const tc of delta.tool_calls) {
                 const idx = tc.index ?? 0;
@@ -449,53 +470,41 @@ async function copilotRunTurn(s, userText, modelId) {
       }
 
       const pendingToolCalls = Object.values(toolCallAccum);
-
-      // If the model did NOT call any tool, the turn is done.
       if (pendingToolCalls.length === 0 || finishReason !== "tool_calls" || toolCallsThisTurn >= MAX_TOOL_LOOPS) break;
 
-      // Build the assistant message with tool_calls for the next loop iteration.
       const assistantMsg = {
         role: "assistant",
         content: totalText || null,
-        tool_calls: pendingToolCalls.map(tc => ({
-          id: tc.id,
-          type: "function",
-          function: { name: tc.name, arguments: tc.argumentsRaw },
-        })),
+        tool_calls: pendingToolCalls.map(tc => ({ id: tc.id, type: "function", function: { name: tc.name, arguments: tc.argumentsRaw } })),
       };
       loopMessages.push(assistantMsg);
 
-      // Execute each tool call and append tool result messages.
       for (const tc of pendingToolCalls) {
+        const toolPartId = `tool_${tc.id || randomUUID().replace(/-/g,"").slice(0,8)}`;
+        let args = {};
+        try { args = JSON.parse(tc.argumentsRaw); } catch {}
+        const toolPart = { id: toolPartId, messageID: asstMsgId, type: "tool", tool: tc.name, callID: tc.id, state: { input: args, status: "running" } };
+        parts.push(toolPart);
+        copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: toolPart });
+
         let toolResult = "";
         try {
-          let args = {};
-          try { args = JSON.parse(tc.argumentsRaw); } catch {}
-          if (tc.name === "save_agent") {
-            log(`copilot tool call: save_agent agent_name=${args.agent_name}`);
-            const mcpResp = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...(MASTER_KEY ? { "Authorization": `Bearer ${MASTER_KEY}` } : {}) },
-              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "save_agent", arguments: args } }),
-            });
-            const mcpJson = await mcpResp.json();
-            const resultContent = mcpJson?.result?.content;
-            if (Array.isArray(resultContent)) {
-              toolResult = resultContent.map(c => c.text ?? JSON.stringify(c)).join("\n");
-            } else {
-              toolResult = JSON.stringify(mcpJson?.result ?? mcpJson);
-            }
-            log(`copilot save_agent result: ${toolResult.slice(0, 200)}`);
-          } else {
-            toolResult = `Unknown tool: ${tc.name}`;
-          }
+          log(`copilot tool call: ${tc.name}`);
+          const mcpResp = await handleMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tc.name, arguments: args } });
+          const resultContent = mcpResp?.result?.content;
+          toolResult = Array.isArray(resultContent)
+            ? resultContent.map(c => c.text ?? JSON.stringify(c)).join("\n")
+            : JSON.stringify(mcpResp?.result ?? mcpResp);
+          toolPart.state.status = "completed";
+          toolPart.state.output = toolResult.slice(0, 2000);
         } catch (toolErr) {
           toolResult = `Tool error: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`;
-          log(`copilot tool error: ${toolResult}`);
+          toolPart.state.status = "error";
+          toolPart.state.output = toolResult;
         }
+        copilotEmit(s.id, "message.part.updated", { messageID: asstMsgId, part: toolPart });
         loopMessages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
       }
-
       toolCallsThisTurn++;
     }
   } catch (err) {
@@ -506,13 +515,14 @@ async function copilotRunTurn(s, userText, modelId) {
 
   const completedAt = Date.now();
   const textPart = { id: partID, messageID: asstMsgId, type: "text", text: totalText };
+  parts.push(textPart);
   const fullInfo = { id: asstMsgId, role: "assistant", time: { created: startedAt, completed: completedAt }, harness: "github-copilot", modelID: model, ...(lastError ? { error: lastError } : { finish: "stop" }) };
-  s.history.push({ info: fullInfo, parts: [textPart] });
-  appendMessage(s.id, { info: fullInfo, parts: [textPart] }, s.history.length - 1);
+  s.history.push({ info: fullInfo, parts });
+  appendMessage(s.id, { info: fullInfo, parts }, s.history.length - 1);
   s.time.updated = completedAt;
   copilotEmit(s.id, "message.updated", { info: fullInfo });
   copilotEmit(s.id, "session.idle", {});
-  log(`copilot turn done id=${s.id} model=${modelId} chars=${totalText.length}`);
+  log(`copilot turn done id=${s.id} model=${model} chars=${totalText.length}`);
 }
 
 function codexEmit(sessionId, type, props) {
@@ -1736,7 +1746,7 @@ const server = http.createServer(async (req, res) => {
         try { body = JSON.parse(raw || "{}"); } catch {}
         const text = Array.isArray(body.parts) ? body.parts.filter(p => p.type === "text").map(p => p.text).join("\n") : (body.text ?? "");
         if (await tryPlugin(text, sid, "github-copilot", res)) return;
-        const modelId = body.model?.modelID ?? (process.env.GITHUB_COPILOT_MODEL || "gpt-4o");
+        const modelId = body.model?.modelID ?? (process.env.GITHUB_COPILOT_MODEL || (process.env.LITELLM_API_BASE ? "claude-code-sonnet-4-6-converse" : "gpt-4o"));
         if (!text.trim()) { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "no text" })); return; }
         log(`copilot prompt_async id=${sid} model=${modelId}`);
         res.writeHead(204); res.end();
