@@ -6,6 +6,12 @@ Run Claude Code/Codex/OpenCode on a sandbox in autopilot. Call the harnesses via
 
 ![litellm_hero_v11](https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6)
 
+
+## ui
+
+<img width="2076" height="1194" alt="Xnapper-2026-05-30-17 47 11" src="https://github.com/user-attachments/assets/7e45c6c7-8973-42a3-b2a3-d053ef4f4484" />
+
+
 ## usage
 
 ```bash
