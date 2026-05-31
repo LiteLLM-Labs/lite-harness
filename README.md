@@ -54,6 +54,21 @@ Supported agents: `opencode` `claude-code` `github-copilot` `codex` — [full CL
 ## setup
 
 ```bash
+npx skills add LiteLLM-Labs/lite-harness -g
+```
+
+Then in any AI coding agent (Claude Code, Codex, Cursor, etc.):
+
+```
+/lite-harness-setup
+```
+
+Or follow the manual setup guide below.
+
+<details>
+<summary>Manual setup</summary>
+
+```bash
 export MASTER_KEY=$(openssl rand -hex 32)
 echo "MASTER_KEY: $MASTER_KEY"
 
@@ -65,6 +80,8 @@ docker run -p 4096:4096 \
 ```
 
 Open [localhost:4096](http://localhost:4096), paste the master key on the login page.
+
+</details>
 
 Needs a [LiteLLM](https://github.com/BerriAI/litellm) gateway. Full config: [docs/configuration.md](docs/configuration.md).
 
