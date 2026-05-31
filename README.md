@@ -1,6 +1,6 @@
 # lite-harness
 
-Run Claude Code/Codex/OpenCode on a sandbox in autopilot. Call the harnesses via a CLI or API's through an OpenCode-compatible API spec.
+Deploy agents from any AI coding agent (Claude Code, Codex, OpenCode) to a unified server, for use across your team. Agents are available through CLI, API (Open-code API Spec), and Slack.
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
