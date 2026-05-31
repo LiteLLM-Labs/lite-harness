@@ -260,6 +260,7 @@ export function readEnvConfig() {
     base:             process.env.LAP_BASE_URL,
     envSessionId:     process.env.SESSION_ID,
     token:            process.env.LAP_AUTH_TOKEN ?? process.env.MASTER_KEY,
+    vaultMasterKey:   process.env.MASTER_KEY ?? process.env.LAP_AUTH_TOKEN,
     e2bApiKey:        process.env.E2B_API_KEY,
     e2bTemplate:      process.env.E2B_TEMPLATE || "base",
     daytonaApiKey:    process.env.DAYTONA_API_KEY,
@@ -554,7 +555,7 @@ function getSingleton() {
 
   let _vaultBackend = null;
   try {
-    _vaultBackend = buildBackend(config.token, VAULT_DB_PATH);
+    _vaultBackend = buildBackend(config.vaultMasterKey, VAULT_DB_PATH);
   } catch {}
 
   const getVaultEnvs = async () => {

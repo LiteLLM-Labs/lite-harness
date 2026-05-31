@@ -35,7 +35,7 @@ if (!config.platformMode) {
 
 let _vaultBackend = null;
 try {
-  _vaultBackend = buildBackend(config.token, VAULT_DB_PATH);
+  _vaultBackend = buildBackend(config.vaultMasterKey, VAULT_DB_PATH);
 } catch (e) {
   console.error(`[sandbox-mcp] vault unavailable (${VAULT_DB_PATH}): ${e.message}`);
 }
