@@ -93,7 +93,52 @@ Show the draft prompt to the user and ask them to confirm or edit before proceed
 
 ---
 
-## Step 4: Create the Agent
+## Step 4: Dry-Test Locally
+
+Before creating anything on the platform, run the agent's logic locally to catch errors early.
+
+Extract the executable code from the system prompt (the Python or shell script the agent will run). Then:
+
+```bash
+# Write the script to a temp file
+cat > /tmp/agent_dry_test.py << 'SCRIPT'
+<extracted agent script>
+SCRIPT
+```
+
+Replace every vault secret reference with a placeholder so the script runs without real credentials:
+
+```bash
+# Stub out env vars — use obviously fake values so no real API calls fire
+export KEY1="dry-run-placeholder"
+export KEY2="dry-run-placeholder"
+# ... repeat for each vault key the agent uses
+```
+
+Run it:
+
+```bash
+python /tmp/agent_dry_test.py
+```
+
+**What to check:**
+- No import errors or missing packages (add missing `pip install` to `setup_commands`)
+- No syntax errors in the script
+- Logic reaches the main task without crashing on the stub credentials
+- Output format looks correct (even if data is empty/fake)
+
+Run **1-2 test cycles**: run → fix prompt → run again. Both passes should exit cleanly before moving on. Do **not** proceed to Step 5 until the script runs cleanly locally (or the user explicitly says to skip — e.g. the script requires a live API that can't be stubbed).
+
+Clean up:
+
+```bash
+rm /tmp/agent_dry_test.py
+unset KEY1 KEY2  # unset each stubbed var
+```
+
+---
+
+## Step 5: Create the Agent
 
 Create without `vault_keys` first to avoid 422 validation errors, then patch them on:
 
@@ -125,7 +170,7 @@ echo "Created: $AGENT_ID"
 
 ---
 
-## Step 5: Attach Vault Keys and Skills
+## Step 6: Attach Vault Keys and Skills
 
 ```bash
 curl -s -X PATCH "$BASE_URL/api/agents/$AGENT_ID" \
@@ -141,7 +186,45 @@ curl -s -X PATCH "$BASE_URL/api/agents/$AGENT_ID" \
 
 ---
 
-## Step 6: Schedule (Optional)
+## Step 7: Upload Workspace Files (Optional)
+
+Agents can have files pre-loaded into their sandbox at runtime — config files, seed data, scripts, templates.
+
+Ask the user: **"Does this agent need any files available when it runs?"**
+
+Allowed extensions: `.py`, `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.csv`, `.xlsx`, `.sh`
+Limits: 2 MB per file, 100 files per agent.
+
+Upload a text file:
+
+```bash
+curl -s -X PUT "$BASE_URL/api/agents/$AGENT_ID/files/<path/to/file.json>" \
+  -H "Authorization: Bearer $KEY" \
+  -H "content-type: application/json" \
+  -d '{"content": "<file content as string>"}'
+```
+
+Upload a binary file (e.g. `.xlsx`):
+
+```bash
+curl -s -X PUT "$BASE_URL/api/agents/$AGENT_ID/files/<path/to/file.xlsx>" \
+  -H "Authorization: Bearer $KEY" \
+  -H "content-type: application/json" \
+  -d '{"content_base64": "<base64-encoded content>"}'
+```
+
+Verify files are attached:
+
+```bash
+curl -s -H "Authorization: Bearer $KEY" "$BASE_URL/api/agents/$AGENT_ID/files" \
+  | jq '.files[] | {path, size_bytes}'
+```
+
+Files are materialized into the agent's working directory before each run. Reference them in the system prompt using their path (e.g. `open("config.json")`).
+
+---
+
+## Step 8: Schedule (Optional)
 
 Ask the user if they want the agent to run on a cron schedule.
 
@@ -164,7 +247,7 @@ Use IANA timezone names (e.g. `America/Los_Angeles`, `Europe/London`, `UTC`).
 
 ---
 
-## Step 7: Trigger a Test Run
+## Step 9: Trigger a Test Run
 
 ```bash
 run=$(curl -s -X POST "$BASE_URL/api/agents/$AGENT_ID/run" \
@@ -184,7 +267,7 @@ curl -s -H "Authorization: Bearer $KEY" \
 
 ---
 
-## Step 8: Summary
+## Step 10: Summary
 
 Print a summary for the user:
 

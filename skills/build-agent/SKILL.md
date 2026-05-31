@@ -46,6 +46,7 @@ Note and report to user:
 - `vault.available` — can secrets be stored and injected?
 - `scheduler.cron_supported` — can agent run on a schedule?
 - `harnesses[]` — which harnesses are available (`opencode`, `claude-code`, `codex`)
+- Files: always available — agents can have workspace files (`.py`, `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.csv`, `.xlsx`, `.sh`) pre-loaded into their sandbox. Max 2 MB per file, 100 per agent.
 
 **Available models:**
 
@@ -71,9 +72,10 @@ Ask these questions. Adapt based on what capabilities are available — don't as
 2. **Inputs** — What data does it consume? (APIs, files, webhooks, env vars?)
 3. **Outputs** — Where does it write results? (API, Slack, GitHub, database, logs?)
 4. **Secrets** — Which API keys or tokens does it need at runtime?
-5. **Schedule** — Should it run on a cron, on demand, or both?
-6. **Failure behavior** — If it fails, should it pause and notify, or keep retrying?
-7. **Constraints** — Rate limits, dedup logic, stop conditions?
+5. **Workspace files** — Does the agent need any files pre-loaded in its sandbox? (config, seed data, scripts, templates — `.py`, `.json`, `.csv`, `.xlsx`, `.yaml`, `.sh`, etc.)
+6. **Schedule** — Should it run on a cron, on demand, or both?
+7. **Failure behavior** — If it fails, should it pause and notify, or keep retrying?
+8. **Constraints** — Rate limits, dedup logic, stop conditions?
 
 Keep the interview tight. If the user gave a clear description upfront (e.g. "CI monitor that posts to Slack"), infer what you can and only ask about gaps.
 
@@ -95,6 +97,9 @@ Pick from the available models. Default to `claude-sonnet-4-6` for balanced spee
 
 ### Skills
 Match discovered skill slugs to the agent's goal. Only attach skills that are directly relevant — extra skills add noise to context.
+
+### Workspace Files
+If the user needs files available at runtime, list them here with their paths and content. Files are materialized into the sandbox working directory before each run. Reference them in the system prompt by path (e.g. `open("config.json")`). If no files are needed, skip this section.
 
 ### Schedule
 Suggest a cron expression based on the task. Common patterns:
@@ -148,6 +153,7 @@ Skills:     <skill-slug-1>, <skill-slug-2>
 Schedule:   <cron expression or "manual only">
 Timezone:   <tz>
 Vault keys: <KEY1>, <KEY2>
+Files:      <path/to/file.json>, <path/to/data.csv>  (or "none")
 On failure: <pause_and_notify | retry | ignore>
 
 System Prompt:
@@ -161,7 +167,52 @@ Iterate on any section the user wants to revise. Do not proceed until the user e
 
 ---
 
-## Step 7: Hand Off to deploy-agent
+## Step 7: Dry-Test Locally
+
+Before handing off to deploy-agent, run the agent's script locally to catch errors while you can still iterate fast.
+
+Extract the executable code from the system prompt. Write it to a temp file:
+
+```bash
+cat > /tmp/agent_dry_test.py << 'SCRIPT'
+<extracted agent script>
+SCRIPT
+```
+
+Stub every vault secret with a placeholder — use obviously fake values so no real API calls fire:
+
+```bash
+export KEY1="dry-run-placeholder"
+export KEY2="dry-run-placeholder"
+# repeat for each vault key
+```
+
+Run **1-2 test cycles**:
+
+```bash
+python /tmp/agent_dry_test.py
+# fix any errors in the system prompt, then run again
+python /tmp/agent_dry_test.py
+```
+
+**What to check:**
+- No import errors (add missing packages to `setup_commands`)
+- No syntax errors
+- Main task logic runs without crashing on stub credentials
+- Output format looks correct (even if data is empty/fake)
+
+If both passes exit cleanly, proceed. If the script requires a live API that truly can't be stubbed (e.g. OAuth redirect), get explicit user confirmation to skip.
+
+Clean up:
+
+```bash
+rm /tmp/agent_dry_test.py
+unset KEY1 KEY2  # unset each stubbed var
+```
+
+---
+
+## Step 8: Hand Off to deploy-agent
 
 Once confirmed, invoke the `deploy-agent` skill with all design decisions already made. Pass:
 - `BASE_URL`, `KEY`, `OWNER` (ask for owner ID if not yet collected)
@@ -169,6 +220,7 @@ Once confirmed, invoke the `deploy-agent` skill with all design decisions alread
 - The confirmed system prompt
 - Vault key names and values (collect values now if not already provided)
 - Skills list
+- Workspace files (paths + content, if any)
 - Cron expression and timezone
 - `on_failure` setting
 
