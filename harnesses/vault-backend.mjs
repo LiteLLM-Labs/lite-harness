@@ -130,7 +130,12 @@ export class SqliteBackend extends VaultBackend {
       const envKey = key.includes(":") ? key.slice(key.lastIndexOf(":") + 1) : key;
       return process.env[envKey] ?? null;
     }
-    return this._decode(row);
+    try {
+      return this._decode(row);
+    } catch (e) {
+      console.warn(`[vault-backend] failed to decrypt ${key}: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
   }
 
   async getAll() {
