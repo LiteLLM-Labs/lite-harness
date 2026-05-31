@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAssistantTextAccumulator, createSlackRunStreamer } from "./slack-run-stream.mjs";
+import {
+  createAssistantTextAccumulator,
+  createSlackRunStreamer,
+  markdownToSlackMrkdwn,
+} from "./slack-run-stream.mjs";
 
 function line(event) {
   return `data: ${JSON.stringify(event)}`;
@@ -52,4 +56,30 @@ test("slack run streamer posts once and updates the same thread reply", async ()
   assert.equal(calls[0].payload.thread_ts, "1.0");
   assert.equal(calls[1].payload.ts, "2.0");
   assert.equal(calls[2].payload.text, "Final");
+});
+
+test("markdownToSlackMrkdwn converts common agent markdown for Slack", () => {
+  const input = `Here's the generated quote:
+
+---
+
+**SurveyMonkey - LiteLLM Enterprise Quote**
+
+**Plan:** LiteLLM Enterprise: Scale
+**Annual subscription:** $150,000/year, billed annually
+
+## Internal note
+
+- **3 deployments** is the binding constraint`;
+
+  assert.equal(markdownToSlackMrkdwn(input), `Here's the generated quote:
+
+*SurveyMonkey - LiteLLM Enterprise Quote*
+
+*Plan:* LiteLLM Enterprise: Scale
+*Annual subscription:* $150,000/year, billed annually
+
+*Internal note*
+
+- *3 deployments* is the binding constraint`);
 });

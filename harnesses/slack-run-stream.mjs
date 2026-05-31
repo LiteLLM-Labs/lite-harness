@@ -1,9 +1,28 @@
 const DEFAULT_MIN_UPDATE_MS = 1500;
 const DEFAULT_MAX_SLACK_TEXT = 39000;
 
+export function markdownToSlackMrkdwn(text) {
+  const value = typeof text === "string" ? text.trim() : "";
+  if (!value) return "";
+
+  return value
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (/^---+$/.test(trimmed)) return "";
+      if (/^#{1,6}\s+/.test(line)) return line.replace(/^#{1,6}\s+(.+)$/, "*$1*");
+      return line;
+    })
+    .join("\n")
+    .replace(/\*\*([^*\n]+)\*\*/g, "*$1*")
+    .replace(/__([^_\n]+)__/g, "*$1*")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function slackText(text) {
   const value = typeof text === "string" ? text.trim() : "";
-  return value || "Working...";
+  return markdownToSlackMrkdwn(value) || "Working...";
 }
 
 function eventSessionId(event) {
