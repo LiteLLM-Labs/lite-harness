@@ -167,6 +167,18 @@ git commit -m "feat(harness): add <name>"
 
 ---
 
+## 7. Register with HarnessSDK
+
+`harnesses/harness-sdk.mjs` is the unified message-retrieval layer. If you skip
+this step, your harness will silently fall back to the opencode HTTP path for
+message reads, producing empty replies in Slack and anywhere else that calls
+`harnessSDK.getMessages()`.
+
+See **[docs/harness-sdk.md](./harness-sdk.md#adding-a-new-harness)** for the
+three-step process (constructor arg → typedef → `case` in `getMessages()`).
+
+---
+
 ## Checklist
 
 - [ ] `harnesses/<name>/package.json` exists
@@ -181,6 +193,7 @@ git commit -m "feat(harness): add <name>"
 - [ ] Your bus registered in the `/event` multiplexer
 - [ ] UI types updated, `SelectItem` added, UI rebuilt
 - [ ] Tested locally with `start-local.sh` before pushing
+- [ ] `HarnessSDK.getMessages()` has a `case` for your harness (see `docs/harness-sdk.md`)
 
 ---
 
