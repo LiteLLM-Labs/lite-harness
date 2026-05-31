@@ -184,6 +184,22 @@ function initInboxSchema(db) {
   `);
 }
 
+function initSlackThreadSessionSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS slack_thread_sessions (
+      agent_id   TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      thread_ts  TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (agent_id, channel_id, thread_ts)
+    );
+    CREATE INDEX IF NOT EXISTS slack_thread_sessions_session
+      ON slack_thread_sessions(session_id);
+  `);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -252,6 +268,7 @@ export function initDb(dbPath) {
   initSkillSchema(_db);
   initMemorySchema(_db);
   initInboxSchema(_db);
+  initSlackThreadSessionSchema(_db);
   initAgentFilesSchema(_db);
   // Migrate sandbox_id onto agent_runs if not present
   try { _db.exec("ALTER TABLE agent_runs ADD COLUMN sandbox_id TEXT"); } catch {}
@@ -391,4 +408,27 @@ export function listAgentRuns(agentId, limit = 10) {
   return _db.prepare("SELECT * FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC LIMIT ?")
     .all(agentId, Math.min(limit, 100))
     .map(row => ({ ...row, config_overrides: JSON.parse(row.config_overrides || '{}') }));
+}
+
+export function getSlackThreadSession(agentId, channelId, threadTs) {
+  assertDb();
+  if (!agentId || !channelId || !threadTs) return null;
+  return _db.prepare(`
+    SELECT * FROM slack_thread_sessions
+    WHERE agent_id = ? AND channel_id = ? AND thread_ts = ?
+  `).get(agentId, channelId, threadTs) ?? null;
+}
+
+export function upsertSlackThreadSession(agentId, channelId, threadTs, sessionId) {
+  assertDb();
+  if (!agentId || !channelId || !threadTs || !sessionId) return null;
+  const now = Date.now();
+  _db.prepare(`
+    INSERT INTO slack_thread_sessions (agent_id, channel_id, thread_ts, session_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(agent_id, channel_id, thread_ts) DO UPDATE SET
+      session_id = excluded.session_id,
+      updated_at = excluded.updated_at
+  `).run(agentId, channelId, threadTs, sessionId, now, now);
+  return getSlackThreadSession(agentId, channelId, threadTs);
 }
