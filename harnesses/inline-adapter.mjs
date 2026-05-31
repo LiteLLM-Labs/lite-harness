@@ -33,7 +33,7 @@ import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSav
 import { wireInbox, handleInboxRoute } from "./inbox-service.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
-import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
+import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns, getSlackThreadSession, upsertSlackThreadSession } from "./loop-store.mjs";
 import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
 import { createSkill, listSkills, getSkill, getSkillsByIds, updateSkill, deleteSkill } from "./skills-store.mjs";
@@ -150,6 +150,7 @@ const sessionHarness = sessionAgent; // alias — same map, two names from merge
 const sessionSystemPrompt = new Map(); // sid -> system prompt for opencode agents (applied on first turn)
 const ocSysPromptDelivered = new Set();
 const slackEventIds = new Set();
+const slackMessageKeys = new Set();
 
 const log = (...a) => console.log("[inline-adapter]", ...a);
 
@@ -314,6 +315,7 @@ async function liteLlmChat(messages, model) {
 async function runAgentForSlack(agentDef, slackEvent, slackThreadContext = "", { onStreamText } = {}) {
   const userText = slackEvent.text || "";
   const threadTs = slackEvent.thread_ts || slackEvent.ts;
+  const existingThreadSession = getSlackThreadSession(agentDef.id, slackEvent.channel, threadTs);
   const threadContextBlock = slackThreadContext
     ? `Slack thread history, oldest to newest:
 ${slackThreadContext}
@@ -343,11 +345,20 @@ Do not call Slack tools, DM tools, post-message tools, or any other messaging to
     },
     body: JSON.stringify({
       prompt: slackPrompt,
-      config_overrides: { slack: { channel: slackEvent.channel, user: slackEvent.user, ts: slackEvent.ts } },
+      session_id: existingThreadSession?.session_id || undefined,
+      config_overrides: {
+        slack: {
+          channel: slackEvent.channel,
+          thread_ts: threadTs,
+          user: slackEvent.user,
+          ts: slackEvent.ts,
+        },
+      },
     }),
   });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(body.error || `agent_run_http_${resp.status}`);
+  if (body.session_id) upsertSlackThreadSession(agentDef.id, slackEvent.channel, threadTs, body.session_id);
 
   const runId = body.run_id;
   const deadline = Date.now() + Math.max(1, Number(agentDef.max_runtime_minutes) || 30) * 60_000;
@@ -395,6 +406,12 @@ async function handleSlackEventAsync(agentId, body) {
   const isMention = event.type === "app_mention";
   const isMessage = event.type === "message" && ["im", "mpim"].includes(event.channel_type);
   if ((!isMention && !isMessage) || !String(event.text || "").trim()) return;
+  const messageKey = `${agentId}:${event.channel || ""}:${event.ts || ""}`;
+  if (event.ts && slackMessageKeys.has(messageKey)) return;
+  if (event.ts) {
+    slackMessageKeys.add(messageKey);
+    setTimeout(() => slackMessageKeys.delete(messageKey), 10 * 60 * 1000).unref?.();
+  }
 
   const vaultPlugin = pluginRegistry.getPlugin("vault");
   const tokenKey = slack.bot_token_key;
@@ -2935,6 +2952,9 @@ const server = http.createServer(async (req, res) => {
     try { body = JSON.parse(raw || "{}"); } catch {}
     const configOverrides = body.config_overrides || {};
     const promptOverride = typeof body.prompt === "string" ? body.prompt : null;
+    const requestedSessionId = typeof body.session_id === "string" && body.session_id.trim()
+      ? body.session_id.trim()
+      : null;
 
     // Validate vault_keys exist before burning sandbox time
     const vaultPlugin = pluginRegistry.getPlugin("vault");
@@ -2992,7 +3012,14 @@ const server = http.createServer(async (req, res) => {
     }
     let runSid;
     const runNow = Date.now();
-    if (runHarness === "opencode") {
+    let reusedRunSession = false;
+    if (requestedSessionId && runHarness === "opencode") {
+      runSid = requestedSessionId;
+      reusedRunSession = true;
+      sessionAgent.set(runSid, "opencode");
+      sessionHarness.set(runSid, "opencode");
+      if (effectiveSystem) sessionSystemPrompt.set(runSid, effectiveSystem);
+    } else if (runHarness === "opencode") {
       // Create the session in the opencode child first so prompt_async finds it.
       try {
         const ocSessResp = await new Promise((resolve, reject) => {
@@ -3037,7 +3064,9 @@ const server = http.createServer(async (req, res) => {
       sessionAgent.set(runSid, runHarness);
       sessionHarness.set(runSid, runHarness);
     }
-    persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
+    if (!reusedRunSession) {
+      persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
+    }
 
     const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });
     const runId = runRecord.id;
