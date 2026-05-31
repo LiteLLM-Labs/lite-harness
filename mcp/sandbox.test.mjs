@@ -11,6 +11,7 @@ import {
   E2bProvider,
   DaytonaProvider,
   buildProvider,
+  readEnvConfig,
   createState,
   createHandlers,
   SANDBOX_TOOL_DEFINITIONS,
@@ -101,6 +102,25 @@ test("buildProvider returns error when no provider configured", () => {
 test("buildProvider returns error when SANDBOX_PROVIDER=e2b but no key", () => {
   const { error } = buildProvider({ sandboxProvider: "e2b" });
   assert.match(error, /E2B_API_KEY/);
+});
+
+test("readEnvConfig keeps LAP auth token separate from vault master key", () => {
+  const original = {
+    LAP_AUTH_TOKEN: process.env.LAP_AUTH_TOKEN,
+    MASTER_KEY: process.env.MASTER_KEY,
+  };
+  try {
+    process.env.LAP_AUTH_TOKEN = "lap-auth-token";
+    process.env.MASTER_KEY = "vault-master-key";
+    const config = readEnvConfig();
+    assert.equal(config.token, "lap-auth-token");
+    assert.equal(config.vaultMasterKey, "vault-master-key");
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 // ── SANDBOX_TOOL_DEFINITIONS ──────────────────────────────────────────────────
