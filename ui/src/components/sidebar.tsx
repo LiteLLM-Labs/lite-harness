@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Puzzle, FileText, Bot, Inbox } from "lucide-react";
+import { Plus, Trash2, Puzzle, FileText, Bot, Inbox, KeyRound } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -145,6 +145,16 @@ export function Sidebar({ activeId }: { activeId?: string | null }) {
         >
           <FileText className="size-4" />
           <span className="hidden sm:inline">Skills</span>
+        </Button>
+        <Button
+          onClick={() => router.push("/vault/")}
+          variant={pathname?.startsWith("/vault") ? "secondary" : "ghost"}
+          className="w-full justify-center sm:justify-start"
+          size="sm"
+          aria-label="Vault"
+        >
+          <KeyRound className="size-4" />
+          <span className="hidden sm:inline">Vault</span>
         </Button>
       </div>
 

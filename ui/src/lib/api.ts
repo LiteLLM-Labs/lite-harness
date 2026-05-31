@@ -329,6 +329,28 @@ export async function listIntegrationKeys(): Promise<string[]> {
   return [...keys];
 }
 
+export interface VaultKeyEntry {
+  key: string;
+  updated_at?: number;
+  source?: string;
+}
+
+/** List all vault keys with metadata (no values). */
+export async function listVaultKeys(): Promise<VaultKeyEntry[]> {
+  const fallback: VaultKeyEntry[] = fallbackList().map((k) => ({ key: k }));
+  const byKey = new Map<string, VaultKeyEntry>(fallback.map((e) => [e.key, e]));
+  try {
+    const res = await req(`/api/vault/${VAULT_USER}`);
+    if (res.ok) {
+      const data = (await res.json()) as { keys?: VaultKeyEntry[] };
+      for (const k of data.keys ?? []) byKey.set(k.key, k);
+    }
+  } catch {
+    /* vault unavailable — sessionStorage only */
+  }
+  return [...byKey.values()];
+}
+
 // ── Skills CRUD (DB-backed, /api/skills) ──────────────────────────────────────
 // Skills are reusable capability docs persisted in the harness DB and attached
 // to agents via agents.skill_ids.
