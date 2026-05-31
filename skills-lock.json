@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "lite-harness-setup": {
+      "source": "LiteLLM-Labs/lite-harness",
+      "sourceType": "github",
+      "skillPath": "skills/lite-harness-setup/SKILL.md",
+      "computedHash": "c396e2e8a4a85621b7d162951f44a6e48d2ce885474f6045819de95f77c77157"
+    }
+  }
+}
