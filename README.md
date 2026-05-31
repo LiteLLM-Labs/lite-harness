@@ -14,42 +14,31 @@ Run Claude Code/Codex/OpenCode on a sandbox in autopilot. Call the harnesses via
 
 ## usage
 
-```bash
-# git clone https://github.com/LiteLLM-Labs/lite-harness && cd lite-harness
-# cd cli && npm install -g .
-
-lite login
-# Server URL [http://localhost:4096]:
-# Master key: ✓ Saved
-
-lite claude-code
-
-  lite  claude-code
-  claude-sonnet-4-6  ·  localhost:4096  ·  sess_a1b2c3
-
-  /clear to reset history  · Ctrl+C or "exit" to quit
-
-❯ monitor CI every hour and fix any bugs
-  ⠙ thinking…
-  ✓ bash {"command":"gh run list --limit 5"}
-  I'll set up a recurring CI monitor. Checking the last 5 runs now...
-```
+Install the skills, then deploy agents from any AI coding agent (Claude Code, Codex, Cursor, etc.):
 
 ```bash
-lite opencode
-
-  lite  opencode
-  claude-sonnet-4-6  ·  localhost:4096  ·  sess_d4e5f6
-
-  /clear to reset history  · Ctrl+C or "exit" to quit
-
-❯ dm github stargazers daily
-  ⠙ thinking…
-  ✓ bash {"command":"gh api /repos/LiteLLM-Labs/lite-harness/stargazers"}
-  Got 42 new stargazers. Drafting DMs...
+npx skills add LiteLLM-Labs/lite-harness -g
 ```
 
-Supported agents: `opencode` `claude-code` `github-copilot` `codex` — [full CLI docs](cli/README.md)
+```
+/deploy-agent
+
+> Deploy a GitHub stargazer outreach agent that DMs new stars on LinkedIn,
+  runs every 4 hours on weekdays, requires human approval before each send.
+
+  ✓ Checking capabilities... sandbox=e2b vault=available cron=supported
+  ✓ Stored vault key BROWSER_USE_API_KEY
+  ✓ Stored vault key LINKEDIN_PROFILE_ID
+  ✓ Created agent: agent_abc123 (opencode · claude-sonnet-4-6)
+  ✓ Attached vault keys + scheduled 0 */4 * * 1-5 America/Los_Angeles
+  ✓ Test run started: run_xyz789
+  → Logs: https://lite-harness.onrender.com/api/agents/agent_abc123/runs/run_xyz789/logs
+  → UI:   https://lite-harness.onrender.com/agents
+```
+
+Agents run on a cron schedule in an isolated sandbox. Human-in-the-loop approval flows through the Inbox UI.
+
+Supported harnesses: `opencode` `claude-code` `github-copilot` `codex` — [full CLI docs](cli/README.md)
 
 ## setup
 
