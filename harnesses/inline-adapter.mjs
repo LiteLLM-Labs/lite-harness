@@ -41,6 +41,7 @@ import { storeMemory, listMemory, deleteMemory, deleteAllMemory } from "./memory
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer, setRunSandbox, getRunSandbox } from "./agent-run-store.mjs";
 import { buildDirectProvider } from "./sandbox-provider.mjs";
 import { fetchSlackThreadContext } from "./slack-thread-context.mjs";
+import { createAssistantTextAccumulator, createSlackRunStreamer } from "./slack-run-stream.mjs";
 import { upsertAgentFile, listAgentFiles, listAgentFilesWithContent, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS, isBinaryAgentFile } from "./agent-file-store.mjs";
 import {
   hydrateFromDb,
@@ -310,7 +311,7 @@ async function liteLlmChat(messages, model) {
   }
 }
 
-async function runAgentForSlack(agentDef, slackEvent, slackThreadContext = "") {
+async function runAgentForSlack(agentDef, slackEvent, slackThreadContext = "", { onStreamText } = {}) {
   const userText = slackEvent.text || "";
   const threadTs = slackEvent.thread_ts || slackEvent.ts;
   const threadContextBlock = slackThreadContext
@@ -330,7 +331,9 @@ ${threadContextBlock}
 Message:
 ${userText}
 
-Carry out the agent task using this Slack message as the user-provided context. Return the exact reply to send back in Slack.`;
+Carry out the agent task using this Slack message as the user-provided context.
+Return only the exact reply text to send back in Slack.
+Do not call Slack tools, DM tools, post-message tools, or any other messaging tools. The platform will post your returned text back to Slack for you.`;
 
   const resp = await fetch(`http://127.0.0.1:${PORT}/api/agents/${encodeURIComponent(agentDef.id)}/run`, {
     method: "POST",
@@ -349,10 +352,29 @@ Carry out the agent task using this Slack message as the user-provided context. 
   const runId = body.run_id;
   const deadline = Date.now() + Math.max(1, Number(agentDef.max_runtime_minutes) || 30) * 60_000;
   let run = null;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 2_000));
-    run = getAgentRun(runId);
-    if (run?.status === "completed" || run?.status === "failed") break;
+  let streamListener = null;
+  if (typeof onStreamText === "function" && body.session_id) {
+    const accumulator = createAssistantTextAccumulator(body.session_id);
+    streamListener = (line) => {
+      const text = accumulator.ingestLine(line);
+      if (text) onStreamText(text);
+    };
+    ocGlobalBus.add(streamListener);
+    ccGlobalBus.add(streamListener);
+    pluginGlobalBus.add(streamListener);
+  }
+  try {
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2_000));
+      run = getAgentRun(runId);
+      if (run?.status === "completed" || run?.status === "failed") break;
+    }
+  } finally {
+    if (streamListener) {
+      ocGlobalBus.delete(streamListener);
+      ccGlobalBus.delete(streamListener);
+      pluginGlobalBus.delete(streamListener);
+    }
   }
   if (!run || run.status !== "completed") {
     throw new Error(run?.error || "agent run did not complete");
@@ -403,14 +425,21 @@ async function handleSlackEventAsync(agentId, body) {
     } catch (e) {
       log(`[slack] failed to fetch thread context for ${agentId}:`, e instanceof Error ? e.message : String(e));
     }
-    const result = await runAgentForSlack(agentDef, { ...event, team: body.team_id }, slackThreadContext);
-    await slackApi("chat.postMessage", botToken, {
+    const streamer = createSlackRunStreamer({
+      slackApi,
+      botToken,
       channel: event.channel,
-      text: result.text.slice(0, 39000),
-      thread_ts: threadTs,
-      unfurl_links: false,
-      unfurl_media: false,
+      threadTs,
     });
+    await streamer.start("Working...");
+    const result = await runAgentForSlack(agentDef, { ...event, team: body.team_id }, slackThreadContext, {
+      onStreamText: (text) => {
+        streamer.update(text).catch((e) => {
+          log(`[slack] failed to stream update for ${agentId}:`, e instanceof Error ? e.message : String(e));
+        });
+      },
+    });
+    await streamer.finish(result.text);
   } catch (e) {
     log(`[slack] failed to process event for ${agentId}:`, e instanceof Error ? e.message : String(e));
     await slackApi("chat.postMessage", botToken, {
@@ -3122,6 +3151,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       run_id: runId,
       agent_id: agentId,
+      session_id: runSid,
       status: "starting",
       logs_url: `https://${host}/api/agents/${agentId}/runs/${runId}/logs`,
     }));

@@ -11,16 +11,23 @@
  *   2. The LAP memory MCP (local stdio) — when memory env is configured
  *      (LAP_BASE_URL + AGENT_ID + an access token). Exposes save_memory /
  *      search_memory, same tools the claude-agent-sdk harness gets.
- *   3. Every MCP server the harness's LiteLLM key can access — discovered via
+ *   3. Every non-Slack MCP server the harness's LiteLLM key can access — discovered via
  *      `${base}/v1/mcp/server` and wired as `remote` entries pointing at
  *      `${base}/mcp/<name>` with `Authorization: Bearer <key>` (same gateway +
  *      key + URL convention the platform's resolveAgentMcpServers uses).
+ *      Slack is intentionally excluded by default because Slack-triggered runs
+ *      are posted by the harness with the invoking app's bot token.
  *
  * Failure to reach LiteLLM is non-fatal: we emit whatever we have (possibly
  * just the sandbox MCP, or `{}`) so the harness still boots.
  */
 
 const out = {};
+
+function gatewayMcpAllowed(name) {
+  if (process.env.LAP_ENABLE_GATEWAY_SLACK_MCP === "1") return true;
+  return !String(name || "").toLowerCase().includes("slack");
+}
 
 // Path where local stdio MCP scripts live. In Docker: /opt/lap/opencode-sandbox-mcp.
 // In local dev: set LAP_MCP_DIR to the harness directory.
@@ -152,6 +159,7 @@ if (base && key) {
       for (const s of list) {
         const name = s.alias || s.server_name;
         if (!name) continue;
+        if (!gatewayMcpAllowed(name)) continue;
         out[name] = {
           type: "remote",
           url: `${base}/mcp/${encodeURIComponent(name)}`,
