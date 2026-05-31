@@ -391,10 +391,10 @@ async function handleSlackEventAsync(agentId, body) {
   const config = agentDef.config && typeof agentDef.config === "object" ? agentDef.config : {};
   const slack = config.slack && typeof config.slack === "object" ? config.slack : {};
   const event = body.event || {};
-  if (!event || event.bot_id || event.subtype === "bot_message") return;
+  if (!event || event.bot_id || event.subtype || event.user === slack.bot_user_id) return;
   const isMention = event.type === "app_mention";
   const isMessage = event.type === "message" && ["im", "mpim"].includes(event.channel_type);
-  if (!isMention && !isMessage) return;
+  if ((!isMention && !isMessage) || !String(event.text || "").trim()) return;
 
   const vaultPlugin = pluginRegistry.getPlugin("vault");
   const tokenKey = slack.bot_token_key;
