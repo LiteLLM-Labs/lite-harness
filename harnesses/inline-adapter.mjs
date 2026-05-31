@@ -2385,6 +2385,33 @@ const server = http.createServer(async (req, res) => {
   const _vaultUserMatch = p.match(/^\/api\/vault\/([^/]+)$/);
   const _vaultKeyMatch  = p.match(/^\/api\/vault\/([^/]+)\/([^/]+)$/);
 
+  if (p === "/api/vault/rotate-master-key" && req.method === "POST") {
+    const raw = await readBody(req);
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    const oldMasterKey = typeof body.old_master_key === "string" ? body.old_master_key : "";
+    if (!oldMasterKey) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "old_master_key required" }));
+      return;
+    }
+    const vaultPlugin = pluginRegistry.getPlugin("vault");
+    if (!vaultPlugin || !vaultPlugin.backend || typeof vaultPlugin.backend.rotateMasterKey !== "function") {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "vault rotation not available" }));
+      return;
+    }
+    try {
+      const result = await vaultPlugin.backend.rotateMasterKey(oldMasterKey);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, ...result, failed: result.failed.map(f => f.key) }));
+    } catch (e) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+    }
+    return;
+  }
+
   if (_vaultUserMatch && req.method === "POST") {
     const userId = _vaultUserMatch[1];
     const raw = await readBody(req);

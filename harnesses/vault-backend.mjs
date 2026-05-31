@@ -53,6 +53,12 @@ function decryptValue(enc, iv, tag, key) {
   ]).toString("utf8");
 }
 
+function decodeRowWithKey(row, key) {
+  if (row.plaintext) return Buffer.from(row.enc_value, "base64").toString("utf8");
+  if (!key) throw new Error("MASTER_KEY required to decrypt");
+  return decryptValue(row.enc_value, row.iv, row.tag, key);
+}
+
 // ── VaultBackend base ─────────────────────────────────────────────────────────
 
 export class VaultBackend {
@@ -183,10 +189,50 @@ export class SqliteBackend extends VaultBackend {
     this._db.prepare("DELETE FROM vault_secrets").run();
   }
 
+  async rotateMasterKey(oldMasterKey) {
+    if (!oldMasterKey) throw new Error("oldMasterKey required");
+    if (!this._encKey) throw new Error("current MASTER_KEY required");
+    const oldKey = deriveKey(oldMasterKey);
+    const rows = this._db
+      .prepare("SELECT key, enc_value, iv, tag, plaintext FROM vault_secrets ORDER BY key")
+      .all();
+    let rotated = 0;
+    let alreadyCurrent = 0;
+    const failed = [];
+    const update = this._db.prepare(`
+      UPDATE vault_secrets
+      SET enc_value = ?, iv = ?, tag = ?, plaintext = 0, updated_at = ?
+      WHERE key = ?
+    `);
+    const tx = this._db.transaction(() => {
+      for (const row of rows) {
+        let plaintext;
+        try {
+          plaintext = decodeRowWithKey(row, oldKey);
+        } catch (oldErr) {
+          try {
+            this._decode(row);
+            alreadyCurrent += 1;
+            continue;
+          } catch {
+            failed.push({
+              key: row.key,
+              error: oldErr instanceof Error ? oldErr.message : String(oldErr),
+            });
+            continue;
+          }
+        }
+        const { enc, iv, tag } = encryptValue(plaintext, this._encKey);
+        update.run(enc, iv, tag, Date.now(), row.key);
+        rotated += 1;
+      }
+    });
+    tx();
+    return { scanned: rows.length, rotated, alreadyCurrent, failed };
+  }
+
   _decode(row) {
-    if (row.plaintext) return Buffer.from(row.enc_value, "base64").toString("utf8");
-    if (!this._encKey) throw new Error("MASTER_KEY required to decrypt");
-    return decryptValue(row.enc_value, row.iv, row.tag, this._encKey);
+    return decodeRowWithKey(row, this._encKey);
   }
 }
 
