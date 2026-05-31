@@ -1082,7 +1082,11 @@ async function ccRunTurn(s, userText, modelId) {
       permissionMode: "bypassPermissions",
       includePartialMessages: true,
       abortController: ac,
-      disallowedTools: ["AskUserQuestion"],
+      disallowedTools: [
+        "AskUserQuestion",
+        "Bash", "Read", "Write", "Edit", "MultiEdit",
+        "Glob", "Grep", "LS", "NotebookRead", "NotebookEdit",
+      ],
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
       // The claude-code SDK ignores `system`; it appends extra system-prompt
       // text via `appendSystemPrompt`. This is how an agent's skills + system
