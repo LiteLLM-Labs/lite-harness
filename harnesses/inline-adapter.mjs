@@ -531,8 +531,13 @@ async function callPromptAsync(sessionId, prompt) {
   // from /v1/models which resolves to an unavailable model on this account).
   const pinnedProvider = process.env.PROVIDER_NAME || "litellm";
   const pinnedModel = process.env.LITELLM_DEFAULT_MODEL || "anthropic/claude-sonnet-4-6";
+  const sysPrompt = sessionSystemPrompt.get(sessionId);
+  const effectivePrompt = sysPrompt && !ocSysPromptDelivered.has(sessionId)
+    ? `${sysPrompt}\n\n---\n\n${prompt}`
+    : prompt;
+  if (sysPrompt && !ocSysPromptDelivered.has(sessionId)) ocSysPromptDelivered.add(sessionId);
   const body = JSON.stringify({
-    parts: [{ type: "text", text: prompt }],
+    parts: [{ type: "text", text: effectivePrompt }],
     model: { providerID: pinnedProvider, modelID: pinnedModel },
   });
   return new Promise((resolve, reject) => {
