@@ -6,14 +6,14 @@ Route agent traffic through [Claw Patrol](https://clawpatrol.dev) so API keys ne
 
 ## How it works with lite-harness
 
-lite-harness runs agents in two modes:
+Claw Patrol uses a WireGuard tunnel + TLS MitM — not a standard `HTTPS_PROXY`. This means:
 
-| Mode | What to do |
-|------|-----------|
-| **Local** (opencode / claude-code) | Enroll your dev machine, wrap `start-local.sh` with `clawpatrol run --` |
-| **Sandbox** (E2B / Daytona) | Build a custom sandbox template with `clawpatrol` installed and enrolled |
+| Mode | Status |
+|------|--------|
+| **Local** (opencode / claude-code) | Works — enroll your dev machine, wrap `start-local.sh` with `clawpatrol run --` |
+| **Sandbox** (E2B / Daytona) | Requires a custom sandbox template with `clawpatrol` installed and enrolled as a device |
 
-> **Note:** Claw Patrol uses a WireGuard tunnel rather than `HTTPS_PROXY`, so the standard `VAULT_URL` sandbox path doesn't apply. Sandbox VMs need the `clawpatrol` binary and device enrollment baked into the template.
+If you want zero-file-change credential injection for sandboxes, use [Infisical Agent Vault](./infisical-agent-vault.md) instead — it works via `HTTPS_PROXY` which lite-harness already injects automatically.
 
 ---
 
