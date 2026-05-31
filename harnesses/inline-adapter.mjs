@@ -42,6 +42,7 @@ import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents
 import { buildDirectProvider } from "./sandbox-provider.mjs";
 import { fetchSlackThreadContext } from "./slack-thread-context.mjs";
 import { createAssistantTextAccumulator, createSlackRunStreamer } from "./slack-run-stream.mjs";
+import { HarnessSDK } from "./harness-sdk.mjs";
 import { upsertAgentFile, listAgentFiles, listAgentFilesWithContent, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS, isBinaryAgentFile } from "./agent-file-store.mjs";
 import {
   hydrateFromDb,
@@ -392,8 +393,8 @@ Do not call Slack tools, DM tools, post-message tools, or any other messaging to
     throw new Error(run?.error || "agent run did not complete");
   }
 
-  const messages = await getOcMessages(run.session_id);
-  const text = latestAssistantText({ history: messages });
+  const messages = await harnessSDK.getMessages(run.session_id);
+  const text = harnessSDK.latestAssistantText(messages);
   return { runId, text: text || `Agent run completed: ${runId}` };
 }
 
@@ -1392,6 +1393,16 @@ async function getOcMessages(ourSid) {
     }).on("error", () => resolve([]));
   });
 }
+
+// Unified harness dispatcher — use this instead of calling session Maps directly.
+// Initialized here because getOcMessages (the opencode delegate) is now in scope.
+const harnessSDK = new HarnessSDK({
+  sessionHarness: sessionAgent,
+  ccSessions,
+  copilotSessions,
+  codexSessions,
+  getOcMessages,
+});
 
 async function pollOpencodeRunCompletion({ runId, runSid, maxRuntimeMinutes, onDone }) {
   const deadline = Date.now() + Math.max(1, Number(maxRuntimeMinutes) || 30) * 60_000;
