@@ -177,6 +177,7 @@ COPY --chown=sandbox:sandbox harnesses/agent-run-store.mjs /opt/lap/agent-run-st
 COPY --chown=sandbox:sandbox harnesses/agent-file-store.mjs /opt/lap/agent-file-store.mjs
 COPY --chown=sandbox:sandbox harnesses/sandbox-provider.mjs /opt/lap/sandbox-provider.mjs
 COPY --chown=sandbox:sandbox harnesses/slack-thread-context.mjs /opt/lap/slack-thread-context.mjs
+COPY --chown=sandbox:sandbox harnesses/slack-run-stream.mjs /opt/lap/slack-run-stream.mjs
 COPY --chown=sandbox:sandbox harnesses/agent-plugin.mjs /opt/lap/agent-plugin.mjs
 
 COPY --chown=sandbox:sandbox mcp/index.mjs /opt/mcp/index.mjs
