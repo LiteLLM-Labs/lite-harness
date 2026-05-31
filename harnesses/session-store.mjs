@@ -6,6 +6,7 @@
  *   sessions (
  *     id             TEXT PRIMARY KEY,
  *     harness        TEXT NOT NULL,     -- "cc" | "github-copilot" | "codex" | "opencode"
+ *     agent_id       TEXT,              -- platform agent id for agent-run sessions
  *     title          TEXT NOT NULL,
  *     created_at     INTEGER NOT NULL,
  *     updated_at     INTEGER,
@@ -31,17 +32,28 @@ const log = (...a) => console.error("[session-store]", ...a);
 /**
  * Persist a new session row. Silently ignored if the id already exists.
  *
- * @param {{ id: string, harness: string, title: string, createdAt: number, tz?: string|null }} opts
+ * @param {{ id: string, harness: string, title: string, createdAt: number, tz?: string|null, agentId?: string|null }} opts
  */
-export function persistSession({ id, harness, title, createdAt, tz = null }) {
+export function persistSession({ id, harness, title, createdAt, tz = null, agentId = null }) {
   try {
-    getDb()
-      .prepare(
-        `INSERT OR IGNORE INTO sessions (id, harness, title, created_at, tz) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(id, harness, title, createdAt, tz ?? null);
+    const db = getDb();
+    db.prepare(
+      `INSERT OR IGNORE INTO sessions (id, harness, agent_id, title, created_at, tz) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, harness, agentId ?? null, title, createdAt, tz ?? null);
+    if (agentId) {
+      db.prepare(`UPDATE sessions SET agent_id = COALESCE(agent_id, ?) WHERE id = ?`).run(agentId, id);
+    }
   } catch (e) {
     log("persistSession error:", e.message);
+  }
+}
+
+export function getSessionAgentId(sessionId) {
+  try {
+    const row = getDb().prepare("SELECT agent_id FROM sessions WHERE id = ?").get(sessionId);
+    return row?.agent_id ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -168,7 +180,7 @@ export function setOcSessionChildId(sessionId, childSid) {
 /**
  * Return all opencode session rows for listing and remap hydration.
  *
- * @returns {{ id: string, title: string, created_at: number, updated_at: number|null, sdk_session_id: string|null }[]}
+ * @returns {{ id: string, title: string, created_at: number, updated_at: number|null, sdk_session_id: string|null, agent_id: string|null }[]}
  */
 export function loadMessages(sessionId) {
   try {
@@ -184,7 +196,7 @@ export function loadMessages(sessionId) {
 export function loadOcSessions() {
   try {
     return getDb()
-      .prepare(`SELECT id, title, created_at, updated_at, sdk_session_id FROM sessions WHERE harness = 'opencode' ORDER BY created_at ASC`)
+      .prepare(`SELECT id, title, created_at, updated_at, sdk_session_id, agent_id FROM sessions WHERE harness = 'opencode' ORDER BY created_at ASC`)
       .all();
   } catch (e) {
     log("loadOcSessions error:", e.message);

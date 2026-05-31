@@ -2,6 +2,7 @@ export interface OpencodeSession {
   id: string;
   title?: string;
   agent?: string;
+  agent_id?: string;
   /** @deprecated use agent */
   harness?: string;
   time?: { created: number; updated?: number };

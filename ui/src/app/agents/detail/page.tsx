@@ -145,7 +145,7 @@ function AgentDetail() {
           listAgentFiles(id).catch(() => []),
         ]);
         setAgent(ag);
-        setSessions(allSessions.filter((s) => s.agent === id || s.harness === id));
+        setSessions(allSessions.filter((s) => s.agent_id === id || s.agent === id || s.harness === id));
         setMemories(memoryRows);
         setFiles(fileRows);
       } catch (e) {

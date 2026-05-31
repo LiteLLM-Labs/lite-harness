@@ -146,7 +146,7 @@ function ChatInner() {
   useEffect(() => {
     if (!sid) return;
     getSession(sid).then(s => {
-      const a = s.agent ?? s.harness;
+      const a = s.agent_id ?? s.agent ?? s.harness;
       if (a) setSessionHarness(a);
       if (s.title) setSessionTitle(s.title);
     }).catch(() => {});

@@ -46,6 +46,7 @@ import { upsertAgentFile, listAgentFiles, listAgentFilesWithContent, getAgentFil
 import {
   hydrateFromDb,
   persistSession,
+  getSessionAgentId,
   getSessionTz,
   appendMessage,
   deleteMessage,
@@ -397,16 +398,24 @@ Do not call Slack tools, DM tools, post-message tools, or any other messaging to
 }
 
 async function handleSlackEventAsync(agentId, body) {
-  const agentDef = getAgent(agentId);
-  if (!agentDef) return;
-  const config = agentDef.config && typeof agentDef.config === "object" ? agentDef.config : {};
+  const connectionAgent = getAgent(agentId);
+  if (!connectionAgent) return;
+  const config = connectionAgent.config && typeof connectionAgent.config === "object" ? connectionAgent.config : {};
   const slack = config.slack && typeof config.slack === "object" ? config.slack : {};
+  const runAgentId = typeof slack.run_agent_id === "string" && slack.run_agent_id.trim()
+    ? slack.run_agent_id.trim()
+    : agentId;
+  const agentDef = getAgent(runAgentId);
+  if (!agentDef) {
+    log(`[slack] run agent ${runAgentId} not found for Slack app agent ${agentId}`);
+    return;
+  }
   const event = body.event || {};
   if (!event || event.bot_id || event.subtype || event.user === slack.bot_user_id) return;
   const isMention = event.type === "app_mention";
   const isMessage = event.type === "message" && ["im", "mpim"].includes(event.channel_type);
   if ((!isMention && !isMessage) || !String(event.text || "").trim()) return;
-  const messageKey = `${agentId}:${event.channel || ""}:${event.ts || ""}`;
+  const messageKey = `${agentId}:${runAgentId}:${event.channel || ""}:${event.ts || ""}`;
   if (event.ts && slackMessageKeys.has(messageKey)) return;
   if (event.ts) {
     slackMessageKeys.add(messageKey);
@@ -440,7 +449,7 @@ async function handleSlackEventAsync(agentId, body) {
         currentTs: event.ts,
       });
     } catch (e) {
-      log(`[slack] failed to fetch thread context for ${agentId}:`, e instanceof Error ? e.message : String(e));
+      log(`[slack] failed to fetch thread context for ${agentId}->${runAgentId}:`, e instanceof Error ? e.message : String(e));
     }
     const streamer = createSlackRunStreamer({
       slackApi,
@@ -458,7 +467,7 @@ async function handleSlackEventAsync(agentId, body) {
     });
     await streamer.finish(result.text);
   } catch (e) {
-    log(`[slack] failed to process event for ${agentId}:`, e instanceof Error ? e.message : String(e));
+    log(`[slack] failed to process event for ${agentId}->${runAgentId}:`, e instanceof Error ? e.message : String(e));
     await slackApi("chat.postMessage", botToken, {
       channel: event.channel,
       text: `I hit an error while running the agent: ${e instanceof Error ? e.message : String(e)}`,
@@ -1946,6 +1955,7 @@ const server = http.createServer(async (req, res) => {
       storedBaseAgent = rawHarness === "claude-code" ? "cc" : rawHarness;
     }
     const resolvedAgent = builtin ?? storedBaseAgent ?? "cc";
+    const sessionPlatformAgentId = apiAgentForSession?.id ?? null;
 
     if (apiAgentForSession && resolvedAgent === "opencode") {
       try {
@@ -1970,10 +1980,10 @@ const server = http.createServer(async (req, res) => {
       copilotSessions.set(id, s);
       sessionAgent.set(id, "github-copilot");
       sessionHarness.set(id, "github-copilot");
-      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now, tz: sessionTz });
+      persistSession({ id, harness: "github-copilot", title: s.title, createdAt: now, tz: sessionTz, agentId: sessionPlatformAgentId });
       log(`copilot session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "github-copilot" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "github-copilot", ...(sessionPlatformAgentId ? { agent_id: sessionPlatformAgentId } : {}) }));
       return;
     }
 
@@ -1989,10 +1999,10 @@ const server = http.createServer(async (req, res) => {
       codexSessions.set(id, s);
       sessionAgent.set(id, "codex");
       sessionHarness.set(id, "codex");
-      persistSession({ id, harness: "codex", title: s.title, createdAt: now, tz: sessionTz });
+      persistSession({ id, harness: "codex", title: s.title, createdAt: now, tz: sessionTz, agentId: sessionPlatformAgentId });
       log(`codex session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "codex" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "codex", ...(sessionPlatformAgentId ? { agent_id: sessionPlatformAgentId } : {}) }));
       return;
     }
 
@@ -2008,10 +2018,10 @@ const server = http.createServer(async (req, res) => {
       ccSessions.set(id, s);
       sessionAgent.set(id, "cc");
       sessionHarness.set(id, "cc");
-      persistSession({ id, harness: "cc", title: s.title, createdAt: now, tz: sessionTz });
+      persistSession({ id, harness: "cc", title: s.title, createdAt: now, tz: sessionTz, agentId: sessionPlatformAgentId });
       log(`cc session created id=${id} title=${JSON.stringify(s.title)}`);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "claude-code" }));
+      res.end(JSON.stringify({ id, title: s.title, time: s.time, agent: "claude-code", ...(sessionPlatformAgentId ? { agent_id: sessionPlatformAgentId } : {}) }));
       return;
     }
 
@@ -2030,7 +2040,8 @@ const server = http.createServer(async (req, res) => {
             sessionAgent.set(parsed.id, "opencode");
             sessionHarness.set(parsed.id, "opencode");
             if (systemPromptOverride) sessionSystemPrompt.set(parsed.id, systemPromptOverride);
-            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz });
+            persistSession({ id: parsed.id, harness: "opencode", title: parsed.title || "New session", createdAt: Date.now(), tz: sessionTz, agentId: sessionPlatformAgentId });
+            if (sessionPlatformAgentId) parsed.agent_id = sessionPlatformAgentId;
           }
         } catch {}
         res.writeHead(upRes.statusCode || 200, upRes.headers);
@@ -2054,7 +2065,8 @@ const server = http.createServer(async (req, res) => {
     const ocSessions = await ocFetch();
     const tagged = (Array.isArray(ocSessions) ? ocSessions : []).map(s => {
       sessionAgent.set(s.id, "opencode");
-      return { ...s, agent: "opencode" };
+      const agentId = getSessionAgentId(s.id);
+      return { ...s, agent: "opencode", ...(agentId ? { agent_id: agentId } : {}) };
     });
     // Merge in DB-persisted opencode sessions not currently known to the child.
     const liveOcIds = new Set(tagged.map(s => s.id));
@@ -2062,7 +2074,7 @@ const server = http.createServer(async (req, res) => {
       .filter(r => !liveOcIds.has(r.id))
       .map(r => {
         sessionHarness.set(r.id, "opencode");
-        return { id: r.id, title: r.title, time: { created: r.created_at, ...(r.updated_at ? { updated: r.updated_at } : {}) }, harness: "opencode" };
+        return { id: r.id, title: r.title, time: { created: r.created_at, ...(r.updated_at ? { updated: r.updated_at } : {}) }, harness: "opencode", ...(r.agent_id ? { agent_id: r.agent_id } : {}) };
       });
     const ccList = [...ccSessions.values()].map(s => ({
       id: s.id, title: s.title, time: s.time, agent: "claude-code",
@@ -2087,22 +2099,25 @@ const server = http.createServer(async (req, res) => {
     if (sessionAgent.get(sid) === "cc") {
       const cs = ccSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+      const agentId = getSessionAgentId(sid);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "claude-code" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "claude-code", ...(agentId ? { agent_id: agentId } : {}) }));
       return;
     }
     if (sessionAgent.get(sid) === "github-copilot") {
       const cs = copilotSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+      const agentId = getSessionAgentId(sid);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "github-copilot" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "github-copilot", ...(agentId ? { agent_id: agentId } : {}) }));
       return;
     }
     if (sessionAgent.get(sid) === "codex") {
       const cs = codexSessions.get(sid);
       if (!cs) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+      const agentId = getSessionAgentId(sid);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "codex" }));
+      res.end(JSON.stringify({ id: cs.id, title: cs.title, time: cs.time, agent: "codex", ...(agentId ? { agent_id: agentId } : {}) }));
       return;
     }
     // opencode: proxy, fall back to SQLite metadata when child doesn't know the session
@@ -2112,14 +2127,19 @@ const server = http.createServer(async (req, res) => {
           const row = loadOcSessions().find(r => r.id === sid);
           if (row) {
             res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify({ id: row.id, title: row.title, time: { created: row.created_at, ...(row.updated_at ? { updated: row.updated_at } : {}) }, agent: "opencode" }));
+            res.end(JSON.stringify({ id: row.id, title: row.title, time: { created: row.created_at, ...(row.updated_at ? { updated: row.updated_at } : {}) }, agent: "opencode", ...(row.agent_id ? { agent_id: row.agent_id } : {}) }));
             return;
           }
           res.writeHead(404, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: "session not found" }));
           return;
         }
-        try { const obj = JSON.parse(d); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ...obj, agent: "opencode" })); }
+        try {
+          const obj = JSON.parse(d);
+          const agentId = getSessionAgentId(sid);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ...obj, agent: "opencode", ...(agentId ? { agent_id: agentId } : {}) }));
+        }
         catch { res.writeHead(ocRes.statusCode || 502); res.end(d); }
       });
     });
@@ -3065,7 +3085,9 @@ const server = http.createServer(async (req, res) => {
       sessionHarness.set(runSid, runHarness);
     }
     if (!reusedRunSession) {
-      persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow });
+      persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow, agentId });
+    } else {
+      persistSession({ id: runSid, harness: runHarness, title: `agent-run-${agentId}`, createdAt: runNow, agentId });
     }
 
     const runRecord = createAgentRun({ agentId, sessionId: runSid, configOverrides });

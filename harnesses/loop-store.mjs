@@ -40,6 +40,7 @@ function initSessionSchema(db) {
     CREATE TABLE IF NOT EXISTS sessions (
       id             TEXT PRIMARY KEY,
       harness        TEXT NOT NULL,
+      agent_id       TEXT,
       title          TEXT NOT NULL,
       created_at     INTEGER NOT NULL,
       updated_at     INTEGER,
@@ -55,6 +56,26 @@ function initSessionSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS session_messages_sid_seq
       ON session_messages(session_id, seq);
   `);
+  try { db.exec("ALTER TABLE sessions ADD COLUMN agent_id TEXT"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS sessions_agent_id_idx ON sessions(agent_id)"); } catch {}
+  try {
+    db.exec(`
+      UPDATE sessions
+      SET agent_id = (
+        SELECT ar.agent_id
+        FROM agent_runs ar
+        WHERE ar.session_id = sessions.id
+        ORDER BY ar.started_at DESC
+        LIMIT 1
+      )
+      WHERE agent_id IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM agent_runs ar
+          WHERE ar.session_id = sessions.id
+        )
+    `);
+  } catch {}
 }
 
 function initAgentFilesSchema(db) {
