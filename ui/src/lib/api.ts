@@ -1,4 +1,4 @@
-import type { Agent, HarnessMessage, OpencodeSession, Skill } from "./types";
+import type { Agent, HarnessMessage, Memory, OpencodeSession, Skill } from "./types";
 
 const BASE = "";
 const MASTER_KEY_STORAGE = "lite-harness-master-key";
@@ -200,6 +200,45 @@ export async function rejectApproval(id: string, feedback?: string): Promise<voi
   await jsonOrThrow(res);
 }
 
+// ── Agent inbox (/api/inbox) ────────────────────────────────────────────────
+// Unified list of human-in-the-loop approvals (kind="approval") an agent is
+// blocked on, plus informational issues an agent filed (kind="issue").
+
+export type InboxKind = "approval" | "issue";
+export type InboxStatus = "pending" | "accepted" | "rejected" | "open" | "resolved";
+export type InboxFilter = "attention" | "completed" | "all";
+
+export interface InboxItem {
+  id: string;
+  kind: InboxKind;
+  title: string;
+  sessionId: string | null;
+  agent: string | null;
+  body: string | null;
+  /** Approval tool arguments (editable fields) — present for kind="approval". */
+  args?: Record<string, unknown>;
+  status: InboxStatus;
+  feedback: string | null;
+  createdAt: number;
+  resolvedAt: number | null;
+}
+
+export async function listInbox(filter: InboxFilter = "all"): Promise<InboxItem[]> {
+  const res = await req(`/api/inbox?filter=${encodeURIComponent(filter)}`);
+  const data = await jsonOrThrow<{ items: InboxItem[] }>(res);
+  return data.items ?? [];
+}
+
+/** Mark an inbox issue done. */
+export async function resolveInboxItem(id: string, note?: string): Promise<void> {
+  const res = await req(`/api/inbox/${encodeURIComponent(id)}/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(note ? { note } : {}),
+  });
+  await jsonOrThrow(res);
+}
+
 // ── Integrations / vault ──────────────────────────────────────────────────────
 // API keys are stored in the harness's encrypted vault via /api/vault/:userId.
 // When the backend vault is unreachable (e.g. running the UI standalone via
@@ -290,6 +329,56 @@ export async function listIntegrationKeys(): Promise<string[]> {
   return [...keys];
 }
 
+// ── Skills CRUD (DB-backed, /api/skills) ──────────────────────────────────────
+// Skills are reusable capability docs persisted in the harness DB and attached
+// to agents via agents.skill_ids.
+
+export async function createSkill(input: {
+  name: string;
+  content: string;
+  description?: string | null;
+}): Promise<Skill> {
+  const res = await req("/api/skills", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow<Skill>(res);
+}
+
+export async function getSkill(id: string): Promise<Skill> {
+  const res = await req(`/api/skills/${encodeURIComponent(id)}`);
+  return jsonOrThrow<Skill>(res);
+}
+
+export async function updateSkill(
+  id: string,
+  fields: { name?: string; description?: string | null; content?: string },
+): Promise<Skill> {
+  const res = await req(`/api/skills/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return jsonOrThrow<Skill>(res);
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  await req(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** Attach a skill to an agent (idempotent — no-op if already attached). */
+export async function attachSkillToAgent(agentId: string, skillId: string): Promise<void> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}`);
+  const agent = await jsonOrThrow<Agent>(res);
+  const next = Array.from(new Set([...(agent.skill_ids ?? []), skillId]));
+  await req(`/api/agents/${encodeURIComponent(agentId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ skill_ids: next }),
+  });
+}
+
 export function subscribeEvents(opts: {
   sessionId: string;
   onEvent: (ev: unknown) => void;
@@ -356,9 +445,38 @@ export async function deleteAgent(id: string): Promise<void> {
   await req(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-// ── Skills catalog (/api/skills) ────────────────────────────────────────────
+// ── Skills list (DB-backed, /api/skills) ──────────────────────────────────────
 export async function listSkills(): Promise<Skill[]> {
   const res = await req("/api/skills");
   const data = await jsonOrThrow<{ skills: Skill[] }>(res);
-  return data.skills;
+  return data.skills ?? [];
+}
+
+// ── Agent memory (/api/agents/:id/memory) ─────────────────────────────────────
+// The same per-agent key→value notes the agent reads & writes via its memory_*
+// tools. Surfaced here so the UI can show and curate what an agent remembers.
+export async function listMemory(agentId: string): Promise<Memory[]> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}/memory`);
+  const data = await jsonOrThrow<{ memories: Memory[] }>(res);
+  return data.memories ?? [];
+}
+
+export async function storeMemory(
+  agentId: string,
+  key: string,
+  value: string,
+): Promise<Memory> {
+  const res = await req(`/api/agents/${encodeURIComponent(agentId)}/memory`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ key, value }),
+  });
+  return jsonOrThrow<Memory>(res);
+}
+
+export async function deleteMemory(agentId: string, key: string): Promise<void> {
+  await req(
+    `/api/agents/${encodeURIComponent(agentId)}/memory/${encodeURIComponent(key)}`,
+    { method: "DELETE" },
+  );
 }

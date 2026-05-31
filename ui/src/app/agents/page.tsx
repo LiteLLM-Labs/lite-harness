@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Play, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Play, Pencil, Trash2, X, Brain } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -28,19 +28,22 @@ import {
   listIntegrationKeys,
   saveIntegrationKey,
   deleteIntegrationKey,
+  listMemory,
+  storeMemory,
+  deleteMemory,
 } from "@/lib/api";
-import type { Agent, Skill } from "@/lib/types";
+import type { Agent, Skill, Memory } from "@/lib/types";
 
 interface FormState {
   name: string;
   owner_id: string;
   description: string;
   prompt: string;
-  skills: string[];
+  skill_ids: string[];
   vault_keys: string[];
 }
 
-const EMPTY: FormState = { name: "", owner_id: "local", description: "", prompt: "", skills: [], vault_keys: [] };
+const EMPTY: FormState = { name: "", owner_id: "local", description: "", prompt: "", skill_ids: [], vault_keys: [] };
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -55,6 +58,9 @@ export default function AgentsPage() {
   const [vaultKeyInput, setVaultKeyInput] = useState("");
   const [vaultValues, setVaultValues] = useState<Record<string, string>>({});
   const [storedKeys, setStoredKeys] = useState<string[]>([]);
+  const [memories, setMemories] = useState<Memory[] | null>(null);
+  const [memKey, setMemKey] = useState("");
+  const [memValue, setMemValue] = useState("");
 
   const load = async () => {
     try {
@@ -93,13 +99,45 @@ export default function AgentsPage() {
     }
   };
 
-  const toggleSkill = (slug: string) =>
+  const toggleSkill = (id: string) =>
     setForm((f) => ({
       ...f,
-      skills: f.skills.includes(slug)
-        ? f.skills.filter((s) => s !== slug)
-        : [...f.skills, slug],
+      skill_ids: f.skill_ids.includes(id)
+        ? f.skill_ids.filter((s) => s !== id)
+        : [...f.skill_ids, id],
     }));
+
+  const skillName = (id: string) => skills.find((s) => s.id === id)?.name ?? id;
+
+  const loadMemory = async (agentId: string) => {
+    setMemories(null);
+    try {
+      setMemories(await listMemory(agentId));
+    } catch {
+      setMemories([]);
+    }
+  };
+  const addMemory = async () => {
+    const k = memKey.trim();
+    if (!editingId || !k || !memValue.trim()) return;
+    try {
+      await storeMemory(editingId, k, memValue);
+      setMemKey("");
+      setMemValue("");
+      await loadMemory(editingId);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const removeMemory = async (key: string) => {
+    if (!editingId) return;
+    setMemories((prev) => prev?.filter((m) => m.key !== key) ?? null);
+    try {
+      await deleteMemory(editingId, key);
+    } catch {
+      loadMemory(editingId);
+    }
+  };
 
   const openNew = () => {
     setEditingId(null);
@@ -107,6 +145,9 @@ export default function AgentsPage() {
     setFormError(null);
     setVaultKeyInput("");
     setVaultValues({});
+    setMemories([]);
+    setMemKey("");
+    setMemValue("");
     setOpen(true);
   };
   const openEdit = (ag: Agent) => {
@@ -116,12 +157,15 @@ export default function AgentsPage() {
       owner_id: (ag.owner_id as string) ?? "local",
       description: ag.description ?? "",
       prompt: ag.prompt ?? "",
-      skills: Array.isArray(ag.skills) ? ag.skills : [],
+      skill_ids: Array.isArray(ag.skill_ids) ? ag.skill_ids : [],
       vault_keys: Array.isArray(ag.vault_keys) ? ag.vault_keys : [],
     });
     setFormError(null);
     setVaultKeyInput("");
     setVaultValues({});
+    setMemKey("");
+    setMemValue("");
+    loadMemory(ag.id);
     setOpen(true);
   };
 
@@ -135,7 +179,7 @@ export default function AgentsPage() {
           name: form.name,
           description: form.description,
           prompt: form.prompt,
-          skills: form.skills,
+          skill_ids: form.skill_ids,
           vault_keys: form.vault_keys,
         });
       } else {
@@ -144,7 +188,7 @@ export default function AgentsPage() {
           owner_id: form.owner_id || "local",
           description: form.description,
           prompt: form.prompt,
-          skills: form.skills,
+          skill_ids: form.skill_ids,
           vault_keys: form.vault_keys,
         });
       }
@@ -226,11 +270,11 @@ export default function AgentsPage() {
                   {Boolean(ag.prompt) && (
                     <p className="text-xs text-muted-foreground/70 mt-1 line-clamp-1 font-mono">{String(ag.prompt)}</p>
                   )}
-                  {Array.isArray(ag.skills) && ag.skills.length > 0 && (
+                  {Array.isArray(ag.skill_ids) && ag.skill_ids.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
-                      {ag.skills.map((s) => (
-                        <Badge key={s} variant="secondary" className="text-[10px]">
-                          {s}
+                      {ag.skill_ids.map((id) => (
+                        <Badge key={id} variant="secondary" className="text-[10px]">
+                          {skillName(id)}
                         </Badge>
                       ))}
                     </div>
@@ -307,20 +351,20 @@ export default function AgentsPage() {
               ) : (
                 <div className="max-h-44 overflow-y-auto rounded-md border border-border divide-y divide-border">
                   {skills.map((s) => {
-                    const checked = form.skills.includes(s.slug);
+                    const checked = form.skill_ids.includes(s.id);
                     return (
                       <label
-                        key={s.slug}
+                        key={s.id}
                         className="flex items-start gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-muted/50"
                       >
                         <input
                           type="checkbox"
                           className="mt-0.5"
                           checked={checked}
-                          onChange={() => toggleSkill(s.slug)}
+                          onChange={() => toggleSkill(s.id)}
                         />
                         <span className="min-w-0 flex flex-col">
-                          <span className="text-xs font-medium">{s.slug}</span>
+                          <span className="text-xs font-medium">{s.name}</span>
                           {s.description && (
                             <span className="text-[11px] text-muted-foreground line-clamp-2">
                               {s.description}
@@ -332,9 +376,9 @@ export default function AgentsPage() {
                   })}
                 </div>
               )}
-              {form.skills.length > 0 && (
+              {form.skill_ids.length > 0 && (
                 <p className="text-[11px] text-muted-foreground">
-                  {form.skills.length} skill{form.skills.length === 1 ? "" : "s"} attached
+                  {form.skill_ids.length} skill{form.skill_ids.length === 1 ? "" : "s"} attached
                 </p>
               )}
             </div>
@@ -399,6 +443,64 @@ export default function AgentsPage() {
                 </div>
               )}
             </div>
+            {editingId && (
+              <div className="grid gap-1.5">
+                <Label className="flex items-center gap-1.5">
+                  <Brain className="size-3.5" />
+                  Memory
+                </Label>
+                <p className="text-[11px] text-muted-foreground -mt-1">
+                  Durable notes this agent stores and recalls across sessions and runs
+                  via its <span className="font-mono">memory_*</span> tools.
+                </p>
+                {memories === null ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : memories.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Nothing remembered yet. The agent fills this in as it works — or add a note below.
+                  </p>
+                ) : (
+                  <div className="rounded-md border border-border divide-y divide-border max-h-52 overflow-y-auto">
+                    {memories.map((m) => (
+                      <div key={m.key} className="flex items-start gap-2 px-2.5 py-1.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-mono font-medium truncate">{m.key}</div>
+                          <div className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words">{m.value}</div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 shrink-0"
+                          onClick={() => removeMemory(m.key)}
+                          aria-label={`Forget ${m.key}`}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2 items-start">
+                  <Input
+                    value={memKey}
+                    onChange={(e) => setMemKey(e.target.value)}
+                    placeholder="key"
+                    className="font-mono text-xs w-32 shrink-0"
+                  />
+                  <Textarea
+                    value={memValue}
+                    onChange={(e) => setMemValue(e.target.value)}
+                    placeholder="value to remember"
+                    rows={1}
+                    className="text-xs"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={addMemory} disabled={!memKey.trim() || !memValue.trim()}>
+                    Add
+                  </Button>
+                </div>
+              </div>
+            )}
             {formError && <p className="text-sm text-destructive">{formError}</p>}
           </div>
           <DialogFooter className="m-0 rounded-b-xl px-6 py-4">

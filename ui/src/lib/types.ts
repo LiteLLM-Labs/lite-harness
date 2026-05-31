@@ -60,15 +60,29 @@ export interface Agent {
   cron?: string | null;
   status?: string;
   owner_id?: string | null;
-  skills?: string[];
+  /** IDs of DB-backed skills attached to this agent (agents.skill_ids). */
+  skill_ids?: string[];
   vault_keys?: string[];
   created_at?: number;
   [k: string]: unknown;
 }
 
-/** A skill in the server catalog (~/.claude/skills), attachable to an agent. */
+/** A reusable, DB-backed skill (capability doc) attachable to an agent. */
 export interface Skill {
-  slug: string;
+  id: string;
   name: string;
-  description: string;
+  description: string | null;
+  content: string;
+  owner_id: string | null;
+  created_at: number;
+}
+
+/** A durable key→value note an agent has stored in its memory. */
+export interface Memory {
+  id: string;
+  agent_id: string;
+  key: string;
+  value: string;
+  created_at: number;
+  updated_at: number;
 }

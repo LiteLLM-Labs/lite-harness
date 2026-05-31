@@ -30,12 +30,14 @@ import { HelpPlugin } from "./help-plugin.mjs";
 import { LoopPlugin } from "./loop-plugin.mjs";
 import { handleMcpRequest, handleMcpSse, handleMcpMessage, PLATFORM_MCP_URL } from "../mcp/index.mjs";
 import { initDb as initAgentDb, getAgent as getSavedAgent, listAgents as listSavedAgents, deleteAgent as deleteSavedAgent } from "../mcp/agents/store.mjs";
-import { setApprovalBroadcaster, listPending, acceptApproval, rejectApproval } from "../mcp/approvals.mjs";
+import { wireInbox, handleInboxRoute } from "./inbox-service.mjs";
 import "../mcp/tools.mjs";
 import { AgentPlugin } from "./agent-plugin.mjs";
 import { initDb, getDb, createLoop, createAgentRun, getAgentRun, updateAgentRun, listAgentRuns } from "./loop-store.mjs";
 import { Cron } from "croner";
 import { createAgent, setAgentLoop, deleteAgent, listAgents, getAgent, updateAgent } from "./agent-store.mjs";
+import { createSkill, listSkills, getSkill, getSkillsByIds, updateSkill, deleteSkill } from "./skills-store.mjs";
+import { storeMemory, listMemory, deleteMemory, deleteAllMemory } from "./memory-store.mjs";
 import { initRunBuffer, bufferRunEvent, subscribeRunEvents, unsubscribeRunEvents, getRunEventBuffer, setRunSandbox, getRunSandbox } from "./agent-run-store.mjs";
 import { buildDirectProvider } from "./sandbox-provider.mjs";
 import { upsertAgentFile, listAgentFiles, getAgentFile, deleteAgentFile, deleteAllAgentFiles, FILE_LIMITS } from "./agent-file-store.mjs";
@@ -143,6 +145,46 @@ async function resolveTemplates(prompt, userId, config, vaultBackend) {
   return result;
 }
 
+// Build the effective system prompt for an agent run, composing three layers:
+//   1. A default preamble exposing the *skills* concept (a catalog of every
+//      skill on the platform), so any agent knows what's available and can ask
+//      to use more.
+//   2. The full content of each skill attached to the agent (skill_ids).
+//   3. The agent's own `system` prompt.
+// `attachedSkills` / `allSkills` are rows from skills-store.
+function composeAgentSystem(agentSystem, attachedSkills, allSkills) {
+  const parts = [];
+  const catalog = (allSkills || [])
+    .map((s) => `- ${s.name} (${s.id})${s.description ? `: ${s.description}` : ""}`)
+    .join("\n");
+  parts.push(
+    "## Skills available on this platform\n" +
+      "Skills are reusable capability playbooks. The platform currently has:\n" +
+      (catalog || "(none yet)") +
+      "\n\nThe skills attached to you are included in full below — follow them. " +
+      "To list the latest catalog at runtime, GET /api/skills on the harness.",
+  );
+  for (const sk of attachedSkills || []) {
+    parts.push(`## Skill: ${sk.name}\n${sk.content}`);
+  }
+  if (agentSystem && agentSystem.trim()) parts.push(agentSystem.trim());
+  return parts.join("\n\n---\n\n");
+}
+
+// A system-prompt note telling an agent its own id and how to use the memory
+// tools. The platform memory_* tools are shared across all agents, so each call
+// must be scoped by agent_id — we hand the agent its id here so it can pass it.
+function memoryPromptNote(agentId) {
+  if (!agentId) return "";
+  return (
+    `\n\n---\n\n## Your memory\nYour agent_id is "${agentId}". You have a durable memory ` +
+    `(key→value notes) that persists across sessions and scheduled runs. Pass this exact ` +
+    `agent_id to the memory tools: memory_list (recall everything — do this at the start of a ` +
+    `task), memory_get (read one key), memory_store (save/overwrite a key), memory_delete ` +
+    `(forget a key). Use memory to remember facts, preferences, and decisions worth keeping.`
+  );
+}
+
 // Load the claude-code SDK from ./claude-code/node_modules/ relative to this
 // file. In Docker the adapter lives at /opt/lap/inline-adapter.mjs and the SDK
 // is copied to /opt/lap/claude-code/node_modules/. Locally the same layout
@@ -227,19 +269,29 @@ pluginRegistry.setup({
     ccSessions.has(sid) || copilotSessions.has(sid) || codexSessions.has(sid) || sessionAgent.get(sid) === "opencode",
 }).catch(e => console.error("[inline-adapter] plugin setup error:", e.message));
 
-// Push human-in-the-loop approval lifecycle events to every connected /event
-// client (CLI and web UI), reusing the plugin SSE bus. Envelope matches the
-// shape clients already parse: { id, type, properties }.
-setApprovalBroadcaster((event) => {
-  const { type, ...rest } = event;
-  const envelope = {
-    id: `evt_${randomUUID().replace(/-/g, "").slice(0, 20)}`,
-    type,
-    properties: rest,
-  };
+// Best-effort human-readable label for the session that owns an inbox item —
+// the session title if we have it in-process, else the harness/agent tag.
+// Hoisted (function declaration) so the broadcaster below can use it even though
+// some session Maps are declared further down; it only reads them at call time.
+function sessionLabel(sid) {
+  if (!sid) return null;
+  const s = ccSessions.get(sid) || copilotSessions.get(sid) || codexSessions.get(sid);
+  if (s?.title) return s.title;
+  const agent = sessionAgent.get(sid);
+  return agent || null;
+}
+
+// Broadcast a raw lifecycle event to every connected /event client (CLI + web
+// UI) via the plugin SSE bus, in the { id, type, properties } envelope clients
+// already parse.
+function broadcastEvent(type, properties) {
+  const envelope = { id: `evt_${randomUUID().replace(/-/g, "").slice(0, 20)}`, type, properties };
   const line = `data: ${JSON.stringify(envelope)}\n\n`;
   for (const cb of pluginGlobalBus) { try { cb(line); } catch {} }
-});
+}
+
+// Wire the agent inbox: bridge approval/issue lifecycle to persistence + SSE.
+wireInbox({ broadcast: broadcastEvent, sessionLabel });
 
 // Returns true if a plugin handled the message (response already sent).
 async function tryPlugin(text, sid, harness, res) {
@@ -578,7 +630,7 @@ async function codexRunTurn(s, userText) {
       // Inject the platform MCP server so codex sessions can call save_agent.
       // Uses the same -c override mechanism as the model config above.
       // TOML path matches what `codex mcp add --url` writes: [mcp_servers.<name>] / url = "..."
-      "-c", `mcp_servers.platform.url="${PLATFORM_MCP_URL}"`,
+      "-c", `mcp_servers.platform.url="${PLATFORM_MCP_URL}?session=${encodeURIComponent(s.id)}"`,
       "-m", model,
       "--dangerously-bypass-approvals-and-sandbox",
       fullPrompt,
@@ -734,8 +786,13 @@ async function ccRunTurn(s, userText, modelId) {
       abortController: ac,
       disallowedTools: ["AskUserQuestion"],
       ...(s.sdkSessionId ? { resume: s.sdkSessionId } : {}),
-      ...(s.systemPrompt ? { system: s.systemPrompt } : {}),
-      mcpServers: [{ type: "http", url: PLATFORM_MCP_URL }],
+      // The claude-code SDK ignores `system`; it appends extra system-prompt
+      // text via `appendSystemPrompt`. This is how an agent's skills + system
+      // prompt (incl. the memory agent_id note) actually reach the model.
+      ...(s.systemPrompt ? { appendSystemPrompt: s.systemPrompt } : {}),
+      // Session-scoped MCP URL so platform tools (approvals, file_issue) know
+      // which session they're acting for.
+      mcpServers: [{ type: "http", url: `${PLATFORM_MCP_URL}?session=${encodeURIComponent(s.id)}` }],
     }});
     for await (const m of stream) {
       if (m.type === "system" && m.subtype === "init" && m.session_id && !s.sdkSessionId) s.sdkSessionId = m.session_id;
@@ -1386,7 +1443,9 @@ const server = http.createServer(async (req, res) => {
     const raw = await readBody(req);
     let mcpBody = {};
     try { mcpBody = JSON.parse(raw || "{}"); } catch {}
-    const response = await handleMcpRequest(mcpBody);
+    // Agents connect with ?session=<id> appended to the MCP URL so tools like
+    // request_human_approval / file_issue can attribute the item to its session.
+    const response = await handleMcpRequest(mcpBody, { session: url.searchParams.get("session") || null });
     if (response === null) { res.writeHead(204); res.end(); return; }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(response));
@@ -1412,39 +1471,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Human-in-the-loop approvals — list pending tool-call approvals.
-  if (p === "/api/approvals" && req.method === "GET") {
-    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ approvals: listPending() }));
-    return;
-  }
-
-  // Accept a pending approval, optionally with human-edited arguments.
-  const _approvalAcceptMatch = p.match(/^\/api\/approvals\/([^/]+)\/accept$/);
-  if (_approvalAcceptMatch && req.method === "POST") {
-    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    const raw = await readBody(req);
-    let body = {};
-    try { body = JSON.parse(raw || "{}"); } catch {}
-    const ok = acceptApproval(_approvalAcceptMatch[1], body.arguments);
-    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
-    return;
-  }
-
-  // Reject a pending approval, optionally with feedback returned to the agent.
-  const _approvalRejectMatch = p.match(/^\/api\/approvals\/([^/]+)\/reject$/);
-  if (_approvalRejectMatch && req.method === "POST") {
-    if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
-    const raw = await readBody(req);
-    let body = {};
-    try { body = JSON.parse(raw || "{}"); } catch {}
-    const ok = rejectApproval(_approvalRejectMatch[1], body.feedback);
-    res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(ok ? { ok: true } : { error: "approval not found or already resolved" }));
-    return;
-  }
+  // Agent inbox — approvals (live + history) and agent-filed issues. All routes
+  // (/api/approvals*, /api/inbox*) live in inbox-service.mjs.
+  if (await handleInboxRoute(req, res, url, { authOk, readBody })) return;
 
   if (p === "/agents" && req.method === "GET") {
     if (!authOk(req, url)) { res.writeHead(401); res.end(JSON.stringify({ error: "unauthorized" })); return; }
@@ -1511,12 +1540,15 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: `Unknown agent: ${agentParam}` }));
         return;
       }
-      // The /api/agents store can attach skills; surface them in the prompt so
-      // the model knows to invoke them (the files live in the shared catalog on
-      // disk, where opencode/cc discover them).
+      // The /api/agents store can attach DB-backed skills (skill_ids); compose
+      // their full content into the system prompt so the model follows them.
       systemPromptOverride = savedAgent
-        ? savedAgent.system_prompt
-        : (apiAgent.prompt || apiAgent.system || "") + skillsPromptNote(apiAgent.skills);
+        ? savedAgent.system_prompt + memoryPromptNote(savedAgent.id)
+        : composeAgentSystem(
+            apiAgent.system || apiAgent.prompt || "",
+            getSkillsByIds(apiAgent.skill_ids || []),
+            listSkills(),
+          ) + memoryPromptNote(apiAgent.id);
       body.title = body.title || (savedAgent ? savedAgent.name : apiAgent.name);
       // Honor the agent's base harness. The MCP store calls it base_agent; the
       // /api/agents store calls it harness ("claude-code" -> "cc"). Default to
@@ -2036,12 +2068,55 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Skills catalog ────────────────────────────────────────────────────────────
-  // GET /api/skills — list the skills available on this server so the UI can
-  // offer them when attaching skills to an agent.
-  if (p === "/api/skills" && req.method === "GET") {
+  // ── Skill CRUD routes ─────────────────────────────────────────────────────────
+  // Skills are reusable markdown capability docs, attached to agents via skill_ids.
+  const _skillIdMatch = p.match(/^\/api\/skills\/([^/]+)$/);
+  const _skillsMatch  = p === "/api/skills";
+
+  if (_skillsMatch && req.method === "POST") {
+    const raw = await readBody(req);
+    let b = {}; try { b = JSON.parse(raw || "{}"); } catch {}
+    const { name, content, description = null, owner_id = null } = b;
+    if (!name || !content) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "name and content required" }));
+      return;
+    }
+    const skill = createSkill({ name, content, description, owner_id });
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify(skill));
+    return;
+  }
+
+  if (_skillsMatch && req.method === "GET") {
+    const ownerId = url.searchParams.get("owner_id");
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ skills: listPlatformSkills() }));
+    res.end(JSON.stringify({ skills: listSkills(ownerId || undefined) }));
+    return;
+  }
+
+  if (_skillIdMatch && req.method === "GET") {
+    const skill = getSkill(_skillIdMatch[1]);
+    if (!skill) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(skill));
+    return;
+  }
+
+  if (_skillIdMatch && req.method === "PATCH") {
+    if (!getSkill(_skillIdMatch[1])) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    const raw = await readBody(req);
+    let f = {}; try { f = JSON.parse(raw || "{}"); } catch {}
+    updateSkill(_skillIdMatch[1], f);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(getSkill(_skillIdMatch[1])));
+    return;
+  }
+
+  if (_skillIdMatch && req.method === "DELETE") {
+    deleteSkill(_skillIdMatch[1]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 
@@ -2051,8 +2126,47 @@ const server = http.createServer(async (req, res) => {
   const _agentRunMatch     = p.match(/^\/api\/agents\/([^/]+)\/run$/);
   const _agentPauseMatch   = p.match(/^\/api\/agents\/([^/]+)\/pause$/);
   const _agentResumeMatch  = p.match(/^\/api\/agents\/([^/]+)\/resume$/);
+  const _agentMemoryKeyMatch = p.match(/^\/api\/agents\/([^/]+)\/memory\/(.+)$/);
+  const _agentMemoryMatch    = p.match(/^\/api\/agents\/([^/]+)\/memory$/);
   const _agentIdMatch      = p.match(/^\/api\/agents\/([^/]+)$/);
   const _agentsMatch       = p === "/api/agents";
+
+  // ── Agent memory ──────────────────────────────────────────────────────────────
+  // The same per-agent key→value store the memory_* MCP tools read & write, so
+  // the UI can show (and curate) what an agent has remembered.
+  if (_agentMemoryMatch && req.method === "GET") {
+    const agentId = _agentMemoryMatch[1];
+    if (!getAgent(agentId)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ memories: listMemory(agentId) }));
+    return;
+  }
+
+  if (_agentMemoryMatch && req.method === "POST") {
+    const agentId = _agentMemoryMatch[1];
+    if (!getAgent(agentId)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+    const raw = await readBody(req);
+    let b = {}; try { b = JSON.parse(raw || "{}"); } catch {}
+    const { key, value } = b;
+    if (!key || value == null) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "key and value required" }));
+      return;
+    }
+    const row = storeMemory({ agentId, key: String(key), value: String(value) });
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify(row));
+    return;
+  }
+
+  if (_agentMemoryKeyMatch && req.method === "DELETE") {
+    const agentId = _agentMemoryKeyMatch[1];
+    const key = decodeURIComponent(_agentMemoryKeyMatch[2]);
+    const deleted = deleteMemory(agentId, key);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, deleted }));
+    return;
+  }
 
   if (_agentsMatch && req.method === "POST") {
     const raw = await readBody(req);
@@ -2068,7 +2182,7 @@ const server = http.createServer(async (req, res) => {
       config = {},
       model = "claude-sonnet-4-6",
       system = "",
-      skills = [],
+      skill_ids = [],
     } = body;
     if (!name || !owner_id) {
       res.writeHead(400, { "content-type": "application/json" });
@@ -2112,7 +2226,7 @@ const server = http.createServer(async (req, res) => {
       vault_keys, setup_commands, max_runtime_minutes, on_failure,
       config, owner_id, status: "paused", description: description || null,
       harness: agentHarness,
-      skills: Array.isArray(skills) ? skills : [],
+      skill_ids: Array.isArray(skill_ids) ? skill_ids : [],
     });
     const host = req.headers.host || "localhost";
     res.writeHead(201, { "content-type": "application/json" });
@@ -2175,6 +2289,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     deleteAgent(agentId);
+    deleteAllMemory(agentId);   // an agent's memory dies with it
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -2265,14 +2380,21 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Resolve prompt templates ({{vault.X}} and {{config.X}})
+    // Compose the effective system prompt: skills catalog + attached skills +
+    // the agent's own system. The user message is the agent's `prompt` (task).
+    const attachedSkills = getSkillsByIds(agentDef.skill_ids || []);
+    const allSkills = listSkills();
+    let effectiveSystem = composeAgentSystem(agentDef.system, attachedSkills, allSkills) + memoryPromptNote(agentId);
+
+    // Resolve prompt templates ({{vault.X}} and {{config.X}}) in both the task
+    // prompt and the composed system prompt.
     const mergedConfig = Object.assign({}, agentDef.config || {}, configOverrides);
-    let resolvedPrompt = agentDef.prompt || agentDef.system || "";
+    let resolvedPrompt = (agentDef.prompt && agentDef.prompt.trim()) ? agentDef.prompt : "Proceed with your task.";
     try {
       if (vaultPlugin && vaultPlugin.backend) {
-        resolvedPrompt = await resolveTemplates(
-          resolvedPrompt, agentDef.owner_id || "default", mergedConfig, vaultPlugin.backend
-        );
+        const uid = agentDef.owner_id || "default";
+        resolvedPrompt = await resolveTemplates(resolvedPrompt, uid, mergedConfig, vaultPlugin.backend);
+        effectiveSystem = await resolveTemplates(effectiveSystem, uid, mergedConfig, vaultPlugin.backend);
       }
     } catch (e) {
       res.writeHead(422, { "content-type": "application/json" });
@@ -2280,10 +2402,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Surface attached skills to the agent: they already live on disk in the
-    // shared catalog (so opencode/cc discover them), and we append a note to
-    // the prompt so the model knows which to invoke.
-    resolvedPrompt += skillsPromptNote(agentDef.skills);
+    // Attached DB skills are composed into effectiveSystem above (full content),
+    // applied to the run session as its system prompt below.
 
     // Create ephemeral session for this run using the agent's configured harness
     const runHarness = agentDef.harness === "claude-code" ? "cc" : agentDef.harness === "github-copilot" ? "github-copilot" : agentDef.harness === "codex" ? "codex" : "opencode";
@@ -2326,12 +2446,15 @@ const server = http.createServer(async (req, res) => {
       }
       sessionAgent.set(runSid, "opencode");
       sessionHarness.set(runSid, "opencode");
+      // opencode applies the system prompt via the sessionSystemPrompt map.
+      if (effectiveSystem) sessionSystemPrompt.set(runSid, effectiveSystem);
     } else {
       runSid = `ses_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
       ccSessions.set(runSid, {
         id: runSid, title: `agent-run-${agentId}`,
         time: { created: runNow }, harness: agentDef.harness || "claude-code",
         sdkSessionId: null, abortController: null, history: [], busSubscribers: new Set(),
+        systemPrompt: effectiveSystem || null,   // composed DB skills + agent.system
       });
       sessionAgent.set(runSid, runHarness);
       sessionHarness.set(runSid, runHarness);
@@ -2561,8 +2684,17 @@ function startChild() {
     stdio: "inherit",
     env: process.env,
   });
-  child.on("exit", (code) => { log(`opencode serve exited (${code}) — shutting down`); process.exit(code ?? 1); });
+  currentChild = child;
+  child.on("exit", (code) => { currentChild = null; log(`opencode serve exited (${code}) — shutting down`); process.exit(code ?? 1); });
 }
+
+function killChild(signal) {
+  if (currentChild) { try { currentChild.kill(signal || "SIGTERM"); } catch {} }
+}
+
+process.on("SIGTERM", () => { killChild("SIGTERM"); process.exit(0); });
+process.on("SIGINT",  () => { killChild("SIGTERM"); process.exit(0); });
+process.on("exit",    () => { killChild("SIGTERM"); });
 
 async function waitChild() {
   for (let i = 0; i < 120; i++) {

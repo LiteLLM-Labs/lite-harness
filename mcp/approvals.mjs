@@ -49,7 +49,7 @@ function emit(type, props) {
  * @param {{ timeoutMs?: number, unref?: boolean }} [opts]
  * @returns {Promise<{ decision: "accept", args: object } | { decision: "reject", feedback: string }>}
  */
-export function requestApproval(tool, args, { timeoutMs = DEFAULT_TIMEOUT_MS, unref = true } = {}) {
+export function requestApproval(tool, args, { timeoutMs = DEFAULT_TIMEOUT_MS, unref = true, session = null } = {}) {
   const id = `appr_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
   const createdAt = Date.now();
 
@@ -58,7 +58,7 @@ export function requestApproval(tool, args, { timeoutMs = DEFAULT_TIMEOUT_MS, un
       if (!pending.has(id)) return;
       pending.delete(id);
       const feedback = "Approval request timed out — no human responded in time.";
-      emit("tool.approval.resolved", { id, tool, decision: "reject", feedback });
+      emit("tool.approval.resolved", { id, tool, sessionID: session, decision: "reject", feedback });
       resolve({ decision: "reject", feedback });
     }, timeoutMs);
     // Don't let a pending approval keep the process alive on its own.
@@ -68,6 +68,7 @@ export function requestApproval(tool, args, { timeoutMs = DEFAULT_TIMEOUT_MS, un
       id,
       tool,
       args,
+      session,
       createdAt,
       timer,
       resolve: (outcome) => {
@@ -76,13 +77,13 @@ export function requestApproval(tool, args, { timeoutMs = DEFAULT_TIMEOUT_MS, un
       },
     };
     pending.set(id, entry);
-    emit("tool.approval.requested", { id, tool, arguments: args, createdAt });
+    emit("tool.approval.requested", { id, tool, arguments: args, sessionID: session, createdAt });
   });
 }
 
 /** Public view of a pending entry (no internal handles). */
 function publicView(e) {
-  return { id: e.id, tool: e.tool, arguments: e.args, createdAt: e.createdAt };
+  return { id: e.id, tool: e.tool, arguments: e.args, sessionID: e.session ?? null, createdAt: e.createdAt };
 }
 
 /** @returns {Array<{ id: string, tool: string, arguments: object, createdAt: number }>} */
@@ -106,7 +107,7 @@ export function acceptApproval(id, editedArgs) {
   if (!entry) return false;
   pending.delete(id);
   const args = editedArgs && typeof editedArgs === "object" && !Array.isArray(editedArgs) ? editedArgs : entry.args;
-  emit("tool.approval.resolved", { id, tool: entry.tool, decision: "accept" });
+  emit("tool.approval.resolved", { id, tool: entry.tool, sessionID: entry.session ?? null, decision: "accept", arguments: args });
   entry.resolve({ decision: "accept", args });
   return true;
 }
@@ -123,7 +124,7 @@ export function rejectApproval(id, feedback) {
   if (!entry) return false;
   pending.delete(id);
   const fb = feedback || "";
-  emit("tool.approval.resolved", { id, tool: entry.tool, decision: "reject", feedback: fb });
+  emit("tool.approval.resolved", { id, tool: entry.tool, sessionID: entry.session ?? null, decision: "reject", feedback: fb });
   entry.resolve({ decision: "reject", feedback: fb });
   return true;
 }

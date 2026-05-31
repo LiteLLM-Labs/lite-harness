@@ -104,11 +104,76 @@ function initAgentSchema(db) {
     "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'paused'",
     "ALTER TABLE agents ADD COLUMN description TEXT",
     "ALTER TABLE agents ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude-code'",
-    "ALTER TABLE agents ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'",
+    // skill_ids — JSON array of skills.id attached to this agent.
+    "ALTER TABLE agents ADD COLUMN skill_ids TEXT NOT NULL DEFAULT '[]'",
   ];
   for (const sql of _newAgentCols) {
     try { db.exec(sql); } catch {}
   }
+}
+
+function initSkillSchema(db) {
+  // Skills are reusable capability docs (a name + markdown content, e.g. a
+  // SKILL.md) that exist independently and can be attached to agents via
+  // agents.skill_ids. Separating skills from an agent's own `system`/`prompt`
+  // lets one skill be shared across many agents.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT,
+      content     TEXT NOT NULL,
+      owner_id    TEXT,
+      created_at  INTEGER NOT NULL
+    )
+  `);
+}
+
+function initMemorySchema(db) {
+  // Agent memory — durable key→value notes an agent stores and recalls across
+  // sessions/runs. Scoped per agent_id; (agent_id, key) is unique so a repeated
+  // store under the same key overwrites (upsert). This is what the platform's
+  // memory_store / memory_get / memory_list / memory_delete tools read & write.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_memories (
+      id          TEXT PRIMARY KEY,
+      agent_id    TEXT NOT NULL,
+      key         TEXT NOT NULL,
+      value       TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL,
+      UNIQUE (agent_id, key)
+    )
+  `);
+  // Listing an agent's memory is the hot path — index the scope column.
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories(agent_id)"); } catch {}
+}
+
+function initInboxSchema(db) {
+  // Unified agent-inbox items. Two kinds share one table:
+  //   kind='approval' — a human-in-the-loop tool-call gate (request_human_approval).
+  //                     status: 'pending' → 'accepted' | 'rejected'.
+  //   kind='issue'    — an informational issue an agent filed for a human to read.
+  //                     status: 'open' → 'resolved'.
+  // The live blocking promise for an approval lives in mcp/approvals.mjs; this
+  // table is the durable record so the Inbox can show resolved history too.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inbox_items (
+      id          TEXT PRIMARY KEY,
+      kind        TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      session_id  TEXT,
+      agent       TEXT,
+      body        TEXT,
+      args_json   TEXT,
+      status      TEXT NOT NULL,
+      feedback    TEXT,
+      created_at  INTEGER NOT NULL,
+      resolved_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS inbox_items_status_created
+      ON inbox_items(status, created_at);
+  `);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -176,6 +241,9 @@ export function initDb(dbPath) {
   try { _db.exec("ALTER TABLE loops ADD COLUMN tz TEXT"); } catch {}
   initSessionSchema(_db);
   initAgentSchema(_db);
+  initSkillSchema(_db);
+  initMemorySchema(_db);
+  initInboxSchema(_db);
   initAgentFilesSchema(_db);
   // Migrate sandbox_id onto agent_runs if not present
   try { _db.exec("ALTER TABLE agent_runs ADD COLUMN sandbox_id TEXT"); } catch {}

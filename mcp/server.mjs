@@ -22,7 +22,7 @@ function jsonRpcError(id, code, message) {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
-export async function handleMcpRequest(body) {
+export async function handleMcpRequest(body, ctx = {}) {
   const { method, id, params } = body;
 
   switch (method) {
@@ -47,7 +47,7 @@ export async function handleMcpRequest(body) {
       const entry = toolRegistry.get(name);
       if (!entry) return jsonRpcError(id, -32601, `Unknown tool: ${name}`);
       try {
-        const result = await entry.handler(args);
+        const result = await entry.handler(args, ctx);
         return jsonRpc(id, { content: [{ type: "text", text: JSON.stringify(result) }] });
       } catch (e) {
         return jsonRpc(id, { content: [{ type: "text", text: e.message }], isError: true });
