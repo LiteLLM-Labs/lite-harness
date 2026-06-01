@@ -1,6 +1,8 @@
 # lite-harness
 
-Deploy agents from any AI coding agent (Claude Code, Codex, OpenCode) to a unified server, for use across your team. Agents are available through CLI, API (Open-code API Spec), and Slack.
+The open agent runtime. Run any coding agent (Claude Code, Codex, OpenCode), on any model, as a portable service your whole team can use.
+This runtime normalizes the harness, the sandbox, and the model behind one interface, so the choice of model and the choice of coding agent become routing decisions instead of lock-in. Claude Code, Codex, OpenCode, GitHub Copilot, all behind one OpenCode-compatible API, with shared MCP tools, prompts, and sessions. One Dockerfile. Yours to run.
+
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
