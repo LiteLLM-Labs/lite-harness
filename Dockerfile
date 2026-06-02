@@ -161,6 +161,7 @@ ENV PATH="/opt/lap/codex/node_modules/.bin:${PATH}"
 # github-copilot harness uses native fetch — no separate node_modules stage needed
 
 COPY --chown=sandbox:sandbox harnesses/inline-adapter.mjs /opt/lap/inline-adapter.mjs
+COPY --chown=sandbox:sandbox harnesses/harness-sdk.mjs /opt/lap/harness-sdk.mjs
 COPY --chown=sandbox:sandbox harnesses/plugin-registry.mjs /opt/lap/plugin-registry.mjs
 COPY --chown=sandbox:sandbox harnesses/vault-backend.mjs /opt/lap/vault-backend.mjs
 COPY --chown=sandbox:sandbox harnesses/vault-plugin.mjs /opt/lap/vault-plugin.mjs
