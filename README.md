@@ -22,20 +22,20 @@ git clone https://github.com/LiteLLM-Labs/lite-harness.git
 cd lite-harness
 
 # install the backend server's deps once — the SDK auto-spawns it from the clone
-( cd src/sdk/server && npm install )
+npm install --prefix src/sdk/server
 
-# pick a model: point at a LiteLLM gateway…
-export LITELLM_API_BASE=https://litellm.your-company.com/v1
-export LITELLM_API_KEY=sk-litellm-...
-# …or go direct to a vendor:
-#   export ANTHROPIC_API_KEY=sk-ant-...   # for harness "claude"
-#   export OPENAI_API_KEY=sk-...          # for harness "openai"
+# pick a model — set the key for your provider:
+export ANTHROPIC_API_KEY=sk-ant-...   # for harness "claude"
+export OPENAI_API_KEY=sk-...          # for harness "openai"
+# …or point at a LiteLLM gateway instead:
+#   export LITELLM_API_BASE=https://litellm.your-company.com/v1
+#   export LITELLM_API_KEY=sk-litellm-...
 ```
 
 ## TypeScript Usage
 
 ```bash
-( cd src/sdk/typescript && npm install && npm run build )
+npm install --prefix src/sdk/typescript && npm run build --prefix src/sdk/typescript
 # import "@lite-harness/sdk" from your project after `npm link`, or from dist/
 ```
 
