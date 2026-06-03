@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from lite_harness import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -45,6 +49,35 @@ async def test_query_resolves_via_env(fake_server_env: None) -> None:
     messages = [m async for m in query(prompt="env-prompt")]
     assert isinstance(messages[-1], ResultMessage)
     assert messages[-1].result == "echo: env-prompt"
+
+
+async def test_query_resolves_bundled_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITE_HARNESS_SERVER", raising=False)
+    opts = ClaudeAgentOptions(agent="codex", model="mock-x")
+    messages = [m async for m in query(prompt="bundled default", options=opts)]
+    assert isinstance(messages[-1], ResultMessage)
+    assert messages[-1].result == (
+        "Mock reply from codex using mock-x: bundled default"
+    )
+
+
+async def test_query_honors_cli_path_and_extra_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITE_HARNESS_SERVER", raising=False)
+    server = Path(__file__).parents[2] / "server" / "mock-server.mjs"
+    opts = ClaudeAgentOptions(
+        cli_path=server,
+        extra_args={"agent": "codex"},
+        model="mock-y",
+    )
+    messages = [m async for m in query(prompt="explicit executable", options=opts)]
+    assert isinstance(messages[-1], ResultMessage)
+    assert messages[-1].result == (
+        "Mock reply from codex using mock-y: explicit executable"
+    )
 
 
 async def test_query_with_options(fake_server_command: list[str]) -> None:
