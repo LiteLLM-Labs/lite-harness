@@ -58,7 +58,7 @@ def test_options_to_wire_drops_transport_only_fields() -> None:
     opts = AgentOptions(
         model="m",
         stderr=lambda s: None,
-        harness="openai-agents",
+        harness="openai",
         agent="codex",
         cwd="/tmp",
     )
@@ -66,6 +66,6 @@ def test_options_to_wire_drops_transport_only_fields() -> None:
     assert "stderr" not in wire
     assert "harness" not in wire
     assert "agent" not in wire
-    assert opts.selected_harness == "openai-agents"
+    assert opts.selected_harness == "openai"
     assert wire["model"] == "m"
     assert wire["cwd"] == "/tmp"

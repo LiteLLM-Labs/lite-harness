@@ -89,7 +89,7 @@ test("harness option is accepted as the primary runtime selector", async () => {
   const q = query({
     prompt: "harness",
     options: {
-      harness: "openai-agents",
+      harness: "openai",
       model: "gpt-5.5",
       env: { ...process.env, LITE_HARNESS_SERVER: `node ${fakeServer}` },
     },

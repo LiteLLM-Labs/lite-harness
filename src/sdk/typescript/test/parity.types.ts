@@ -18,7 +18,7 @@ import type { AgentOptions, Options } from "../types.js";
 const _full: AgentOptions = {
   abortController: new AbortController(),
   additionalDirectories: [],
-  harness: "openai-agents",
+  harness: "openai",
   agent: "codex",
   agentProgressSummaries: true,
   agents: {},
