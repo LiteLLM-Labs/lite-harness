@@ -5,7 +5,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { toFrames } from "./transformation.mjs";
 
 export const id = "anthropic";
-export const aliases = ["claude", "claude-code", "cc"];
+export const aliases = ["claude-agent", "claude", "claude-code", "cc"];
 
 // LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
 // route the SDK (and the claude CLI it drives) through the gateway; otherwise
