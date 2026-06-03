@@ -1,7 +1,6 @@
 # lite-harness
 
-Call all implemented agent harnesses using the Claude Agent SDK format: Claude
-Agent SDK and OpenAI Agents.
+Call all agent harnesses using the Claude Agent SDK format.
 
 lite-harness manages:
 
