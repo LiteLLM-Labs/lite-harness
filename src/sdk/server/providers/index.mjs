@@ -64,3 +64,24 @@ export async function resolveProvider(agent) {
   }
   return mod;
 }
+
+export async function listProviderMetadata() {
+  const map = await loadProviders();
+  const seen = new Set();
+  const providers = [];
+
+  for (const mod of map.values()) {
+    if (seen.has(mod.id)) continue;
+    seen.add(mod.id);
+    const aliases = Array.isArray(mod.aliases) ? mod.aliases.filter((alias) => typeof alias === "string") : [];
+    const models = Array.isArray(mod.models) ? mod.models.filter((model) => typeof model === "string") : [];
+    providers.push({
+      id: mod.harnessId || mod.id,
+      providerId: mod.id,
+      name: mod.displayName || mod.id,
+      aliases,
+    });
+  }
+
+  return providers.sort((a, b) => a.name.localeCompare(b.name));
+}

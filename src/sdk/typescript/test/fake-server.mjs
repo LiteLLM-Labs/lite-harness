@@ -20,8 +20,8 @@ function send(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-function controlResponse(requestId) {
-  send({ type: "control_response", response: { request_id: requestId, subtype: "success" } });
+function controlResponse(requestId, fields = {}) {
+  send({ type: "control_response", response: { request_id: requestId, subtype: "success", ...fields } });
 }
 
 function emitTurn(prompt) {
@@ -72,6 +72,25 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.type === "control_request") {
+    if (msg.request?.subtype === "list_harnesses") {
+      controlResponse(msg.request_id, {
+        harnesses: [
+          {
+            id: "claude-code",
+            providerId: "anthropic",
+            name: "Claude Code",
+            aliases: ["claude", "cc"],
+          },
+          {
+            id: "codex",
+            providerId: "codex",
+            name: "Codex",
+            aliases: ["openai"],
+          },
+        ],
+      });
+      return;
+    }
     // Every control subtype (initialize/interrupt/set_permission_mode/set_model)
     // is acknowledged the same way: success echoing the request_id.
     controlResponse(msg.request_id);

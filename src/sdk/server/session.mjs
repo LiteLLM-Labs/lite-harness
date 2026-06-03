@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { systemInit, resultFrame } from "./protocol.mjs";
+import { listProviderMetadata } from "./providers/index.mjs";
 
 // ---------------------------------------------------------------------------
 // Session owns all process-local turn state. The wire (protocol.mjs) calls
@@ -50,6 +51,8 @@ export class Session {
         this.model = request.model || this.model;
         this.runtime.setModel?.(this.model);
         return;
+      case "list_harnesses":
+        return { harnesses: await listProviderMetadata() };
       default:
         throw new Error(`unsupported control request subtype: ${request.subtype}`);
     }

@@ -7,6 +7,8 @@ import { createEventTransformer } from "./transformation.mjs";
 
 export const id = "codex";
 export const aliases = ["openai-agents", "openai"];
+export const harnessId = "codex";
+export const displayName = "Codex";
 
 // LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
 // route the Codex CLI through the gateway. Otherwise the CLI's own OPENAI_API_KEY

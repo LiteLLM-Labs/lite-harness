@@ -67,9 +67,9 @@ export function contentToText(content) {
 // ---------------------------------------------------------------------------
 // Canonical frame builders — the one place the PROTOCOL.md wire shapes live.
 // ---------------------------------------------------------------------------
-export function controlResponse(requestId, { error } = {}) {
+export function controlResponse(requestId, { error, ...fields } = {}) {
   return error === undefined
-    ? { type: "control_response", response: { request_id: requestId, subtype: "success" } }
+    ? { type: "control_response", response: { request_id: requestId, subtype: "success", ...fields } }
     : {
         type: "control_response",
         response: { request_id: requestId, subtype: "error", error: String(error) },
@@ -162,8 +162,8 @@ export class StreamJsonServer {
     const requestId = msg.request_id;
     const request = msg.request && typeof msg.request === "object" ? msg.request : {};
     try {
-      await this.session.handleControl(request);
-      this.write(controlResponse(requestId));
+      const result = await this.session.handleControl(request);
+      this.write(controlResponse(requestId, result && typeof result === "object" ? result : undefined));
     } catch (err) {
       this.write(controlResponse(requestId, { error: err instanceof Error ? err.message : err }));
     }

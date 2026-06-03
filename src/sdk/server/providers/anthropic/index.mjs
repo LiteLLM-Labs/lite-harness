@@ -6,6 +6,8 @@ import { toFrames } from "./transformation.mjs";
 
 export const id = "anthropic";
 export const aliases = ["claude-agent", "claude", "claude-code", "cc"];
+export const harnessId = "claude-code";
+export const displayName = "Claude Code";
 
 // LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
 // route the SDK (and the claude CLI it drives) through the gateway; otherwise
