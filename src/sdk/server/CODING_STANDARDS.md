@@ -36,10 +36,13 @@ boring, and cheap to start.
 
 ## Routing
 
-- All providers route through the **LiteLLM gateway**, never a vendor endpoint
-  directly. Anthropic via `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`; OpenAI-style
-  via a default client at the LiteLLM `/v1` base. Honor a pre-set base URL.
-- Models keep the `provider/model` convention; pass through to LiteLLM as given.
+- LiteLLM is **optional**. A provider may go straight to its vendor endpoint.
+- **Only when both `LITELLM_API_BASE` and `LITELLM_API_KEY` are set**, route
+  through the gateway: anthropic via `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`;
+  OpenAI-style via a default client at the LiteLLM `/v1` base. Otherwise leave
+  the native SDK's own env/client in place (direct via `ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY`). A pre-set `ANTHROPIC_BASE_URL` is always honored.
+- Models keep the `provider/model` convention; pass through as given.
 
 ## Comments
 
@@ -63,9 +66,10 @@ boring, and cheap to start.
 
 ## Tests
 
-- Tests live under `tests/` mirroring the source tree **1:1** (e.g.
-  `tests/providers/codex/transformation.test.mjs`), to keep core uncluttered.
-- `node:test` + `node:assert/strict`. Run with `npm test` (`node --test`).
+- Tests live in the **repo-root `tests/`** folder, mirroring the full source
+  path **1:1** (e.g. `tests/src/sdk/server/providers/codex/transformation.test.mjs`),
+  to keep core uncluttered.
+- `node:test` + `node:assert/strict`. Run with `npm test` from this dir.
 - Unit tests hit **no network**. Test pure transformations against **captured**
   native-event fixtures. Cover control dispatch, ordered/streamed frames, and
   provider discovery before adding behavior.
