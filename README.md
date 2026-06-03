@@ -15,11 +15,28 @@ lite-harness manages:
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
-## TypeScript Usage
+## Setup (clone)
 
 ```bash
 git clone https://github.com/LiteLLM-Labs/lite-harness.git
 cd lite-harness
+
+# install the backend server's deps once — the SDK auto-spawns it from the clone
+( cd src/sdk/server && npm install )
+
+# pick a model: point at a LiteLLM gateway…
+export LITELLM_API_BASE=https://litellm.your-company.com/v1
+export LITELLM_API_KEY=sk-litellm-...
+# …or go direct to a vendor:
+#   export ANTHROPIC_API_KEY=sk-ant-...   # for harness "claude"
+#   export OPENAI_API_KEY=sk-...          # for harness "openai"
+```
+
+## TypeScript Usage
+
+```bash
+( cd src/sdk/typescript && npm install && npm run build )
+# import "@lite-harness/sdk" from your project after `npm link`, or from dist/
 ```
 
 ```ts
@@ -47,9 +64,7 @@ for await (const message of query({
 ## Python Usage
 
 ```bash
-git clone https://github.com/LiteLLM-Labs/lite-harness.git
-cd lite-harness
-export PYTHONPATH="$PWD/src/sdk/python:$PYTHONPATH"
+pip install -e src/sdk/python      # editable install of the client (Python 3.10+)
 ```
 
 ```python
