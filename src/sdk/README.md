@@ -28,51 +28,22 @@ you want central model routing, keys, budgets, logs, or fallbacks.
 
 ## Python
 
-### Python: quickstart with Claude Agent SDK
+### Python: quickstart
 
-Start with the native Anthropic SDK:
-
-```bash
-pip install claude-agent-sdk
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-```python
-from claude_agent_sdk import query, ClaudeAgentOptions
-
-async for message in query(
-    prompt="What is 2 + 2?",
-    options=ClaudeAgentOptions(
-        cwd=".",
-        model="claude-sonnet-4-5",
-    ),
-):
-    print(message)
-```
-
-### Python: migrate to lite-harness SDK
-
-Install the lite-harness SDK and change the import:
+Install the SDK and set provider keys for the harnesses you want to use:
 
 ```bash
 pip install lite-agent-sdk
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-openai-...
 ```
-
-```python
-# before
-from claude_agent_sdk import query, ClaudeAgentOptions
-
-# after
-from lite_agent_sdk import query, ClaudeAgentOptions
-```
-
-The same call now runs through the selected harness:
 
 ```python
 from lite_agent_sdk import query, ClaudeAgentOptions
 
+# Claude Agent SDK harness
 async for message in query(
-    prompt="What is 2 + 2?",
+    prompt="Hello from Claude",
     options=ClaudeAgentOptions(
         harness="claude-agent",
         cwd=".",
@@ -80,15 +51,10 @@ async for message in query(
     ),
 ):
     print(message)
-```
 
-### Python: switch to OpenAI Agents
-
-```python
-from lite_agent_sdk import query, ClaudeAgentOptions
-
+# OpenAI Agents harness
 async for message in query(
-    prompt="Inspect this repo and suggest the next test to write.",
+    prompt="Hello from OpenAI Agents",
     options=ClaudeAgentOptions(
         harness="openai-agents",
         cwd=".",
@@ -96,15 +62,10 @@ async for message in query(
     ),
 ):
     print(message)
-```
 
-### Python: switch to Pi AI
-
-```python
-from lite_agent_sdk import query, ClaudeAgentOptions
-
+# Pi AI harness
 async for message in query(
-    prompt="Review this SDK README and make it sharper.",
+    prompt="Hello from Pi AI",
     options=ClaudeAgentOptions(
         harness="pi-ai",
         cwd=".",
@@ -112,6 +73,18 @@ async for message in query(
     ),
 ):
     print(message)
+```
+
+### Python: migrate from Claude Agent SDK
+
+If you already use Claude Agent SDK, change the import and add `harness`.
+
+```python
+# before
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+# after
+from lite_agent_sdk import query, ClaudeAgentOptions
 ```
 
 ### Python: use LiteLLM AI Gateway
@@ -142,52 +115,22 @@ async for message in query(
 
 ## JavaScript / TypeScript
 
-### JavaScript: quickstart with Claude Agent SDK
+### JavaScript: quickstart
 
-Start with the native Anthropic SDK:
-
-```bash
-npm install @anthropic-ai/claude-agent-sdk
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-```ts
-import { query } from "@anthropic-ai/claude-agent-sdk";
-
-for await (const message of query({
-  prompt: "What is 2 + 2?",
-  options: {
-    cwd: ".",
-    model: "claude-sonnet-4-5"
-  }
-})) {
-  console.log(message);
-}
-```
-
-### JavaScript: migrate to lite-harness SDK
-
-Install the lite-harness SDK and change the import:
+Install the SDK and set provider keys for the harnesses you want to use:
 
 ```bash
 npm install @lite-harness/sdk
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-openai-...
 ```
-
-```ts
-// before
-import { query } from "@anthropic-ai/claude-agent-sdk";
-
-// after
-import { query } from "@lite-harness/sdk";
-```
-
-The same call now runs through the selected harness:
 
 ```ts
 import { query } from "@lite-harness/sdk";
 
+// Claude Agent SDK harness
 for await (const message of query({
-  prompt: "What is 2 + 2?",
+  prompt: "Hello from Claude",
   options: {
     harness: "claude-agent",
     cwd: ".",
@@ -196,15 +139,10 @@ for await (const message of query({
 })) {
   console.log(message);
 }
-```
 
-### JavaScript: switch to OpenAI Agents
-
-```ts
-import { query } from "@lite-harness/sdk";
-
+// OpenAI Agents harness
 for await (const message of query({
-  prompt: "Inspect this repo and suggest the next test to write.",
+  prompt: "Hello from OpenAI Agents",
   options: {
     harness: "openai-agents",
     cwd: ".",
@@ -213,15 +151,10 @@ for await (const message of query({
 })) {
   console.log(message);
 }
-```
 
-### JavaScript: switch to Pi AI
-
-```ts
-import { query } from "@lite-harness/sdk";
-
+// Pi AI harness
 for await (const message of query({
-  prompt: "Review this SDK README and make it sharper.",
+  prompt: "Hello from Pi AI",
   options: {
     harness: "pi-ai",
     cwd: ".",
@@ -230,6 +163,18 @@ for await (const message of query({
 })) {
   console.log(message);
 }
+```
+
+### JavaScript: migrate from Claude Agent SDK
+
+If you already use Claude Agent SDK, change the import and add `harness`.
+
+```ts
+// before
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+// after
+import { query } from "@lite-harness/sdk";
 ```
 
 ### JavaScript: use LiteLLM AI Gateway
