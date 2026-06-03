@@ -31,7 +31,7 @@ The SDK spawns the server in stream-json mode, mirroring the CLI:
          [--agent <agent>] [--model <model>] [--permission-mode <mode>] [--cwd <dir>]
 ```
 
-`--agent` selects the lite-harness runtime (e.g. `codex`, `pi-ai`); it mirrors
+`--agent` selects the lite-harness runtime (e.g. `claude`, `openai`); it mirrors
 the Claude Agent SDK's own optional `agent` option and is omitted when unset (the
 server picks its default). Everything else matches the CLI flags. Options that
 have no flag are applied at runtime via control requests (below). Server command resolution: explicit arg →

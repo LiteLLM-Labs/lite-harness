@@ -59,7 +59,7 @@ The spawn command is resolved in order (per `PROTOCOL.md`):
 ## lite-harness extension
 
 `AgentOptions.harness` selects the agent harness, for example
-`"claude-agent"`, `"openai-agents"`, or `"pi-ai"`.
+`"claude"` or `"openai"`.
 
 ## Unknown wire shapes
 

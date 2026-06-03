@@ -54,7 +54,7 @@ export interface AgentOptions {
   /** Abort controller to cancel an in-flight run. */
   abortController?: AbortController;
 
-  /** Select the agent harness (e.g. "claude-agent", "openai-agents", "pi-ai"). */
+  /** Select the agent harness (e.g. "claude", "openai"). */
   harness?: string;
   /** Backward-compatible alias. `harness` wins when both are provided. */
   agent?: string;
