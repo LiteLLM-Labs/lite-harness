@@ -7,7 +7,7 @@ import OpenAI from "openai";
 import { eventToFrames } from "./transformation.mjs";
 
 export const id = "codex";
-export const aliases = ["openai"];
+export const aliases = ["openai-agents", "openai"];
 
 // LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
 // route through the gateway's OpenAI-compatible /v1 (chat-completions surface).
