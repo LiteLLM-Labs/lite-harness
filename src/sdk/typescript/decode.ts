@@ -131,6 +131,12 @@ export function decodeMessage(raw: unknown): SDKMessage {
         parent_tool_use_id:
           typeof raw.parent_tool_use_id === "string" ? raw.parent_tool_use_id : null,
       };
+      if (typeof raw.session_id === "string") {
+        message.session_id = raw.session_id;
+      }
+      if (typeof raw.uuid === "string") {
+        message.uuid = raw.uuid;
+      }
       return message;
     }
 
@@ -143,6 +149,12 @@ export function decodeMessage(raw: unknown): SDKMessage {
         parent_tool_use_id:
           typeof raw.parent_tool_use_id === "string" ? raw.parent_tool_use_id : null,
       };
+      if (typeof raw.session_id === "string") {
+        message.session_id = raw.session_id;
+      }
+      if (typeof raw.uuid === "string") {
+        message.uuid = raw.uuid;
+      }
       return message;
     }
 

@@ -198,4 +198,118 @@ export interface Options {
    * and forwarded opaquely / not yet honored.
    */
   tools?: string[] | { type: "preset"; preset: string };
+
+  /**
+   * Emit per-subagent progress summaries. Accepted for drop-in compat and
+   * forwarded opaquely / not yet honored.
+   */
+  agentProgressSummaries?: unknown;
+  /**
+   * Skip permission prompts (dangerous). Accepted for drop-in compat and
+   * forwarded opaquely / not yet honored.
+   */
+  allowDangerouslySkipPermissions?: boolean;
+  /**
+   * Path to a debug-log file. Accepted for drop-in compat and forwarded
+   * opaquely / not yet honored.
+   */
+  debugFile?: string;
+  /**
+   * Executable used to launch the runtime (e.g. "node"). Accepted for drop-in
+   * compat and forwarded opaquely / not yet honored.
+   */
+  executable?: string;
+  /**
+   * Extra args for {@link executable}. Accepted for drop-in compat and
+   * forwarded opaquely / not yet honored.
+   */
+  executableArgs?: string[];
+  /**
+   * Forward subagent text output to the parent stream. Accepted for drop-in
+   * compat and forwarded opaquely / not yet honored.
+   */
+  forwardSubagentText?: unknown;
+  /**
+   * Timeout (ms) for the server to finish loading. Accepted for drop-in compat
+   * and forwarded opaquely / not yet honored.
+   */
+  loadTimeoutMs?: number;
+  /**
+   * Managed (enterprise) settings. Complex/opaque shape; accepted for drop-in
+   * compat and forwarded opaquely / not yet honored.
+   */
+  managedSettings?: unknown;
+  /**
+   * Elicitation callback (interactive prompts from the server). Accepted for
+   * drop-in compat and forwarded opaquely / not yet honored.
+   */
+  onElicitation?: (...args: unknown[]) => unknown;
+  /**
+   * Explicit path to the Claude Code executable. Accepted for drop-in compat
+   * and forwarded opaquely / not yet honored.
+   */
+  pathToClaudeCodeExecutable?: string;
+  /**
+   * Prompt-suggestion configuration. Complex/opaque shape; accepted for drop-in
+   * compat and forwarded opaquely / not yet honored.
+   */
+  promptSuggestions?: unknown;
+  /**
+   * Custom process spawner for the Claude Code runtime. Complex/opaque shape;
+   * accepted for drop-in compat and forwarded opaquely / not yet honored.
+   */
+  spawnClaudeCodeProcess?: unknown;
+  /**
+   * Per-run task budget. Complex/opaque shape; accepted for drop-in compat and
+   * forwarded opaquely / not yet honored.
+   */
+  taskBudget?: unknown;
+  /**
+   * Human-readable session title. Accepted for drop-in compat and forwarded
+   * opaquely / not yet honored.
+   */
+  title?: string;
+  /**
+   * Tool name aliases. Complex/opaque shape; accepted for drop-in compat and
+   * forwarded opaquely / not yet honored.
+   */
+  toolAliases?: unknown;
+  /**
+   * Per-tool configuration. Complex/opaque shape; accepted for drop-in compat
+   * and forwarded opaquely / not yet honored.
+   */
+  toolConfig?: unknown;
 }
+
+// ---------------------------------------------------------------------------
+// Compatibility stand-in types
+// ---------------------------------------------------------------------------
+// These are PERMISSIVE stand-ins, NOT full upstream models. They exist so
+// drop-in consumers can `import type { CanUseTool } from "@lite-harness/sdk"`
+// and have it resolve. Objects are `Record<string, unknown>` / `unknown` and
+// callbacks are loose `(...args: unknown[]) => …`. lite-harness does not yet
+// honor these behaviors; the types only preserve import compatibility.
+
+/** Permission decision returned by a {@link CanUseTool} callback. */
+export type PermissionResult = Record<string, unknown>;
+
+/** A single permission-update directive. */
+export type PermissionUpdate = Record<string, unknown>;
+
+/** Programmatic tool-permission callback. */
+export type CanUseTool = (...args: unknown[]) => Promise<PermissionResult> | PermissionResult;
+
+/** Lifecycle hook event name. */
+export type HookEvent = string;
+
+/** A lifecycle hook callback. */
+export type HookCallback = (...args: unknown[]) => Promise<unknown> | unknown;
+
+/** MCP server configuration entry. */
+export type McpServerConfig = Record<string, unknown>;
+
+/** A named agent definition. */
+export type AgentDefinition = Record<string, unknown>;
+
+/** A source from which settings may be loaded (e.g. "user", "project"). */
+export type SettingSource = string;
