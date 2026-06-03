@@ -1,5 +1,52 @@
 # Harness Architecture
 
+## System overview
+
+```
+                         Model providers
+                  (OpenAI, Anthropic, Bedrock, ...)
+                                ▲
+                                │ model traffic
+                    ┌───────────┴───────────┐
+                    │ LiteLLM gateway        │
+                    │ or litellm-rust        │
+                    │ • model routing        │
+                    │ • provider auth        │
+                    │ • usage / limits       │
+                    └───────────┬───────────┘
+                                │
+Web UI ───────┐                 │
+CLI ──────────┼──▶ unified adapter (:4096)
+Slack ────────┤    • REST API / OpenCode API
+HTTP clients ─┘    • Web UI + SSE events
+                   • sessions + agents
+                   • model list proxy
+                   │
+                   ├──▶ Agent harness server
+                   │     • opencode child (:4097)
+                   │     • claude-code SDK
+                   │     • codex
+                   │     • github-copilot
+                   │
+                   ├──▶ MCP Gateway (/mcp)
+                   │     • save_agent
+                   │     • memory
+                   │     • request_human_approval
+                   │     • file_issue
+                   │
+                   ├──▶ Credential vault
+                   │     • encrypted runtime secrets
+                   │     • per-agent vault keys
+                   │
+                   └──▶ Sandboxing
+                         • E2B
+                         • Daytona
+                         • LAP platform
+
+Human review loop:
+agent tool call ─▶ MCP Gateway ─▶ Inbox UI ─▶ accept / reject / resolve
+```
+
 ## How harness selection works
 
 The harness is a **per-session, immutable property** set at session creation time.
