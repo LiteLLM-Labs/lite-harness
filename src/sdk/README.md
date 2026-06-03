@@ -1,7 +1,7 @@
 # lite-harness SDK
 
-Call every agent harness using one SDK: Claude Agent SDK, OpenAI Agents, and
-Pi AI.
+Call every implemented agent harness using one SDK: Claude Agent SDK and OpenAI
+Agents.
 
 lite-harness SDK manages:
 
@@ -31,7 +31,7 @@ const prompt = "Fix the failing test";
 // Claude Agent SDK harness
 for await (const message of query({
   prompt,
-  options: { harness: "claude-agent", model: "claude-opus-4-8" },
+  options: { harness: "claude", model: "claude-opus-4-8" },
 })) {
   console.log(message);
 }
@@ -39,15 +39,7 @@ for await (const message of query({
 // OpenAI Agents harness
 for await (const message of query({
   prompt,
-  options: { harness: "openai-agents", model: "gpt-5.5" },
-})) {
-  console.log(message);
-}
-
-// Pi AI harness
-for await (const message of query({
-  prompt,
-  options: { harness: "pi-ai", model: "claude-opus-4-8" },
+  options: { harness: "openai", model: "gpt-5.5" },
 })) {
   console.log(message);
 }
@@ -69,36 +61,26 @@ prompt = "Fix the failing test"
 # Claude Agent SDK harness
 async for message in query(
     prompt=prompt,
-    options=AgentOptions(harness="claude-agent", model="claude-opus-4-8"),
+    options=AgentOptions(harness="claude", model="claude-opus-4-8"),
 ):
     print(message)
 
 # OpenAI Agents harness
 async for message in query(
     prompt=prompt,
-    options=AgentOptions(harness="openai-agents", model="gpt-5.5"),
-):
-    print(message)
-
-# Pi AI harness
-async for message in query(
-    prompt=prompt,
-    options=AgentOptions(harness="pi-ai", model="claude-opus-4-8"),
+    options=AgentOptions(harness="openai", model="gpt-5.5"),
 ):
     print(message)
 ```
 
 ## Supported Harnesses
 
-- `claude-agent`: Claude Agent SDK / Claude Code behavior.
+- `claude`: Claude Agent SDK / Claude Code behavior.
   Upstream: [Python](https://github.com/anthropics/claude-agent-sdk-python),
   [TypeScript](https://github.com/anthropics/claude-agent-sdk-typescript).
-- `openai-agents`: OpenAI Agents SDK behavior.
+- `openai`: OpenAI Agents SDK behavior.
   Upstream: [Python](https://github.com/openai/openai-agents-python),
   [TypeScript](https://github.com/openai/openai-agents-js).
-- `pi-ai`: Pi AI coding-agent harness.
-  Upstream: [GitHub](https://github.com/earendil-works/pi),
-  [SDK docs](https://pi.dev/docs/latest/sdk).
 
 ## With LiteLLM AI Gateway
 
@@ -116,7 +98,7 @@ import { query } from "@lite-harness/sdk";
 for await (const message of query({
   prompt: "Debug this production trace",
   options: {
-    harness: "openai-agents",
+    harness: "openai",
     model: "anthropic/claude-opus-4-8",
   },
 })) {
@@ -138,7 +120,7 @@ from lite_harness import query, AgentOptions
 async for message in query(
     prompt="Use the docs MCP to answer this.",
     options=AgentOptions(
-        harness="claude-agent",
+        harness="claude",
         model="claude-opus-4-8",
         mcp_servers={
             "docs": {
@@ -162,7 +144,7 @@ import { query } from "@lite-harness/sdk";
 for await (const message of query({
   prompt: "Use the docs MCP to answer this.",
   options: {
-    harness: "claude-agent",
+    harness: "claude",
     model: "claude-opus-4-8",
     mcpServers: {
       docs: {

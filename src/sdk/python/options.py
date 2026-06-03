@@ -2,8 +2,8 @@
 
 :class:`AgentOptions` is the lite-harness public options type. It accepts the
 Claude Agent SDK option field set for migration compatibility, plus
-``harness`` for choosing the agent harness (for example ``"claude-agent"``,
-``"openai-agents"``, or ``"pi-ai"``).
+``harness`` for choosing the agent harness (for example ``"claude"`` or
+``"openai"``).
 
 Many advanced upstream fields (hooks, MCP SDK servers, sandbox, plugins, ...)
 are accepted for compatibility but are not yet honored by every harness.
@@ -102,7 +102,7 @@ class AgentOptions:
 
     # -- lite-harness extension -------------------------------------------
     # Selects which agent harness should handle the run
-    # (e.g. "claude-agent", "openai-agents", "pi-ai").
+    # (e.g. "claude", "openai").
     harness: str | None = None
     # Backward-compatible alias accepted by older docs/builds and upstream
     # Claude Agent SDK callers. ``harness`` wins when both are provided.
