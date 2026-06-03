@@ -2,8 +2,8 @@
  * Compile-time superset assertion. TYPE-ONLY: this file is type-checked by
  * `npm run typecheck` but never compiled to `dist` and never executed.
  *
- * It constructs a single `Options` literal that uses EVERY field name in our
- * public `Options` type with a valid sample value. If a field is removed or
+ * It constructs a single `AgentOptions` literal that uses EVERY field name in
+ * our public `AgentOptions` type with a valid sample value. If a field is removed or
  * renamed, this literal stops type-checking and the build breaks — which is
  * exactly the parity guard we want.
  *
@@ -13,11 +13,12 @@
  * (when installed) is covered separately by `parity.test.mjs`.
  */
 
-import type { Options } from "../types.js";
+import type { AgentOptions, Options } from "../types.js";
 
-const _full: Options = {
+const _full: AgentOptions = {
   abortController: new AbortController(),
   additionalDirectories: [],
+  harness: "openai-agents",
   agent: "codex",
   agentProgressSummaries: true,
   agents: {},
@@ -80,3 +81,6 @@ const _full: Options = {
 };
 
 void _full;
+
+const _compat: Options = _full;
+void _compat;

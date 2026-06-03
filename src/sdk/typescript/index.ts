@@ -17,7 +17,7 @@
 export { query } from "./query.js";
 export type { Query } from "./query.js";
 
-export type { Options, PermissionMode } from "./types.js";
+export type { AgentOptions, Options, PermissionMode } from "./types.js";
 
 // Permissive compatibility stand-in types (NOT full upstream models). Exported
 // so drop-in consumers' `import type { CanUseTool } from "@lite-harness/sdk"`

@@ -29,7 +29,7 @@ from messages import (
     SystemMessage,
     UserMessage,
 )
-from options import ClaudeAgentOptions, PermissionMode
+from options import AgentOptions, ClaudeAgentOptions, PermissionMode
 from query import query
 
 # Keep the public namespace to the names in __all__; drop the submodule
@@ -46,6 +46,7 @@ __all__ = [
     # transport
     "Transport",
     # options
+    "AgentOptions",
     "ClaudeAgentOptions",
     "PermissionMode",
     # messages

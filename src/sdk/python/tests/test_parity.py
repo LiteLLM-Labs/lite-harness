@@ -66,13 +66,17 @@ def test_export_parity(name: str) -> None:
     assert hasattr(claude, name), f"claude_agent_sdk is missing export {name!r}"
 
 
+def test_lite_exports_agent_options() -> None:
+    assert lite.AgentOptions is lite.ClaudeAgentOptions
+
+
 def test_options_field_superset() -> None:
     """Every upstream option field name must exist in lite (lite ⊇ claude)."""
     upstream = {f.name for f in dataclasses.fields(claude.ClaudeAgentOptions)}
-    ours = {f.name for f in dataclasses.fields(lite.ClaudeAgentOptions)}
+    ours = {f.name for f in dataclasses.fields(lite.AgentOptions)}
     missing = upstream - ours
     assert not missing, (
-        "lite_harness.ClaudeAgentOptions is missing upstream fields: "
+        "lite_harness.AgentOptions is missing upstream fields: "
         f"{sorted(missing)}"
     )
 

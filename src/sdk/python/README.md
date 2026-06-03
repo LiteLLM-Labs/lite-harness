@@ -5,13 +5,12 @@ Swap the import and existing code keeps working:
 
 ```diff
 - from claude_agent_sdk import query, ClaudeSDKClient, ClaudeAgentOptions
-+ from lite_harness import query, ClaudeSDKClient, ClaudeAgentOptions
++ from lite_harness import query, ClaudeSDKClient, AgentOptions
 ```
 
-The SDK is a thin client. It spawns the lite-harness server as a child process
-and speaks newline-delimited JSON-RPC 2.0 over stdio (see `../PROTOCOL.md`).
-The server owns the agent runtime, sessions, and tools. **Zero runtime
-dependencies** — pure stdlib `asyncio`. Python 3.10+.
+The SDK is a thin client. It launches the selected harness for you and speaks
+newline-delimited JSON-RPC 2.0 over stdio (see `../PROTOCOL.md`). **Zero
+runtime dependencies** — pure stdlib `asyncio`. Python 3.10+.
 
 ## Install
 
@@ -25,7 +24,7 @@ One-shot:
 
 ```python
 import asyncio
-from lite_harness import query, ResultMessage
+from lite_harness import query, AgentOptions, ResultMessage
 
 async def main() -> None:
     async for message in query(prompt="Hello"):
@@ -38,9 +37,9 @@ asyncio.run(main())
 Stateful client (multiple prompts on one session):
 
 ```python
-from lite_harness import ClaudeSDKClient, ClaudeAgentOptions
+from lite_harness import ClaudeSDKClient, AgentOptions
 
-async with ClaudeSDKClient(options=ClaudeAgentOptions(model="claude-x")) as client:
+async with ClaudeSDKClient(options=AgentOptions(model="claude-x")) as client:
     await client.query("first question")
     async for message in client.receive_response():
         ...
@@ -49,19 +48,18 @@ async with ClaudeSDKClient(options=ClaudeAgentOptions(model="claude-x")) as clie
         ...
 ```
 
-## Server command resolution
+## Harness command resolution
 
 The spawn command is resolved in order (per `PROTOCOL.md`):
 
-1. an explicit `transport=` argument (tests inject a fake server here),
+1. an explicit `transport=` argument (tests inject a fake harness here),
 2. the `LITE_HARNESS_SERVER` env var (a full command line), else
 3. the bundled default (`node <server>`).
 
 ## lite-harness extension
 
-`ClaudeAgentOptions.harness` (default `"claude"`) selects the server-side agent
-runtime. It is sent as a top-level `session/new` param, not inside `options`.
-Leaving it at the default keeps full drop-in compatibility.
+`AgentOptions.harness` selects the agent harness, for example
+`"claude-agent"`, `"openai-agents"`, or `"pi-ai"`.
 
 ## Unknown wire shapes
 
