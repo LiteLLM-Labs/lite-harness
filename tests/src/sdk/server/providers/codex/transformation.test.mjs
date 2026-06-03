@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventToFrames } from "./transformation.mjs";
+import { eventToFrames } from "../../../../../../src/sdk/server/providers/codex/transformation.mjs";
 
 const opts = { sessionId: "sess_test", model: "gpt-x" };
 
