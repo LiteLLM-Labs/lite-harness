@@ -50,6 +50,10 @@ export interface SDKAssistantMessage {
     content: ContentBlock[];
   };
   parent_tool_use_id: string | null;
+  /** Session id upstream attaches to the message (optional; decode is lenient). */
+  session_id?: string;
+  /** Per-message uuid upstream attaches (optional; decode is lenient). */
+  uuid?: string;
 }
 
 export interface SDKUserMessage {
@@ -58,6 +62,10 @@ export interface SDKUserMessage {
     content: string | ContentBlock[];
   };
   parent_tool_use_id?: string | null;
+  /** Session id upstream attaches to the message (optional; decode is lenient). */
+  session_id?: string;
+  /** Per-message uuid upstream attaches (optional; decode is lenient). */
+  uuid?: string;
 }
 
 export interface SDKSystemMessage {
