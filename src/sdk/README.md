@@ -116,3 +116,58 @@ for await (const message of query({
   console.log(message);
 }
 ```
+
+## MCP access
+
+Pass MCP servers in `AgentOptions` when the selected harness should have access
+to external tools. For HTTP MCP servers, provide the endpoint URL and any
+headers the server requires.
+
+Python:
+
+```python
+from lite_harness import query, AgentOptions
+
+async for message in query(
+    prompt="Use the docs MCP to answer this.",
+    options=AgentOptions(
+        harness="claude-agent",
+        model="claude-opus-4-8",
+        mcp_servers={
+            "docs": {
+                "type": "http",
+                "url": "https://example.com/mcp",
+                "headers": {
+                    "Authorization": "Bearer your-token",
+                },
+            }
+        },
+    ),
+):
+    print(message)
+```
+
+JavaScript:
+
+```ts
+import { query } from "@lite-harness/sdk";
+
+for await (const message of query({
+  prompt: "Use the docs MCP to answer this.",
+  options: {
+    harness: "claude-agent",
+    model: "claude-opus-4-8",
+    mcpServers: {
+      docs: {
+        type: "http",
+        url: "https://example.com/mcp",
+        headers: {
+          Authorization: "Bearer your-token"
+        }
+      }
+    }
+  }
+})) {
+  console.log(message);
+}
+```
