@@ -5,13 +5,13 @@ OpenAI Agents, and Pi AI.
 
 lite-harness manages:
 
-- One JavaScript and Python interface for multiple agent harnesses
+- One TypeScript and Python interface for multiple agent harnesses
 - Harness switching with `harness`, model switching with `model`
 - Claude Agent SDK-compatible streaming messages and errors
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
-## JavaScript Usage
+## TypeScript Usage
 
 ```bash
 npm install @lite-harness/sdk
