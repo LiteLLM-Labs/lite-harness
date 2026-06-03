@@ -19,11 +19,14 @@ import { createInterface, type Interface } from "node:readline";
 import { randomBytes } from "node:crypto";
 
 import {
+  AbortError,
   CLIConnectionError,
   CLINotFoundError,
-  CLIJSONDecodeError,
   ProcessError,
 } from "./errors.js";
+
+/** Grace period (ms) to let the server exit on its own after stdin is ended. */
+const GRACEFUL_EXIT_MS = 2000;
 
 interface PendingRequest {
   resolve: (response: Record<string, unknown>) => void;
@@ -81,6 +84,8 @@ export function resolveServerCommand(
 export class Transport {
   private child: ChildProcessWithoutNullStreams | null = null;
   private rl: Interface | null = null;
+  private stderrRl: Interface | null = null;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private requestCounter = 0;
   private readonly pending = new Map<string, PendingRequest>();
 
@@ -100,7 +105,14 @@ export class Transport {
     if (this.child) {
       return;
     }
-    const env = this.config.env ?? process.env;
+    // Merge the caller-supplied env ON TOP of the current process env so a
+    // partial `env` option never drops PATH and friends. Server command
+    // resolution sees the merged view too (so a caller can set
+    // LITE_HARNESS_SERVER without restating the whole environment).
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      ...this.config.env,
+    };
     const command = resolveServerCommand(this.config.command, env);
     const [bin, ...baseArgs] = command;
     if (!bin) {
@@ -149,8 +161,8 @@ export class Transport {
       this.failAll(error);
     });
 
-    const stderrRl = createInterface({ input: child.stderr });
-    stderrRl.on("line", (line) => {
+    this.stderrRl = createInterface({ input: child.stderr });
+    this.stderrRl.on("line", (line) => {
       this.stderrBuffer += line + "\n";
       this.config.stderr?.(line);
     });
@@ -168,6 +180,18 @@ export class Transport {
     }
   }
 
+  /**
+   * Reject every still-pending control-request promise so a bare
+   * `await q.interrupt()` racing teardown never hangs forever. Used on abort /
+   * kill. Defaults to {@link AbortError}.
+   */
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
   private handleLine(line: string): void {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -176,8 +200,12 @@ export class Transport {
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
-    } catch (err) {
-      this.failAll(new CLIJSONDecodeError(trimmed, err));
+    } catch {
+      // Forward-compat (PROTOCOL.md): a single unparseable stdout line must NOT
+      // tear down the session. Skip it — optionally surfacing it as a stderr
+      // diagnostic — and keep reading. A newer server emitting a line shape an
+      // older SDK can't parse should never kill an in-flight turn.
+      this.config.stderr?.(`[lite-harness] skipped unparseable stdout line: ${trimmed}`);
       return;
     }
     if (typeof parsed !== "object" || parsed === null) {
@@ -341,11 +369,22 @@ export class Transport {
     this.finishLines();
   }
 
-  /** Terminate the child process and stop reading. */
+  /**
+   * Immediately terminate the child process and stop reading. Reserved for
+   * abort / early `return()` / error paths — see {@link shutdownGraceful} for
+   * normal completion. Rejects any still-pending control promises so callers
+   * racing teardown never hang.
+   */
   kill(): void {
     this.closed = true;
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+    }
     this.rl?.close();
     this.rl = null;
+    this.stderrRl?.close();
+    this.stderrRl = null;
     if (this.child) {
       try {
         this.child.stdin.end();
@@ -355,7 +394,44 @@ export class Transport {
       this.child.kill();
       this.child = null;
     }
+    this.rejectPending(new AbortError("Transport closed before control response."));
     this.finishLines();
+  }
+
+  /**
+   * Graceful shutdown for NORMAL completion (PROTOCOL.md: a one-shot turn ends
+   * stdin and lets the server exit on its own). End stdin, wait a short grace
+   * period for the process to exit, then fall back to {@link kill} if it has
+   * not. Resolves once the process is gone (or killed).
+   */
+  shutdownGraceful(): Promise<void> {
+    this.closed = true;
+    const child = this.child;
+    if (!child) {
+      this.kill();
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const finalize = (): void => {
+        if (this.graceTimer) {
+          clearTimeout(this.graceTimer);
+          this.graceTimer = null;
+        }
+        // kill() is idempotent and closes readers + rejects any leftover
+        // pending promises; safe to call even after a clean exit.
+        this.kill();
+        resolve();
+      };
+      child.once("exit", finalize);
+      try {
+        child.stdin.end();
+      } catch {
+        // ignore
+      }
+      this.graceTimer = setTimeout(finalize, GRACEFUL_EXIT_MS);
+      // Don't keep the event loop alive purely for the grace timer.
+      this.graceTimer.unref?.();
+    });
   }
 
   /** Mark closed (after a graceful shutdown) so an exit is not treated as an error. */
