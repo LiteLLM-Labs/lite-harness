@@ -83,6 +83,36 @@ test("non-object input does not throw", () => {
   assert.equal(msg.type, "system");
 });
 
+test("assistant/user messages carry optional session_id and uuid when present", () => {
+  const assistant = decodeMessage({
+    type: "assistant",
+    message: { model: "m", content: [{ type: "text", text: "hi" }] },
+    parent_tool_use_id: null,
+    session_id: "sess-1",
+    uuid: "uuid-1",
+  });
+  assert.equal(assistant.session_id, "sess-1");
+  assert.equal(assistant.uuid, "uuid-1");
+
+  const user = decodeMessage({
+    type: "user",
+    message: { content: "hello" },
+    session_id: "sess-2",
+    uuid: "uuid-2",
+  });
+  assert.equal(user.session_id, "sess-2");
+  assert.equal(user.uuid, "uuid-2");
+
+  // Absent fields stay undefined (decode is lenient, fields are optional).
+  const bare = decodeMessage({
+    type: "assistant",
+    message: { model: "m", content: [] },
+    parent_tool_use_id: null,
+  });
+  assert.equal(bare.session_id, undefined);
+  assert.equal(bare.uuid, undefined);
+});
+
 test("stream_event message decodes", () => {
   const msg = decodeMessage({ type: "stream_event", event: { delta: "x" }, session_id: "s" });
   assert.equal(msg.type, "stream_event");
