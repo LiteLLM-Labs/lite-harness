@@ -1,42 +1,44 @@
 # lite-harness SDK
 
-One Claude Agent SDK-compatible interface for running coding agents through
-lite-harness.
+The SDK to swap between agent harnesses: Claude Agent SDK, OpenAI Agents, and
+Pi AI.
 
-The idea is simple: keep the application API you already know, but run the agent
-through your own lite-harness server.
+Keep one application interface and choose the harness per call:
 
 ```txt
-your app -> lite-harness SDK -> lite-harness server -> Codex / Pi AI / Claude Code
+your app -> lite-harness SDK -> claude-agent | openai-agents | pi-ai
 ```
 
-The SDK keeps the Claude Agent SDK shape: `query()`, streamed messages, options,
-interrupts, model selection, permission modes, and resume.
+Use provider-native auth for the simplest path. Add LiteLLM AI Gateway only when
+you want central model routing, keys, budgets, logs, or fallbacks.
+
+## Available harnesses
+
+- `claude-agent`: Claude Agent SDK / Claude Code behavior.
+  Upstream: [Python](https://github.com/anthropics/claude-agent-sdk-python),
+  [TypeScript](https://github.com/anthropics/claude-agent-sdk-typescript).
+- `openai-agents`: OpenAI Agents SDK behavior.
+  Upstream: [Python](https://github.com/openai/openai-agents-python),
+  [TypeScript](https://github.com/openai/openai-agents-js).
+- `pi-ai`: Pi's local coding-agent harness.
+  Upstream: [GitHub](https://github.com/earendil-works/pi),
+  [SDK docs](https://pi.dev/docs/latest/sdk).
+
+`harness` selects the agent runtime. `model` selects the model that runtime uses.
 
 ## Python
 
-Install the Python package:
+### Python: quickstart with Claude Agent SDK
+
+Start with the native Anthropic SDK:
 
 ```bash
-pip install lite-agent-sdk
+pip install claude-agent-sdk
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### Python: migrate from Claude Agent SDK
-
-Change the import. Keep the rest of the code.
-
 ```python
-# before
-from claude_agent_sdk import query, ClaudeSDKClient, ClaudeAgentOptions
-
-# after
-from lite_agent_sdk import query, ClaudeSDKClient, ClaudeAgentOptions
-```
-
-### Python: run a query
-
-```python
-from lite_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import query, ClaudeAgentOptions
 
 async for message in query(
     prompt="What is 2 + 2?",
@@ -48,29 +50,55 @@ async for message in query(
     print(message)
 ```
 
-### Python: select Codex
+### Python: migrate to lite-harness SDK
 
-Use the same Claude-shaped API, but select the Codex agent runtime on the
-lite-harness server.
+Install the lite-harness SDK and change the import:
+
+```bash
+pip install lite-agent-sdk
+```
+
+```python
+# before
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+# after
+from lite_agent_sdk import query, ClaudeAgentOptions
+```
+
+The same call now runs through the selected harness:
 
 ```python
 from lite_agent_sdk import query, ClaudeAgentOptions
 
 async for message in query(
-    prompt="Refactor the auth middleware and explain the diff.",
+    prompt="What is 2 + 2?",
     options=ClaudeAgentOptions(
+        harness="claude-agent",
         cwd=".",
-        agent="codex",
-        model="gpt-4o",
+        model="claude-sonnet-4-5",
     ),
 ):
     print(message)
 ```
 
-### Python: select Pi AI
+### Python: switch to OpenAI Agents
 
-Agent names are resolved by the lite-harness server, so a deployed or configured
-agent can be selected the same way.
+```python
+from lite_agent_sdk import query, ClaudeAgentOptions
+
+async for message in query(
+    prompt="Inspect this repo and suggest the next test to write.",
+    options=ClaudeAgentOptions(
+        harness="openai-agents",
+        cwd=".",
+        model="gpt-4.1",
+    ),
+):
+    print(message)
+```
+
+### Python: switch to Pi AI
 
 ```python
 from lite_agent_sdk import query, ClaudeAgentOptions
@@ -78,62 +106,53 @@ from lite_agent_sdk import query, ClaudeAgentOptions
 async for message in query(
     prompt="Review this SDK README and make it sharper.",
     options=ClaudeAgentOptions(
+        harness="pi-ai",
         cwd=".",
-        agent="pi-ai",
         model="claude-sonnet-4-5",
     ),
 ):
     print(message)
 ```
 
-### Python session control
+### Python: use LiteLLM AI Gateway
 
-Python keeps the upstream `ClaudeSDKClient` class.
+LiteLLM AI Gateway is optional. Use it when you want all harnesses to use one
+OpenAI-compatible model gateway.
+
+```bash
+export LITELLM_API_BASE=https://litellm.your-company.com/v1
+export LITELLM_API_KEY=sk-litellm-...
+```
 
 ```python
-from lite_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+from lite_agent_sdk import query, ClaudeAgentOptions
 
-async with ClaudeSDKClient(
+async for message in query(
+    prompt="Refactor the billing service and explain the diff.",
     options=ClaudeAgentOptions(
+        harness="openai-agents",
         cwd=".",
-        agent="codex",
-        permission_mode="acceptEdits",
-    )
-) as client:
-    await client.query("fix auth.py")
-
-    async for message in client.receive_response():
-        print(message)
-
-    await client.set_model("gpt-4o")
-    await client.set_permission_mode("default")
-    await client.interrupt()
+        model="anthropic/claude-sonnet-4-5",
+        base_url="https://litellm.your-company.com/v1",
+        api_key="sk-litellm-...",
+    ),
+):
+    print(message)
 ```
 
 ## JavaScript / TypeScript
 
-Install the JavaScript package:
+### JavaScript: quickstart with Claude Agent SDK
+
+Start with the native Anthropic SDK:
 
 ```bash
-npm install @lite-harness/sdk
+npm install @anthropic-ai/claude-agent-sdk
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### JavaScript: migrate from Claude Agent SDK
-
-Change the import. Keep the rest of the code.
-
 ```ts
-// before
 import { query } from "@anthropic-ai/claude-agent-sdk";
-
-// after
-import { query } from "@lite-harness/sdk";
-```
-
-### JavaScript: run a query
-
-```ts
-import { query } from "@lite-harness/sdk";
 
 for await (const message of query({
   prompt: "What is 2 + 2?",
@@ -146,39 +165,32 @@ for await (const message of query({
 }
 ```
 
-### JavaScript: select Codex
+### JavaScript: migrate to lite-harness SDK
 
-Use the same Claude-shaped API, but select the Codex agent runtime on the
-lite-harness server.
+Install the lite-harness SDK and change the import:
 
-```ts
-import { query } from "@lite-harness/sdk";
-
-for await (const message of query({
-  prompt: "Refactor the auth middleware and explain the diff.",
-  options: {
-    cwd: ".",
-    agent: "codex",
-    model: "gpt-4o"
-  }
-})) {
-  console.log(message);
-}
+```bash
+npm install @lite-harness/sdk
 ```
 
-### JavaScript: select Pi AI
+```ts
+// before
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
-Agent names are resolved by the lite-harness server, so a deployed or configured
-agent can be selected the same way.
+// after
+import { query } from "@lite-harness/sdk";
+```
+
+The same call now runs through the selected harness:
 
 ```ts
 import { query } from "@lite-harness/sdk";
 
 for await (const message of query({
-  prompt: "Review this SDK README and make it sharper.",
+  prompt: "What is 2 + 2?",
   options: {
+    harness: "claude-agent",
     cwd: ".",
-    agent: "pi-ai",
     model: "claude-sonnet-4-5"
   }
 })) {
@@ -186,84 +198,82 @@ for await (const message of query({
 }
 ```
 
-### JavaScript session control
-
-In JavaScript and TypeScript, the object returned by `query()` is the session.
+### JavaScript: switch to OpenAI Agents
 
 ```ts
-const q = query({
-  prompt: "fix auth.py",
+import { query } from "@lite-harness/sdk";
+
+for await (const message of query({
+  prompt: "Inspect this repo and suggest the next test to write.",
   options: {
+    harness: "openai-agents",
     cwd: ".",
-    agent: "codex",
-    permissionMode: "acceptEdits"
+    model: "gpt-4.1"
   }
-});
-
-for await (const message of q) {
+})) {
   console.log(message);
-
-  if (shouldStop) {
-    await q.interrupt();
-  }
 }
-
-await q.setModel("gpt-4o");
-await q.setPermissionMode("default");
-await q.close();
 ```
 
-## What changes vs Claude Agent SDK?
+### JavaScript: switch to Pi AI
 
-Only the import changes in your app. Agent selection, model routing, tools, and
-sandbox policy are handled by the lite-harness server.
+```ts
+import { query } from "@lite-harness/sdk";
 
-| Concern | Claude Agent SDK | lite-harness SDK |
-| --- | --- | --- |
-| App API | Claude Agent SDK API | Same API |
-| Python package | `claude_agent_sdk` | `lite_agent_sdk` |
-| JS package | `@anthropic-ai/claude-agent-sdk` | `@lite-harness/sdk` |
-| Runtime | Claude Code | lite-harness server |
-| Agent selection | Runtime default | `agent: "codex"` / `agent: "pi-ai"` |
-| Model routing | SDK/runtime default | LiteLLM gateway |
+for await (const message of query({
+  prompt: "Review this SDK README and make it sharper.",
+  options: {
+    harness: "pi-ai",
+    cwd: ".",
+    model: "claude-sonnet-4-5"
+  }
+})) {
+  console.log(message);
+}
+```
 
-See [`interface.html`](./interface.html) for the side-by-side API reference.
+### JavaScript: use LiteLLM AI Gateway
 
-## Options
+LiteLLM AI Gateway is optional. Use it when you want all harnesses to use one
+OpenAI-compatible model gateway.
 
-The options mirror the Claude Agent SDK naming conventions in each language,
-with lite-harness adding server-side agent selection.
-
-```python
-ClaudeAgentOptions(
-    cwd=".",
-    agent="codex",
-    model="gpt-4o",
-    allowed_tools=["Read", "Edit"],
-    system_prompt="You are a senior engineer.",
-    mcp_servers={},
-    permission_mode="acceptEdits",
-    max_turns=10,
-    resume=session_id,
-)
+```bash
+export LITELLM_API_BASE=https://litellm.your-company.com/v1
+export LITELLM_API_KEY=sk-litellm-...
 ```
 
 ```ts
-const options = {
-  cwd: ".",
-  agent: "codex",
-  model: "gpt-4o",
-  allowedTools: ["Read", "Edit"],
-  systemPrompt: "You are a senior engineer.",
-  mcpServers: {},
-  permissionMode: "acceptEdits",
-  maxTurns: 10,
-  resume: sessionId
-};
+import { query } from "@lite-harness/sdk";
+
+for await (const message of query({
+  prompt: "Refactor the billing service and explain the diff.",
+  options: {
+    harness: "openai-agents",
+    cwd: ".",
+    model: "anthropic/claude-sonnet-4-5",
+    baseUrl: "https://litellm.your-company.com/v1",
+    apiKey: "sk-litellm-..."
+  }
+})) {
+  console.log(message);
+}
 ```
+
+## Mental model
+
+- `harness`: which agent SDK/runtime handles the task.
+  Examples: `claude-agent`, `openai-agents`, `pi-ai`.
+- `model`: which model that harness uses.
+  Examples: `claude-sonnet-4-5`, `gpt-4.1`.
+- `base_url` / `baseUrl`: optional OpenAI-compatible API base.
+  Example: a LiteLLM AI Gateway URL.
+- `api_key` / `apiKey`: optional key for the selected API base.
+  Example: a LiteLLM virtual key.
+- `cwd`: working directory for repo-aware agents.
+  Example: `"."`.
 
 ## Status
 
 This directory currently contains the SDK contract and interface reference. The
-Python and TypeScript packages, plus parity tests against the Claude Agent SDK
-surface, follow in subsequent changes.
+Python and TypeScript packages, plus parity tests against the supported harness
+surfaces, follow in subsequent changes.
