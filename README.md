@@ -117,30 +117,9 @@ for await (const message of query({
 }
 ```
 
-## Run As A Service
-
-lite-harness can also run coding agents as a portable service with shared MCP
-tools, prompts, sessions, sandboxing, cron, and human approval flows.
-
-```bash
-npx skills add LiteLLM-Labs/lite-harness -g
-```
-
-Then in Claude Code, Codex, Cursor, or another coding agent:
-
-```txt
-/lite-harness-setup
-```
-
-Supported service harnesses: `opencode`, `claude-code`, `github-copilot`,
-`codex`. See [CLI docs](cli/README.md) and
-[configuration docs](docs/configuration.md).
-
 ## Docs
 
-[SDK](src/sdk/README.md) · [API reference](docs/api.md) ·
-[Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) ·
-[CLI](cli/README.md) · [Add a harness](docs/contributing-harness.md)
+[SDK](src/sdk/README.md) · [API reference](docs/api.md)
 
 ## License
 
