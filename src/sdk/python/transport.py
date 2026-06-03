@@ -27,6 +27,7 @@ import secrets
 import shlex
 import shutil
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 from errors import (
@@ -76,8 +77,9 @@ def resolve_server_command(explicit: list[str] | None = None) -> list[str]:
     """Resolve the base server spawn command per PROTOCOL.md.
 
     Order: explicit argument, then ``LITE_HARNESS_SERVER`` env var (a command
-    line), then the bundled default (``node <server>``). The stream-json launch
-    flags are appended separately by :class:`SubprocessTransport`.
+    line), then the in-repo server (when running from a clone), then the
+    installed ``lite-harness-server`` on PATH. The stream-json launch flags are
+    appended separately by :class:`SubprocessTransport`.
     """
 
     if explicit:
@@ -93,6 +95,12 @@ def resolve_server_command(explicit: list[str] | None = None) -> list[str]:
             "Could not resolve the lite-harness server command. Set "
             "LITE_HARNESS_SERVER or pass a transport explicitly."
         )
+
+    # Running straight from a clone: src/sdk/python -> src/sdk/server/server.mjs
+    repo_server = Path(__file__).resolve().parent.parent / "server" / "server.mjs"
+    if repo_server.is_file():
+        return [node, str(repo_server)]
+
     return [node, "lite-harness-server"]
 
 
