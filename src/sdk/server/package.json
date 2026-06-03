@@ -8,7 +8,7 @@
     "lite-harness-server": "./server.mjs"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test \"../../../tests/src/sdk/server/**/*.test.mjs\""
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
