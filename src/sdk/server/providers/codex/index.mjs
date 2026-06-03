@@ -1,34 +1,31 @@
-// Codex provider: drives the OpenAI Agents SDK (@openai/agents) in-process and
-// maps its run-stream events to the canonical wire. Routes through LiteLLM by
-// installing a custom OpenAI client (OpenAI-compatible /v1) as the default and
-// using the chat-completions surface (what LiteLLM serves).
-import { Agent, run, setDefaultOpenAIClient, setOpenAIAPI, setTracingDisabled } from "@openai/agents";
-import OpenAI from "openai";
-import { eventToFrames } from "./transformation.mjs";
+// Codex provider: drives the @openai/codex-sdk in-process and maps its
+// ThreadEvents to the canonical wire. Routes through LiteLLM by configuring
+// baseUrl (passed as --config openai_base_url to the Codex CLI) and injecting
+// LITELLM_API_KEY as OPENAI_API_KEY so the CLI's model calls hit the gateway.
+import { Codex } from "@openai/codex-sdk";
+import { createEventTransformer } from "./transformation.mjs";
 
 export const id = "codex";
 export const aliases = ["openai-agents", "openai"];
 
 // LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
-// route through the gateway's OpenAI-compatible /v1 (chat-completions surface).
-// Otherwise leave the Agents SDK's default client in place — direct to OpenAI
-// via OPENAI_API_KEY.
-let configured = false;
-function configure(env) {
-  if (configured) return;
-  configured = true;
-  setTracingDisabled(true);
-  if (!env.LITELLM_API_BASE || !env.LITELLM_API_KEY) return;
+// route the Codex CLI through the gateway. Otherwise the CLI's own OPENAI_API_KEY
+// env var is used directly.
+function buildCodexOptions(env) {
+  if (!env.LITELLM_API_BASE || !env.LITELLM_API_KEY) return {};
   const base = env.LITELLM_API_BASE.replace(/\/+$/, "");
-  const baseURL = base.endsWith("/v1") ? base : `${base}/v1`;
-  setDefaultOpenAIClient(new OpenAI({ baseURL, apiKey: env.LITELLM_API_KEY }));
-  setOpenAIAPI("chat_completions");
+  const baseUrl = base.endsWith("/v1") ? base : `${base}/v1`;
+  // Codex CLI inherits process.env; inject the gateway key as OPENAI_API_KEY so
+  // model calls authenticate against LiteLLM.
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || env.LITELLM_API_KEY;
+  return { baseUrl };
 }
 
 export function createRuntime({ model, env = process.env, diagnostics = () => {} }) {
-  configure(env);
   let currentModel = model || env.LITELLM_DEFAULT_MODEL || "gpt-4o";
   let aborter = null;
+
+  const codex = new Codex(buildCodexOptions(env));
 
   return {
     get model() {
@@ -43,15 +40,12 @@ export function createRuntime({ model, env = process.env, diagnostics = () => {}
     },
     async *runTurn({ prompt, session }) {
       aborter = new AbortController();
-      const agent = new Agent({
-        name: "codex",
-        model: currentModel,
-        instructions: "You are a coding agent.",
-      });
-      const streamed = await run(agent, prompt, { stream: true, signal: aborter.signal });
+      const thread = codex.startThread({ model: currentModel, skipGitRepoCheck: true });
+      const { events } = await thread.runStreamed(prompt, { signal: aborter.signal });
+      const toFrames = createEventTransformer();
       try {
-        for await (const event of streamed) {
-          for (const frame of eventToFrames(event, { sessionId: session.sessionId, model: currentModel })) {
+        for await (const event of events) {
+          for (const frame of toFrames(event, { sessionId: session.sessionId, model: currentModel })) {
             yield frame;
           }
         }

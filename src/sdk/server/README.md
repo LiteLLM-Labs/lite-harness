@@ -133,10 +133,11 @@ for await (const f of session.runTurn({ prompt: "hi", content: "hi" })) frames.p
 **Test a provider transformation in isolation** (pure — no SDK, no network):
 
 ```js
-import { eventToFrames } from "./providers/codex/transformation.mjs";
+import { createEventTransformer } from "./providers/codex/transformation.mjs";
 
-eventToFrames(
-  { type: "raw_model_stream_event", data: { type: "output_text_delta", delta: "4" } },
+const toFrames = createEventTransformer();
+toFrames(
+  { type: "item.updated", item: { id: "msg_1", type: "agent_message", text: "4" } },
   { sessionId: "s", model: "m" },
 );
 // → [ { type: "stream_event", session_id: "s", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "4" } } } ]

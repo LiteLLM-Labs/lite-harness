@@ -1,76 +1,127 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventToFrames } from "../../../../../../src/sdk/server/providers/codex/transformation.mjs";
+import { createEventTransformer } from "../../../../../../src/sdk/server/providers/codex/transformation.mjs";
 
 const opts = { sessionId: "sess_test", model: "gpt-x" };
 
-test("text delta → content_block_delta stream_event frame", () => {
+function makeTransformer() {
+  return createEventTransformer();
+}
+
+test("item.started with agent_message text → content_block_delta stream_event", () => {
+  const toFrames = makeTransformer();
   const event = {
-    type: "raw_model_stream_event",
-    data: { type: "output_text_delta", delta: "4" },
+    type: "item.started",
+    item: { id: "item_1", type: "agent_message", text: "Hello" },
   };
-  assert.deepEqual(eventToFrames(event, opts), [
+  assert.deepEqual(toFrames(event, opts), [
     {
       type: "stream_event",
       session_id: "sess_test",
       event: {
         type: "content_block_delta",
         index: 0,
-        delta: { type: "text_delta", text: "4" },
+        delta: { type: "text_delta", text: "Hello" },
       },
     },
   ]);
 });
 
-test("other raw model stream events are ignored", () => {
-  for (const t of ["response_started", "model", "response_done"]) {
-    const event = { type: "raw_model_stream_event", data: { type: t } };
-    assert.deepEqual(eventToFrames(event, opts), [], `expected [] for data.type=${t}`);
-  }
+test("item.started with empty text is ignored", () => {
+  const toFrames = makeTransformer();
+  const event = {
+    type: "item.started",
+    item: { id: "item_1", type: "agent_message", text: "" },
+  };
+  assert.deepEqual(toFrames(event, opts), []);
 });
 
-test("completed message_output_created → assistant frame with text block", () => {
+test("item.updated emits only new characters as delta", () => {
+  const toFrames = makeTransformer();
+  toFrames({ type: "item.started", item: { id: "item_1", type: "agent_message", text: "Hel" } }, opts);
   const event = {
-    type: "run_item_stream_event",
-    name: "message_output_created",
-    item: {
-      type: "message_output_item",
-      rawItem: {
-        id: "x",
-        type: "message",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text: "4" }],
+    type: "item.updated",
+    item: { id: "item_1", type: "agent_message", text: "Hello" },
+  };
+  assert.deepEqual(toFrames(event, opts), [
+    {
+      type: "stream_event",
+      session_id: "sess_test",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "lo" },
       },
     },
+  ]);
+});
+
+test("item.updated with no new text is ignored", () => {
+  const toFrames = makeTransformer();
+  toFrames({ type: "item.started", item: { id: "item_1", type: "agent_message", text: "Hello" } }, opts);
+  const event = {
+    type: "item.updated",
+    item: { id: "item_1", type: "agent_message", text: "Hello" },
   };
-  assert.deepEqual(eventToFrames(event, opts), [
+  assert.deepEqual(toFrames(event, opts), []);
+});
+
+test("item.completed → assistant frame with full text", () => {
+  const toFrames = makeTransformer();
+  const event = {
+    type: "item.completed",
+    item: { id: "item_1", type: "agent_message", text: "The answer is 4" },
+  };
+  assert.deepEqual(toFrames(event, opts), [
     {
       type: "assistant",
-      message: { model: "gpt-x", content: [{ type: "text", text: "4" }] },
+      message: { model: "gpt-x", content: [{ type: "text", text: "The answer is 4" }] },
       parent_tool_use_id: null,
     },
   ]);
 });
 
-test("run_item_stream_event with a different name is ignored", () => {
-  const event = { type: "run_item_stream_event", name: "tool_called", item: {} };
-  assert.deepEqual(eventToFrames(event, opts), []);
+test("multiple items tracked independently", () => {
+  const toFrames = makeTransformer();
+  toFrames({ type: "item.started", item: { id: "a", type: "agent_message", text: "foo" } }, opts);
+  toFrames({ type: "item.started", item: { id: "b", type: "agent_message", text: "bar" } }, opts);
+
+  const deltaA = toFrames({ type: "item.updated", item: { id: "a", type: "agent_message", text: "fooX" } }, opts);
+  assert.deepEqual(deltaA[0].event.delta.text, "X");
+
+  const deltaB = toFrames({ type: "item.updated", item: { id: "b", type: "agent_message", text: "barY" } }, opts);
+  assert.deepEqual(deltaB[0].event.delta.text, "Y");
 });
 
-test("message_output_created with no output_text blocks is ignored", () => {
-  const event = {
-    type: "run_item_stream_event",
-    name: "message_output_created",
-    item: { rawItem: { content: [{ type: "tool_use", id: "t1" }] } },
-  };
-  assert.deepEqual(eventToFrames(event, opts), []);
+test("non-agent_message item types are ignored", () => {
+  const toFrames = makeTransformer();
+  for (const type of ["command_execution", "file_change", "reasoning", "web_search", "todo_list", "error"]) {
+    const event = { type: "item.updated", item: { id: "x", type, text: "ignored" } };
+    assert.deepEqual(toFrames(event, opts), [], `expected [] for item.type=${type}`);
+  }
 });
 
-test("agent_updated_stream_event and non-object input are ignored", () => {
-  const event = { type: "agent_updated_stream_event", agent: { name: "x" } };
-  assert.deepEqual(eventToFrames(event, opts), []);
-  assert.deepEqual(eventToFrames(null, opts), []);
-  assert.deepEqual(eventToFrames(undefined, opts), []);
-  assert.deepEqual(eventToFrames("nope", opts), []);
+test("turn.completed, thread.started, turn.started, error events are ignored", () => {
+  const toFrames = makeTransformer();
+  for (const type of ["turn.completed", "thread.started", "turn.started", "turn.failed", "error"]) {
+    const event = { type };
+    assert.deepEqual(toFrames(event, opts), [], `expected [] for event.type=${type}`);
+  }
+});
+
+test("null, undefined, non-object inputs are ignored", () => {
+  const toFrames = makeTransformer();
+  assert.deepEqual(toFrames(null, opts), []);
+  assert.deepEqual(toFrames(undefined, opts), []);
+  assert.deepEqual(toFrames("nope", opts), []);
+  assert.deepEqual(toFrames(42, opts), []);
+});
+
+test("each transformer instance has isolated state", () => {
+  const a = makeTransformer();
+  const b = makeTransformer();
+  a({ type: "item.started", item: { id: "item_1", type: "agent_message", text: "hello" } }, opts);
+  // b has not seen item_1, so full text is the delta
+  const frames = b({ type: "item.updated", item: { id: "item_1", type: "agent_message", text: "hello" } }, opts);
+  assert.deepEqual(frames[0].event.delta.text, "hello");
 });
