@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadProviders, resolveProvider } from "../../../../../src/sdk/server/providers/index.mjs";
+import { loadProviders, resolveProvider } from "../../../../sdk/server/providers/index.mjs";
 
 test("resolveProvider('anthropic') resolves to the anthropic module", async () => {
   const mod = await resolveProvider("anthropic");
@@ -71,7 +71,7 @@ test("discovers providers from LITE_HARNESS_PROVIDERS_DIR (fresh import)", async
   const prev = process.env.LITE_HARNESS_PROVIDERS_DIR;
   process.env.LITE_HARNESS_PROVIDERS_DIR = tmpRoot;
   try {
-    const fresh = await import("../../../../../src/sdk/server/providers/index.mjs?ts=" + Date.now());
+    const fresh = await import("../../../../sdk/server/providers/index.mjs?ts=" + Date.now());
     const mod = await fresh.resolveProvider("mock");
     assert.equal(mod.id, "mock");
     assert.equal(typeof mod.createRuntime, "function");

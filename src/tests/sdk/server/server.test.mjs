@@ -7,7 +7,7 @@ import {
   controlResponse,
   resultFrame,
   systemInit,
-} from "../../../../src/sdk/server/protocol.mjs";
+} from "../../../sdk/server/protocol.mjs";
 
 // ---------------------------------------------------------------------------
 // Test harness. Drives StreamJsonServer over in-memory streams: a PassThrough
