@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from lite_agent_sdk import (
+from lite_harness import (
     AssistantMessage,
     ClaudeSDKClient,
     CLIConnectionError,
     ResultMessage,
 )
-from lite_agent_sdk._transport.subprocess import SubprocessTransport
+from transport import SubprocessTransport
 
 
 async def test_client_context_manager(fake_server_command: list[str]) -> None:

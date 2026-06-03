@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lite_agent_sdk import (
+from lite_harness import (
     AssistantMessage,
     ResultMessage,
     SystemMessage,
@@ -12,7 +12,7 @@ from lite_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
-from lite_agent_sdk._decode import decode_block, decode_message, is_result
+from decode import decode_block, decode_message, is_result
 
 
 def test_decode_text_block() -> None:

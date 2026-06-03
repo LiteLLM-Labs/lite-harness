@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "lite-agent-sdk"
-dynamic = ["version"]
-description = "Drop-in replacement for the Claude Agent SDK that talks to a lite-harness server over JSON-RPC stdio."
+name = "lite-harness"
+version = "0.1.0"
+description = "Drop-in replacement for the Claude Agent SDK that talks to a lite-harness server over the stream-json control protocol."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -26,11 +26,19 @@ dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "mypy>=1.8"]
 [project.urls]
 Homepage = "https://github.com/LiteLLM-Labs/lite-harness"
 
-[tool.hatch.version]
-path = "src/lite_agent_sdk/_version.py"
-
 [tool.hatch.build.targets.wheel]
-packages = ["src/lite_agent_sdk"]
+only-include = [
+    "lite_harness.py",
+    "query.py",
+    "client.py",
+    "options.py",
+    "messages.py",
+    "blocks.py",
+    "errors.py",
+    "transport.py",
+    "decode.py",
+    "py.typed",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -46,4 +54,14 @@ filterwarnings = [
 [tool.mypy]
 strict = true
 python_version = "3.10"
-files = ["src/lite_agent_sdk"]
+files = [
+    "lite_harness.py",
+    "query.py",
+    "client.py",
+    "options.py",
+    "messages.py",
+    "blocks.py",
+    "errors.py",
+    "transport.py",
+    "decode.py",
+]

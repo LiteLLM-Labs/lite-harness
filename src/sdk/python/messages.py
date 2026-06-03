@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Union
 
-from .blocks import ContentBlock
+from blocks import ContentBlock
 
 
 @dataclass

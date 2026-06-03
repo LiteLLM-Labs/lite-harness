@@ -17,14 +17,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .blocks import (
+from blocks import (
     ContentBlock,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
 )
-from .messages import (
+from messages import (
     AssistantMessage,
     Message,
     ResultMessage,
