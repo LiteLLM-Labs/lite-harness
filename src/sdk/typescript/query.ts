@@ -75,7 +75,9 @@ class QueryRunner {
     this.promptText = typeof prompt === "string" ? prompt : "";
     this.transport = new Transport({
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      // Pass the caller env through; the transport merges it onto process.env
+      // so a partial `env` never drops PATH and friends.
+      env: options.env,
       stderr: options.stderr,
       abortController: options.abortController,
       args: buildLaunchArgs(options),
@@ -114,26 +116,27 @@ class QueryRunner {
     try {
       await this.start();
     } catch (err) {
-      await this.teardown();
+      await this.teardown(false);
       throw err;
     }
 
     while (true) {
       if (this.aborted) {
-        await this.teardown();
+        await this.teardown(false);
         throw new AbortError();
       }
       const result = await this.transport.nextLine();
       if (result.done) {
         // Stream ended without an explicit result; close out cleanly.
-        await this.teardown();
+        await this.teardown(false);
         return { value: undefined, done: true };
       }
       const message = decodeMessage(result.value);
       if (message.type === "result") {
-        // Deliver the result, then end the iterator on the next pull.
+        // NORMAL completion: end stdin and let the server exit on its own
+        // (PROTOCOL.md) before falling back to a hard kill.
         this.finished = true;
-        await this.teardown();
+        await this.teardown(true);
         return { value: message, done: false };
       }
       return { value: message, done: false };
@@ -141,26 +144,35 @@ class QueryRunner {
   }
 
   async return(): Promise<IteratorResult<SDKMessage, void>> {
-    await this.teardown();
+    // Early return()/break is not a normal completion — tear down immediately.
+    await this.teardown(false);
     return { value: undefined, done: true };
   }
 
   async throw(err?: unknown): Promise<IteratorResult<SDKMessage, void>> {
-    await this.teardown();
+    await this.teardown(false);
     throw err instanceof Error ? err : new Error(String(err));
   }
 
   private tearingDown: Promise<void> | null = null;
 
-  private async teardown(): Promise<void> {
+  /**
+   * Tear down the transport. `graceful` true (a `result` was delivered) ends
+   * stdin and waits a short grace period for the server to exit on its own;
+   * false (abort / early return / error) kills immediately.
+   */
+  private async teardown(graceful: boolean): Promise<void> {
     if (this.tearingDown) {
       return this.tearingDown;
     }
     this.tearingDown = (async () => {
       this.finished = true;
-      // Closing stdin signals the server to exit; killing guarantees teardown.
       this.transport.markClosed();
-      this.transport.kill();
+      if (graceful) {
+        await this.transport.shutdownGraceful();
+      } else {
+        this.transport.kill();
+      }
     })();
     return this.tearingDown;
   }
