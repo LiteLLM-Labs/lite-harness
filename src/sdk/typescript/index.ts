@@ -16,6 +16,8 @@
 
 export { query } from "./query.js";
 export type { Query } from "./query.js";
+export { listHarnesses } from "./harnesses.js";
+export type { HarnessMetadata } from "./harnesses.js";
 
 export type { AgentOptions, Options, PermissionMode } from "./types.js";
 
