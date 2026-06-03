@@ -7,17 +7,18 @@ import { toFrames } from "./transformation.mjs";
 export const id = "anthropic";
 export const aliases = ["claude", "claude-code", "cc"];
 
-// Point the SDK (and the claude CLI it drives) at LiteLLM. The Anthropic SDK
-// appends "/v1/messages", so strip a trailing "/v1" from LITELLM_API_BASE.
-// A pre-set ANTHROPIC_BASE_URL wins (don't clobber an explicit override).
+// LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
+// route the SDK (and the claude CLI it drives) through the gateway; otherwise
+// leave the SDK's own ANTHROPIC_* env in place (direct to the provider). The
+// Anthropic SDK appends "/v1/messages", so strip a trailing "/v1". A pre-set
+// ANTHROPIC_BASE_URL always wins (don't clobber an explicit override).
 function applyLiteLlmEnv(env) {
-  if (env.LITELLM_API_BASE && !process.env.ANTHROPIC_BASE_URL) {
+  if (!env.LITELLM_API_BASE || !env.LITELLM_API_KEY) return;
+  if (!process.env.ANTHROPIC_BASE_URL) {
     process.env.ANTHROPIC_BASE_URL = env.LITELLM_API_BASE.replace(/\/+$/, "").replace(/\/v1$/, "");
   }
-  if (env.LITELLM_API_KEY) {
-    process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || env.LITELLM_API_KEY;
-    process.env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || env.LITELLM_API_KEY;
-  }
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || env.LITELLM_API_KEY;
+  process.env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || env.LITELLM_API_KEY;
 }
 
 export function createRuntime({ model, permissionMode, cwd, env = process.env, diagnostics = () => {} }) {
