@@ -14,7 +14,13 @@
  * `unknown` (never `any`) so callers retain type-safety at the boundary.
  */
 
-export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan"
+  | "dontAsk"
+  | "auto";
 
 export interface Options {
   /** Tool names the agent is allowed to use. */
@@ -48,6 +54,8 @@ export interface Options {
   env?: Record<string, string | undefined>;
   /** Extra CLI/server args (value `null` => flag without a value). */
   extraArgs?: Record<string, string | null>;
+  /** Explicit Claude/lite-harness executable path, matching the upstream SDK option. */
+  pathToClaudeCodeExecutable?: string;
   /** Receives the server process's stderr output line-by-line. */
   stderr?: (data: string) => void;
   /** Request partial streaming deltas (`stream_event` messages). */

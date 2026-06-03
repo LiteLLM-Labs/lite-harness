@@ -18,7 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-PermissionMode = Literal["default", "acceptEdits", "bypassPermissions", "plan"]
+PermissionMode = Literal[
+    "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"
+]
 
 # Permissive aliases for complex upstream-typed fields we don't own. We accept
 # these values for drop-in compatibility and either forward them opaquely or do

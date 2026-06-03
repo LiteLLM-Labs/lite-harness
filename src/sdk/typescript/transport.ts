@@ -17,6 +17,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   CLIConnectionError,
@@ -67,10 +69,15 @@ export function resolveServerCommand(
     // A simple whitespace split is sufficient for the documented "command line".
     return fromEnv.trim().split(/\s+/);
   }
-  // Bundled default. There is no packaged server in this scaffold, so we point
-  // at a conventional location; callers without one should set the env var or
-  // pass an explicit command.
-  return ["node", "lite-harness-server"];
+  return ["node", bundledServerPath()];
+}
+
+function bundledServerPath(): string {
+  const fromDist = fileURLToPath(new URL("../../server/mock-server.mjs", import.meta.url));
+  if (existsSync(fromDist)) {
+    return fromDist;
+  }
+  return fileURLToPath(new URL("../server/mock-server.mjs", import.meta.url));
 }
 
 /**
