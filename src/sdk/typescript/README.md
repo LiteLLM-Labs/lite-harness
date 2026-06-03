@@ -68,6 +68,28 @@ npm test            # builds, then runs node --test against the fake server
 Tests use a deterministic in-repo fake server (`test/fake-server.mjs`) injected
 via `LITE_HARNESS_SERVER`. No network or real model access is required.
 
+## Not yet implemented (v0)
+
+This SDK is a drop-in for the common `query()` path, **not** full parity with
+`@anthropic-ai/claude-agent-sdk`. The following upstream surface is intentionally
+not implemented yet:
+
+- **Top-level helpers**: `tool()` and `createSdkMcpServer()` (in-process SDK MCP
+  servers / tool definitions).
+- **Session-management functions**: `listSessions`, `getSessionMessages`,
+  `getSessionInfo`, `renameSession`, `tagSession`, `deleteSession`, and the rest
+  of the session-store API.
+- **`Query` control methods**: this SDK currently implements
+  `interrupt` / `setPermissionMode` / `setModel` / `close`. The larger upstream
+  control-method set (the other ~19 methods) is not implemented.
+
+The `Options` type IS a true superset of the upstream `Options` — every upstream
+field type-checks here — but advanced fields beyond the launch flags
+(`agent` / `model` / `permissionMode` / `cwd` / `env`) are accepted for drop-in
+compatibility and **not yet honored** by the runtime. The exported helper/callback
+type aliases (`CanUseTool`, `HookCallback`, `McpServerConfig`, …) are permissive
+compatibility stand-ins, not full upstream models.
+
 ## Design notes
 
 - **Strict types, no `any` in the public surface.** `SDKMessage` and
