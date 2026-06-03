@@ -39,15 +39,14 @@ export OPENAI_API_KEY=sk-openai-...
 ```
 
 ```python
-from lite_agent_sdk import query, ClaudeAgentOptions
+from lite_agent_sdk import query, AgentOptions
 
 # Claude Agent SDK harness
 async for message in query(
     prompt="Hello from Claude",
-    options=ClaudeAgentOptions(
+    options=AgentOptions(
         harness="claude-agent",
-        cwd=".",
-        model="claude-sonnet-4-5",
+        model="claude-opus-4-8",
     ),
 ):
     print(message)
@@ -55,10 +54,9 @@ async for message in query(
 # OpenAI Agents harness
 async for message in query(
     prompt="Hello from OpenAI Agents",
-    options=ClaudeAgentOptions(
+    options=AgentOptions(
         harness="openai-agents",
-        cwd=".",
-        model="gpt-4.1",
+        model="gpt-5.5",
     ),
 ):
     print(message)
@@ -66,10 +64,9 @@ async for message in query(
 # Pi AI harness
 async for message in query(
     prompt="Hello from Pi AI",
-    options=ClaudeAgentOptions(
+    options=AgentOptions(
         harness="pi-ai",
-        cwd=".",
-        model="claude-sonnet-4-5",
+        model="claude-opus-4-8",
     ),
 ):
     print(message)
@@ -77,14 +74,24 @@ async for message in query(
 
 ### Python: migrate from Claude Agent SDK
 
-If you already use Claude Agent SDK, change the import and add `harness`.
+If you already use Claude Agent SDK, the migration is one import change plus a
+`harness` selector.
 
-```python
-# before
-from claude_agent_sdk import query, ClaudeAgentOptions
+```diff
+- from claude_agent_sdk import query, ClaudeAgentOptions
++ from lite_agent_sdk import query, AgentOptions
 
-# after
-from lite_agent_sdk import query, ClaudeAgentOptions
+  async for message in query(
+      prompt="Hello from Claude",
+-     options=ClaudeAgentOptions(
+-         model="claude-opus-4-8",
+-     ),
++     options=AgentOptions(
++         harness="claude-agent",
++         model="claude-opus-4-8",
++     ),
+  ):
+      print(message)
 ```
 
 ### Python: use LiteLLM AI Gateway
@@ -98,16 +105,13 @@ export LITELLM_API_KEY=sk-litellm-...
 ```
 
 ```python
-from lite_agent_sdk import query, ClaudeAgentOptions
+from lite_agent_sdk import query, AgentOptions
 
 async for message in query(
     prompt="Refactor the billing service and explain the diff.",
-    options=ClaudeAgentOptions(
+    options=AgentOptions(
         harness="openai-agents",
-        cwd=".",
-        model="anthropic/claude-sonnet-4-5",
-        base_url="https://litellm.your-company.com/v1",
-        api_key="sk-litellm-...",
+        model="anthropic/claude-opus-4-8",
     ),
 ):
     print(message)
@@ -133,8 +137,7 @@ for await (const message of query({
   prompt: "Hello from Claude",
   options: {
     harness: "claude-agent",
-    cwd: ".",
-    model: "claude-sonnet-4-5"
+    model: "claude-opus-4-8"
   }
 })) {
   console.log(message);
@@ -145,8 +148,7 @@ for await (const message of query({
   prompt: "Hello from OpenAI Agents",
   options: {
     harness: "openai-agents",
-    cwd: ".",
-    model: "gpt-4.1"
+    model: "gpt-5.5"
   }
 })) {
   console.log(message);
@@ -157,8 +159,7 @@ for await (const message of query({
   prompt: "Hello from Pi AI",
   options: {
     harness: "pi-ai",
-    cwd: ".",
-    model: "claude-sonnet-4-5"
+    model: "claude-opus-4-8"
   }
 })) {
   console.log(message);
@@ -167,14 +168,23 @@ for await (const message of query({
 
 ### JavaScript: migrate from Claude Agent SDK
 
-If you already use Claude Agent SDK, change the import and add `harness`.
+If you already use Claude Agent SDK, the migration is one import change plus a
+`harness` selector.
 
-```ts
-// before
-import { query } from "@anthropic-ai/claude-agent-sdk";
+```diff
+- import { query } from "@anthropic-ai/claude-agent-sdk";
++ import { query } from "@lite-harness/sdk";
 
-// after
-import { query } from "@lite-harness/sdk";
+  for await (const message of query({
+    prompt: "Hello from Claude",
+    options: {
+-     model: "claude-opus-4-8"
++     harness: "claude-agent",
++     model: "claude-opus-4-8"
+    }
+  })) {
+    console.log(message);
+  }
 ```
 
 ### JavaScript: use LiteLLM AI Gateway
@@ -194,10 +204,7 @@ for await (const message of query({
   prompt: "Refactor the billing service and explain the diff.",
   options: {
     harness: "openai-agents",
-    cwd: ".",
-    model: "anthropic/claude-sonnet-4-5",
-    baseUrl: "https://litellm.your-company.com/v1",
-    apiKey: "sk-litellm-..."
+    model: "anthropic/claude-opus-4-8"
   }
 })) {
   console.log(message);
@@ -209,13 +216,7 @@ for await (const message of query({
 - `harness`: which agent SDK/runtime handles the task.
   Examples: `claude-agent`, `openai-agents`, `pi-ai`.
 - `model`: which model that harness uses.
-  Examples: `claude-sonnet-4-5`, `gpt-4.1`.
-- `base_url` / `baseUrl`: optional OpenAI-compatible API base.
-  Example: a LiteLLM AI Gateway URL.
-- `api_key` / `apiKey`: optional key for the selected API base.
-  Example: a LiteLLM virtual key.
-- `cwd`: working directory for repo-aware agents.
-  Example: `"."`.
+  Examples: `claude-opus-4-8`, `gpt-5.5`.
 
 ## Status
 
