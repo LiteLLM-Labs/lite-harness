@@ -117,6 +117,33 @@ for await (const message of query({
 }
 ```
 
+## With Any AI Gateway
+
+Use `AI_GATEWAY_API_BASE` and `AI_GATEWAY_API_KEY` to route through any
+OpenAI-compatible gateway (Portkey, OpenRouter, Helicone, etc.):
+
+```bash
+export AI_GATEWAY_API_BASE=https://gateway.your-company.com/v1
+export AI_GATEWAY_API_KEY=your-key
+```
+
+```ts
+import { query } from "@lite-harness/sdk";
+
+for await (const message of query({
+  prompt: "Debug this production trace",
+  options: {
+    harness: "codex",
+    model: "claude-opus-4-8",
+  },
+})) {
+  console.log(message);
+}
+```
+
+See [docs/ai-gateway.md](docs/ai-gateway.md) for details, including the assumption
+that the gateway supports all harness endpoints.
+
 ## Docs
 
 [SDK](src/sdk/README.md)
