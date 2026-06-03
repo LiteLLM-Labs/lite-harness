@@ -44,18 +44,18 @@ import { query } from "@lite-harness/sdk";
 
 const prompt = "Fix the failing test";
 
-// Claude Agent SDK harness
+// Claude Code harness
 for await (const message of query({
   prompt,
-  options: { harness: "claude", model: "claude-opus-4-8" },
+  options: { harness: "claude-code", model: "claude-opus-4-8" },
 })) {
   console.log(message);
 }
 
-// OpenAI Agents harness
+// Codex harness
 for await (const message of query({
   prompt,
-  options: { harness: "openai", model: "gpt-5.5" },
+  options: { harness: "codex", model: "gpt-5.5" },
 })) {
   console.log(message);
 }
@@ -72,29 +72,31 @@ from lite_harness import query, AgentOptions
 
 prompt = "Fix the failing test"
 
-# Claude Agent SDK harness
+# Claude Code harness
 async for message in query(
     prompt=prompt,
-    options=AgentOptions(harness="claude", model="claude-opus-4-8"),
+    options=AgentOptions(harness="claude-code", model="claude-opus-4-8"),
 ):
     print(message)
 
-# OpenAI Agents harness
+# Codex harness
 async for message in query(
     prompt=prompt,
-    options=AgentOptions(harness="openai", model="gpt-5.5"),
+    options=AgentOptions(harness="codex", model="gpt-5.5"),
 ):
     print(message)
 ```
 
 ## Supported Harnesses
 
-- `claude`: Claude Agent SDK / Claude Code behavior.
+See [`src/sdk/server/providers/`](src/sdk/server/providers/) for the full list.
+
+- `claude-code`: Claude Agent SDK / Claude Code behavior.
   Upstream: [Python](https://github.com/anthropics/claude-agent-sdk-python),
   [TypeScript](https://github.com/anthropics/claude-agent-sdk-typescript).
-- `openai`: OpenAI Agents SDK behavior.
-  Upstream: [Python](https://github.com/openai/openai-agents-python),
-  [TypeScript](https://github.com/openai/openai-agents-js).
+- `codex`: OpenAI Codex CLI behavior.
+  Upstream: [openai/codex](https://github.com/openai/codex).
+- `pi-ai`: Pi AI behavior.
 
 ## With LiteLLM AI Gateway
 
@@ -112,7 +114,7 @@ import { query } from "@lite-harness/sdk";
 for await (const message of query({
   prompt: "Debug this production trace",
   options: {
-    harness: "openai",
+    harness: "codex",
     model: "anthropic/claude-opus-4-8",
   },
 })) {
