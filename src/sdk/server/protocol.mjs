@@ -1,5 +1,11 @@
 import { createInterface } from "node:readline";
 
+// ---------------------------------------------------------------------------
+// Launch flags. The SDK spawns us mirroring the claude CLI:
+//   --input-format stream-json --output-format stream-json --verbose
+//   [--agent <a>] [--model <m>] [--permission-mode <p>] [--cwd <dir>]
+// Unknown flags are tolerated and ignored (forward-compatible with the CLI).
+// ---------------------------------------------------------------------------
 export function parseLaunchArgs(argv, defaults = {}) {
   const options = {
     agent: defaults.agent ?? "claude",
@@ -52,18 +58,68 @@ export function contentToText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((block) => {
-      if (block && typeof block === "object" && typeof block.text === "string") {
-        return block.text;
-      }
-      return "";
-    })
+    .map((block) =>
+      block && typeof block === "object" && typeof block.text === "string" ? block.text : "",
+    )
     .join("");
 }
 
+// ---------------------------------------------------------------------------
+// Canonical frame builders — the one place the PROTOCOL.md wire shapes live.
+// ---------------------------------------------------------------------------
+export function controlResponse(requestId, { error } = {}) {
+  return error === undefined
+    ? { type: "control_response", response: { request_id: requestId, subtype: "success" } }
+    : {
+        type: "control_response",
+        response: { request_id: requestId, subtype: "error", error: String(error) },
+      };
+}
+
+export function systemInit({ sessionId, model, mcpServers = [], tools = [] }) {
+  return { type: "system", subtype: "init", session_id: sessionId, model, tools, mcp_servers: mcpServers };
+}
+
+export function assistantFrame({ model, content, parentToolUseId = null }) {
+  return { type: "assistant", message: { model, content }, parent_tool_use_id: parentToolUseId };
+}
+
+export function streamEventFrame({ sessionId, event }) {
+  return { type: "stream_event", session_id: sessionId, event };
+}
+
+export function resultFrame({
+  sessionId,
+  turns = 1,
+  startedAt,
+  text = "",
+  subtype,
+  isError = false,
+  usage = {},
+  totalCostUsd = 0,
+}) {
+  const duration = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
+  return {
+    type: "result",
+    subtype: subtype ?? (isError ? "error_during_execution" : "success"),
+    session_id: sessionId,
+    duration_ms: duration,
+    duration_api_ms: duration,
+    is_error: isError,
+    num_turns: turns,
+    total_cost_usd: totalCostUsd,
+    usage,
+    result: text,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The wire. Reads NDJSON from stdin, demuxes on `type`, correlates control
+// requests, and streams a turn's frames to stdout AS THEY ARRIVE.
+// ---------------------------------------------------------------------------
 export class StreamJsonServer {
-  constructor({ sdk, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr }) {
-    this.sdk = sdk;
+  constructor({ session, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr }) {
+    this.session = session;
     this.stdin = stdin;
     this.stdout = stdout;
     this.stderr = stderr;
@@ -73,6 +129,7 @@ export class StreamJsonServer {
   start() {
     const rl = createInterface({ input: this.stdin });
     rl.on("line", (line) => this.handleLine(line));
+    return this;
   }
 
   write(obj) {
@@ -105,41 +162,37 @@ export class StreamJsonServer {
     const requestId = msg.request_id;
     const request = msg.request && typeof msg.request === "object" ? msg.request : {};
     try {
-      await this.sdk.handleControl(request);
-      this.write({ type: "control_response", response: { request_id: requestId, subtype: "success" } });
+      await this.session.handleControl(request);
+      this.write(controlResponse(requestId));
     } catch (err) {
-      this.write({
-        type: "control_response",
-        response: {
-          request_id: requestId,
-          subtype: "error",
-          error: err instanceof Error ? err.message : String(err),
-        },
-      });
+      this.write(controlResponse(requestId, { error: err instanceof Error ? err.message : err }));
     }
   }
 
   startTurn(msg) {
     if (this.activeTurn) {
-      this.write({
-        type: "result",
-        subtype: "error_during_execution",
-        session_id: this.sdk.sessionId,
-        duration_ms: 0,
-        duration_api_ms: 0,
-        is_error: true,
-        num_turns: this.sdk.turns,
-        total_cost_usd: 0,
-        usage: {},
-        result: "A turn is already in progress",
-      });
+      this.write(
+        resultFrame({
+          sessionId: this.session.sessionId,
+          turns: this.session.turns,
+          text: "A turn is already in progress",
+          isError: true,
+        }),
+      );
       return;
     }
 
     const content = msg.message && typeof msg.message === "object" ? msg.message.content : "";
     this.activeTurn = this.runTurn(content)
       .catch((err) => {
-        this.write(this.sdk.errorResult(err));
+        this.write(
+          resultFrame({
+            sessionId: this.session.sessionId,
+            turns: this.session.turns,
+            text: err instanceof Error ? err.message : String(err),
+            isError: true,
+          }),
+        );
       })
       .finally(() => {
         this.activeTurn = null;
@@ -147,10 +200,8 @@ export class StreamJsonServer {
   }
 
   async runTurn(content) {
-    const lines = await this.sdk.runTurn({ prompt: contentToText(content), content });
-    for (const line of lines) {
-      this.write(line);
+    for await (const frame of this.session.runTurn({ prompt: contentToText(content), content })) {
+      this.write(frame);
     }
   }
 }
-
