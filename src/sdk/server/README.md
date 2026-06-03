@@ -1,23 +1,20 @@
 # SDK Backend Server
 
-This directory contains the production stdio backend for the lite-harness SDK.
-It follows the same shape as the existing harness server: one unified adapter
-fronts multiple agent runtimes behind one contract.
-
-The difference is the contract. `harnesses/inline-adapter.mjs` fronts runtimes
-behind lite-harness HTTP/SSE endpoints; this server fronts runtimes behind the
-Claude Agent SDK `stream-json` stdio protocol.
+This directory is the production stdio backend for the lite-harness SDK. It
+speaks the Claude Agent SDK `stream-json` stdio protocol on the wire and drives
+native provider agent SDKs **in-process** — no child CLIs are spawned.
 
 ```text
 SDK client
   │ Claude Agent SDK stream-json over stdio
   ▼
-StreamJsonServer          protocol.mjs
-  │
+StreamJsonServer            protocol.mjs   (the wire)
   ▼
-UnifiedAgentSDK           unified-sdk.mjs
-  ├─ ClaudeCodeRuntime    real `claude` / Claude Code CLI
-  └─ CodexRuntime         real `codex exec` CLI
+Session                     session.mjs    (process-local state)
+  ▼
+provider runtime            providers/<name>/
+  ├─ anthropic   → @anthropic-ai/claude-agent-sdk (in-process)
+  └─ codex       → @openai/agents (in-process)
 ```
 
 ## Entrypoint
@@ -35,121 +32,63 @@ node src/sdk/server/server.mjs \
   --cwd "$PWD"
 ```
 
-Supported production agents:
+`server.mjs` parses the launch flags, resolves a provider for `--agent`, builds
+a `Session`, and starts the `StreamJsonServer`. `LITE_HARNESS_DEFAULT_AGENT`
+controls the default when `--agent` is omitted; if unset the default is
+`claude`.
 
-- `claude`, `claude-code`, `cc`
-- `codex`
+## Layout
 
-`LITE_HARNESS_DEFAULT_AGENT` controls the default when `--agent` is omitted.
-If unset, the default is `claude`.
+- `protocol.mjs` — the wire. Parses launch flags, reads one JSON object per
+  stdin line, writes one per stdout line, keeps diagnostics on stderr,
+  correlates `control_request`/`control_response`, and streams a turn's frames
+  as they arrive. Also the single home for the canonical frame builders
+  (`systemInit`, `assistantFrame`, `streamEventFrame`, `resultFrame`, …).
+- `session.mjs` — `Session` holds all process-local state: stable `sessionId`,
+  turn count, text history, initialized MCP server metadata, hooks, current
+  model and permission mode. `handleControl(request)` services control
+  requests; `runTurn({ prompt, content })` wraps the runtime's frames with a
+  leading `system/init` and a trailing `result` (synthesizing one on error or
+  when the runtime yields none).
+- `providers/index.mjs` — the registry. Auto-discovers providers by scanning
+  each subfolder for an `index.mjs` exporting `id`, optional `aliases`, and
+  `createRuntime(...)`. `resolveProvider(agent)` maps an id/alias to a provider.
+  Adding a provider is dropping a folder; `LITE_HARNESS_PROVIDERS_DIR` can layer
+  in extra/test providers.
+- `providers/<name>/index.mjs` + `transformation.mjs` — each provider drives its
+  native SDK in `index.mjs` and maps that SDK's messages/events to canonical
+  wire frames in `transformation.mjs` (kept pure for testability).
 
-## Unified Adapter
+## Providers
 
-`protocol.mjs` is the stdio adapter. It owns all SDK-facing protocol work:
+### anthropic (`claude`, `claude-code`, `cc`)
 
-- parse the launch flags the SDK passes
-- read one JSON object per stdin line
-- write one JSON object per stdout line
-- keep diagnostics on stderr
-- route messages by top-level `type`
-- correlate `control_request` and `control_response`
-- start turns from `user` messages
+Drives `@anthropic-ai/claude-agent-sdk` in-process via `query(...)` and maps its
+messages to canonical frames. Routes through LiteLLM by setting
+`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` from `LITELLM_API_BASE` /
+`LITELLM_API_KEY` (an explicit `ANTHROPIC_BASE_URL` wins). Default model is
+`LITELLM_DEFAULT_MODEL` or `claude-sonnet-4-6`.
 
-The adapter does not know how Claude or Codex run. It calls `UnifiedAgentSDK`.
+### codex (`openai`)
 
-## Unified SDK
-
-`unified-sdk.mjs` is the internal runtime API. It owns process-local session
-state and exposes the small surface the protocol adapter needs:
-
-- `handleControl(request)`
-- `runTurn({ prompt, content })`
-- `errorResult(error)`
-
-State held here:
-
-- stable `sessionId`
-- selected runtime, model, permission mode, and cwd
-- initialized MCP server metadata
-- turn count
-- text history used by runtimes that need conversation context
-
-This mirrors the existing harness design: add runtime-specific behavior behind
-the unified SDK, not in the protocol layer.
-
-## Runtime Adapters
-
-### Claude Code
-
-`ClaudeCodeRuntime` launches the real Claude Code CLI:
-
-```text
-CLAUDE_CODE_COMMAND || CLAUDE_COMMAND || claude
-```
-
-It starts the command with:
-
-```text
---input-format stream-json
---output-format stream-json
---verbose
---model <model>
---permission-mode <mode>
---cwd <cwd>
-```
-
-For each SDK turn, it sends an internal `initialize` control request followed by
-the user message, then forwards non-control Claude Agent SDK messages back to
-the client.
-
-### Codex
-
-`CodexRuntime` launches the real Codex CLI:
-
-```text
-CODEX_COMMAND || codex
-```
-
-It runs:
-
-```text
-codex exec -m <model> --dangerously-bypass-approvals-and-sandbox <prompt>
-```
-
-The adapter captures stdout and normalizes it to Claude Agent SDK messages:
-
-1. `system`
-2. `assistant`
-3. `result`
-
-When `LITELLM_API_BASE` is set, the adapter passes the same LiteLLM provider
-configuration style used by the existing Codex harness. The model resolution is:
-
-1. `--model`
-2. `CODEX_MODEL`
-3. `gpt-4o`
+Drives `@openai/agents` in-process via `run(...)` and maps its run-stream events
+to canonical frames. Routes through LiteLLM by installing an OpenAI-compatible
+client (`/v1`) as the default and using the chat-completions surface. Default
+model is `LITELLM_DEFAULT_MODEL` or `gpt-4o`.
 
 ## Control Requests
 
-Implemented control subtypes:
+`Session.handleControl` services these subtypes:
 
-- `initialize`: stores hooks and `sdk_mcp_servers`
-- `set_permission_mode`: updates runtime permission mode when supported
-- `set_model`: updates the runtime model
-- `interrupt`: terminates the active runtime child process
+- `initialize` — stores `hooks` and `sdk_mcp_servers`
+- `set_permission_mode` — updates runtime permission mode when supported
+- `set_model` — updates the runtime model
+- `interrupt` — interrupts the active runtime
 
-Unknown control subtypes return a correlated error response.
+Unknown subtypes throw, which the wire returns as a correlated error response.
 
 ## Testing
 
-Run:
-
 ```bash
-node --test src/sdk/server/server.test.mjs
+node --test src/sdk/server
 ```
-
-The tests execute `server.mjs` and generate temporary command recorders at
-runtime to validate command routing and wire normalization without requiring
-local Claude/Codex credentials. Those recorders are not part of the server
-implementation.
-
