@@ -85,8 +85,7 @@ export interface AgentOptions {
    */
   debug?: boolean;
   /**
-   * Reasoning effort level. Accepted for drop-in compat and forwarded
-   * opaquely / not yet honored.
+   * Reasoning effort level forwarded to harnesses that support thinking depth.
    */
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /**

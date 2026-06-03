@@ -17,7 +17,7 @@ function assistantText(content) {
 }
 
 export class Session {
-  constructor({ provider, model, permissionMode, cwd, env, stderr }) {
+  constructor({ provider, model, effort, permissionMode, cwd, env, stderr }) {
     this.sessionId = `sess_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
     this.turns = 0;
     this.history = [];
@@ -27,6 +27,7 @@ export class Session {
     this.permissionMode = permissionMode;
     this.runtime = provider.createRuntime({
       model,
+      effort,
       permissionMode,
       cwd,
       env,

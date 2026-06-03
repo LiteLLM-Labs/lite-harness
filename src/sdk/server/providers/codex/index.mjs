@@ -23,7 +23,7 @@ function buildCodexOptions(env) {
   return { baseUrl };
 }
 
-export function createRuntime({ model, env = process.env, diagnostics = () => {} }) {
+export function createRuntime({ model, effort, env = process.env, diagnostics = () => {} }) {
   let currentModel = model || env.LITELLM_DEFAULT_MODEL || "gpt-4o";
   let aborter = null;
 
@@ -42,7 +42,9 @@ export function createRuntime({ model, env = process.env, diagnostics = () => {}
     },
     async *runTurn({ prompt, session }) {
       aborter = new AbortController();
-      const thread = codex.startThread({ model: currentModel, skipGitRepoCheck: true });
+      const threadOptions = { model: currentModel, skipGitRepoCheck: true };
+      if (effort) threadOptions.modelReasoningEffort = effort;
+      const thread = codex.startThread(threadOptions);
       const { events } = await thread.runStreamed(prompt, { signal: aborter.signal });
       const toFrames = createEventTransformer();
       try {

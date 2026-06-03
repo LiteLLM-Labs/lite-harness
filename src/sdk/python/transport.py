@@ -113,6 +113,7 @@ class SubprocessTransport(Transport):
         *,
         agent: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
         permission_mode: str | None = None,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
@@ -122,6 +123,7 @@ class SubprocessTransport(Transport):
             resolve_server_command(command),
             agent=agent,
             model=model,
+            effort=effort,
             permission_mode=permission_mode,
             cwd=cwd,
         )
@@ -143,6 +145,7 @@ class SubprocessTransport(Transport):
         *,
         agent: str | None,
         model: str | None,
+        effort: str | None,
         permission_mode: str | None,
         cwd: str | None,
     ) -> list[str]:
@@ -158,6 +161,8 @@ class SubprocessTransport(Transport):
             cmd += ["--agent", agent]
         if model is not None:
             cmd += ["--model", model]
+        if effort is not None:
+            cmd += ["--effort", effort]
         if permission_mode is not None:
             cmd += ["--permission-mode", permission_mode]
         if cwd is not None:

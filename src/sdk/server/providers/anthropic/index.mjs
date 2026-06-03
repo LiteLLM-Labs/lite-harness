@@ -23,7 +23,14 @@ function applyLiteLlmEnv(env) {
   process.env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || env.LITELLM_API_KEY;
 }
 
-export function createRuntime({ model, permissionMode, cwd, env = process.env, diagnostics = () => {} }) {
+export function createRuntime({
+  model,
+  effort,
+  permissionMode,
+  cwd,
+  env = process.env,
+  diagnostics = () => {},
+}) {
   applyLiteLlmEnv(env);
   let currentModel = model || env.LITELLM_DEFAULT_MODEL || "claude-sonnet-4-6";
   let mode = permissionMode || "default";
@@ -48,6 +55,7 @@ export function createRuntime({ model, permissionMode, cwd, env = process.env, d
         prompt,
         options: {
           model: currentModel,
+          effort,
           cwd,
           permissionMode: mode,
           includePartialMessages: true,

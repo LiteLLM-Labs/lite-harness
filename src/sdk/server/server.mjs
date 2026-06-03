@@ -22,6 +22,7 @@ try {
 const session = new Session({
   provider,
   model: options.model,
+  effort: options.effort,
   permissionMode: options.permissionMode,
   cwd: options.cwd,
   env: process.env,
