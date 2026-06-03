@@ -44,6 +44,50 @@ test("query() runs the full lifecycle and yields messages ending in result", asy
   assert.equal(result.num_turns, 1);
 });
 
+test("bundled default server is used when no override is provided", async () => {
+  const q = query({
+    prompt: "bundled default",
+    options: {
+      agent: "codex",
+      model: "mock-x",
+      env: { ...process.env, LITE_HARNESS_SERVER: "" },
+    },
+  });
+
+  const messages = [];
+  for await (const msg of q) {
+    messages.push(msg);
+  }
+
+  assert.equal(
+    messages.at(-1).result,
+    "Mock reply from codex using mock-x: bundled default",
+  );
+});
+
+test("pathToClaudeCodeExecutable can point at a compatible server", async () => {
+  const bundledServer = join(here, "../../server/mock-server.mjs");
+  const q = query({
+    prompt: "explicit executable",
+    options: {
+      pathToClaudeCodeExecutable: bundledServer,
+      extraArgs: { agent: "codex" },
+      model: "mock-y",
+      env: { ...process.env, LITE_HARNESS_SERVER: "" },
+    },
+  });
+
+  const messages = [];
+  for await (const msg of q) {
+    messages.push(msg);
+  }
+
+  assert.equal(
+    messages.at(-1).result,
+    "Mock reply from codex using mock-y: explicit executable",
+  );
+});
+
 test("early break tears down without hanging", async () => {
   const q = query({
     prompt: "hi",

@@ -27,6 +27,7 @@ import secrets
 import shlex
 import shutil
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 from errors import (
@@ -93,7 +94,11 @@ def resolve_server_command(explicit: list[str] | None = None) -> list[str]:
             "Could not resolve the lite-harness server command. Set "
             "LITE_HARNESS_SERVER or pass a transport explicitly."
         )
-    return [node, "lite-harness-server"]
+    return [node, str(_bundled_server_path())]
+
+
+def _bundled_server_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "server" / "mock-server.mjs"
 
 
 class SubprocessTransport(Transport):
@@ -108,6 +113,7 @@ class SubprocessTransport(Transport):
         permission_mode: str | None = None,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
+        extra_args: dict[str, str | None] | None = None,
         stderr: Callable[[str], None] | None = None,
     ) -> None:
         self._command = self._build_command(
@@ -116,6 +122,7 @@ class SubprocessTransport(Transport):
             model=model,
             permission_mode=permission_mode,
             cwd=cwd,
+            extra_args=extra_args,
         )
         self._cwd = cwd
         self._env = env
@@ -137,6 +144,7 @@ class SubprocessTransport(Transport):
         model: str | None,
         permission_mode: str | None,
         cwd: str | None,
+        extra_args: dict[str, str | None] | None,
     ) -> list[str]:
         cmd = [
             *base,
@@ -154,6 +162,11 @@ class SubprocessTransport(Transport):
             cmd += ["--permission-mode", permission_mode]
         if cwd is not None:
             cmd += ["--cwd", cwd]
+        if extra_args:
+            for key, value in extra_args.items():
+                cmd.append(key if key.startswith("--") else f"--{key}")
+                if value is not None:
+                    cmd.append(value)
         return cmd
 
     async def connect(self) -> None:

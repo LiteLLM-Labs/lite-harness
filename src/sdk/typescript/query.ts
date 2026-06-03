@@ -58,6 +58,14 @@ function buildLaunchArgs(options: Options): string[] {
   if (options.cwd !== undefined) {
     args.push("--cwd", options.cwd);
   }
+  if (options.extraArgs !== undefined) {
+    for (const [key, value] of Object.entries(options.extraArgs)) {
+      args.push(key.startsWith("--") ? key : `--${key}`);
+      if (value !== null) {
+        args.push(value);
+      }
+    }
+  }
   return args;
 }
 
@@ -74,6 +82,10 @@ class QueryRunner {
   ) {
     this.promptText = typeof prompt === "string" ? prompt : "";
     this.transport = new Transport({
+      command:
+        options.pathToClaudeCodeExecutable !== undefined
+          ? [options.pathToClaudeCodeExecutable]
+          : undefined,
       cwd: options.cwd,
       env: options.env ?? process.env,
       stderr: options.stderr,
