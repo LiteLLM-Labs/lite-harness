@@ -1,4 +1,4 @@
-name: Unit tests
+name: SDK tests
 
 on:
   pull_request:
@@ -15,10 +15,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install harness deps
-        run: npm install --no-audit --no-fund
-        working-directory: harnesses
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Run unit tests
+      - name: Install Python SDK deps
+        working-directory: src/sdk/python
+        run: pip install -e '.[dev]'
+
+      - name: Run Python SDK tests
+        working-directory: src/sdk/python
         run: |
-          node --test mcp/sandbox.test.mjs mcp/approvals.test.mjs harnesses/agent-plugin.test.mjs
+          python -m pytest -q
+          python -m mypy
+
+      - name: Install TypeScript SDK deps
+        working-directory: src/sdk/typescript
+        run: npm install --no-audit --no-fund
+
+      - name: Run TypeScript SDK tests
+        working-directory: src/sdk/typescript
+        run: |
+          npm test
+          npm run typecheck

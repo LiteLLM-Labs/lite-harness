@@ -1,14 +1,16 @@
 # lite-harness
 
-Call every agent harness using one SDK: Claude Agent SDK, OpenAI Agents, and
-Pi AI.
-Call all agent harnesses using the Claude Agent SDK format [Claude Agent SDK, OpenAI Agents, Pi AI.]
+Call all agent harnesses using the Claude Agent SDK format: Claude Agent SDK,
+OpenAI Agents, and Pi AI.
 
 lite-harness manages:
 
-- One JavaScript OR Python interface for multiple agent harnesses
+- One JavaScript and Python interface for multiple agent harnesses
 - Harness switching with `harness`, model switching with `model`
 - Claude Agent SDK-compatible streaming messages and errors
+- Optional LiteLLM AI Gateway routing for keys, budgets, logs, and fallbacks
+
+No gateway is required. Use provider-native API keys by default.
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
@@ -119,7 +121,7 @@ for await (const message of query({
 
 ## Docs
 
-[SDK](src/sdk/README.md) · [API reference](docs/api.md)
+[SDK](src/sdk/README.md)
 
 ## License
 
