@@ -25,8 +25,8 @@ cd lite-harness
 npm install --prefix src/sdk/server
 
 # pick a model — set the key for your provider:
-export ANTHROPIC_API_KEY=sk-ant-...   # for harness "claude"
-export OPENAI_API_KEY=sk-...          # for harness "openai"
+export ANTHROPIC_API_KEY=sk-ant-...   # for harness "claude-code"
+export OPENAI_API_KEY=sk-...          # for harness "codex"
 # …or point at a LiteLLM gateway instead:
 #   export LITELLM_API_BASE=https://litellm.your-company.com/v1
 #   export LITELLM_API_KEY=sk-litellm-...
