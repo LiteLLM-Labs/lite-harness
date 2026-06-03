@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lite_agent_sdk import (
+from lite_harness import (
     AssistantMessage,
     ClaudeAgentOptions,
     ResultMessage,
@@ -10,7 +10,7 @@ from lite_agent_sdk import (
     TextBlock,
     query,
 )
-from lite_agent_sdk._transport.subprocess import SubprocessTransport
+from transport import SubprocessTransport
 
 
 async def test_query_full_lifecycle(fake_server_command: list[str]) -> None:

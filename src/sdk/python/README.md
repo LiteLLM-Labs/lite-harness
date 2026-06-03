@@ -1,11 +1,11 @@
-# lite-agent-sdk
+# lite-harness
 
 A drop-in replacement for the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python).
 Swap the import and existing code keeps working:
 
 ```diff
 - from claude_agent_sdk import query, ClaudeSDKClient, ClaudeAgentOptions
-+ from lite_agent_sdk import query, ClaudeSDKClient, ClaudeAgentOptions
++ from lite_harness import query, ClaudeSDKClient, ClaudeAgentOptions
 ```
 
 The SDK is a thin client. It spawns the lite-harness server as a child process
@@ -16,7 +16,7 @@ dependencies** — pure stdlib `asyncio`. Python 3.10+.
 ## Install
 
 ```bash
-pip install lite-agent-sdk
+pip install lite-harness
 ```
 
 ## Usage
@@ -25,7 +25,7 @@ One-shot:
 
 ```python
 import asyncio
-from lite_agent_sdk import query, ResultMessage
+from lite_harness import query, ResultMessage
 
 async def main() -> None:
     async for message in query(prompt="Hello"):
@@ -38,7 +38,7 @@ asyncio.run(main())
 Stateful client (multiple prompts on one session):
 
 ```python
-from lite_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+from lite_harness import ClaudeSDKClient, ClaudeAgentOptions
 
 async with ClaudeSDKClient(options=ClaudeAgentOptions(model="claude-x")) as client:
     await client.query("first question")

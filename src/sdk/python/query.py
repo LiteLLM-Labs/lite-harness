@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterable, AsyncIterator
 
-from ._decode import decode_message, is_result
-from ._transport import Transport
-from ._transport.subprocess import SubprocessTransport
-from .messages import Message
-from .options import ClaudeAgentOptions
+from decode import decode_message, is_result
+from transport import Transport
+from transport import SubprocessTransport
+from messages import Message
+from options import ClaudeAgentOptions
 
 
 async def query(

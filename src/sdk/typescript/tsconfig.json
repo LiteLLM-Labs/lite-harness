@@ -9,7 +9,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
@@ -17,6 +17,6 @@
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src"],
+  "include": ["*.ts"],
   "exclude": ["dist", "node_modules", "test"]
 }
