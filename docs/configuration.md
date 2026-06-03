@@ -11,6 +11,17 @@ Everything is configured via environment variables. Set them on `docker run` (or
 
 The harness queries `${LITELLM_API_BASE}/v1/models` at boot and registers every model the gateway returns. Clients pick a `modelID` per request. If the gateway returns no models, boot fails fast with a clear error.
 
+### Generic AI gateway (non-LiteLLM)
+
+Use these instead of `LITELLM_*` when routing through any other OpenAI-compatible gateway. `LITELLM_*` takes precedence when both sets are present.
+
+| Var                      | What it is                                                                                           |
+|--------------------------|------------------------------------------------------------------------------------------------------|
+| `AI_GATEWAY_API_BASE`    | URL of your AI gateway. Trailing slash and `/v1` suffix both accepted.                               |
+| `AI_GATEWAY_API_KEY`     | Key sent as `Authorization: Bearer <key>` to the gateway.                                            |
+
+See [docs/ai-gateway.md](ai-gateway.md) for per-harness wiring details and compatible gateway examples.
+
 ## Auth on lite itself
 
 | Var          | What it is                                                                                                  |
