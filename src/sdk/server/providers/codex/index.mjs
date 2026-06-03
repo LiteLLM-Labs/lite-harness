@@ -9,15 +9,20 @@ import { eventToFrames } from "./transformation.mjs";
 export const id = "codex";
 export const aliases = ["openai"];
 
+// LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
+// route through the gateway's OpenAI-compatible /v1 (chat-completions surface).
+// Otherwise leave the Agents SDK's default client in place — direct to OpenAI
+// via OPENAI_API_KEY.
 let configured = false;
 function configure(env) {
   if (configured) return;
-  const base = (env.LITELLM_API_BASE || "").replace(/\/+$/, "");
+  configured = true;
+  setTracingDisabled(true);
+  if (!env.LITELLM_API_BASE || !env.LITELLM_API_KEY) return;
+  const base = env.LITELLM_API_BASE.replace(/\/+$/, "");
   const baseURL = base.endsWith("/v1") ? base : `${base}/v1`;
   setDefaultOpenAIClient(new OpenAI({ baseURL, apiKey: env.LITELLM_API_KEY }));
   setOpenAIAPI("chat_completions");
-  setTracingDisabled(true);
-  configured = true;
 }
 
 export function createRuntime({ model, env = process.env, diagnostics = () => {} }) {
