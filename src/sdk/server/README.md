@@ -64,17 +64,20 @@ controls the default when `--agent` is omitted; if unset the default is
 ### anthropic (`claude`, `claude-code`, `cc`)
 
 Drives `@anthropic-ai/claude-agent-sdk` in-process via `query(...)` and maps its
-messages to canonical frames. Routes through LiteLLM by setting
-`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` from `LITELLM_API_BASE` /
-`LITELLM_API_KEY` (an explicit `ANTHROPIC_BASE_URL` wins). Default model is
-`LITELLM_DEFAULT_MODEL` or `claude-sonnet-4-6`.
+messages to canonical frames. LiteLLM is optional: when both `LITELLM_API_BASE`
+and `LITELLM_API_KEY` are set it routes through the gateway (setting
+`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`); otherwise it goes direct via the
+SDK's own `ANTHROPIC_API_KEY`. An explicit `ANTHROPIC_BASE_URL` always wins.
+Default model is `LITELLM_DEFAULT_MODEL` or `claude-sonnet-4-6`.
 
 ### codex (`openai`)
 
 Drives `@openai/agents` in-process via `run(...)` and maps its run-stream events
-to canonical frames. Routes through LiteLLM by installing an OpenAI-compatible
-client (`/v1`) as the default and using the chat-completions surface. Default
-model is `LITELLM_DEFAULT_MODEL` or `gpt-4o`.
+to canonical frames. LiteLLM is optional: when both `LITELLM_API_BASE` and
+`LITELLM_API_KEY` are set it installs an OpenAI-compatible client (`/v1`) as the
+default and uses the chat-completions surface; otherwise it uses the Agents SDK
+default client (direct to OpenAI via `OPENAI_API_KEY`). Default model is
+`LITELLM_DEFAULT_MODEL` or `gpt-4o`.
 
 ## Control Requests
 
@@ -89,12 +92,14 @@ Unknown subtypes throw, which the wire returns as a correlated error response.
 
 ## Testing
 
-Tests live under `tests/`, mirroring the source tree 1:1 (e.g.
-`tests/providers/codex/transformation.test.mjs`), so the core stays uncluttered.
+Tests live in the **repo-root `tests/`** folder, mirroring the full source path
+1:1 (e.g. `tests/src/sdk/server/providers/codex/transformation.test.mjs`), so the
+core stays uncluttered.
 
 ```bash
-cd src/sdk/server
-npm test          # node --test (no network)
+cd src/sdk/server && npm test          # node --test, no network
+# or from the repo root:
+node --test "tests/src/sdk/server/**/*.test.mjs"
 ```
 
 ### Testing the internal SDK directly (no stdio)
