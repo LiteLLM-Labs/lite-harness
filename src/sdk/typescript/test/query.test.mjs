@@ -84,3 +84,21 @@ test("control methods resolve against a live session", async () => {
   for await (const _m of q) {
   }
 });
+
+test("harness option is accepted as the primary runtime selector", async () => {
+  const q = query({
+    prompt: "harness",
+    options: {
+      harness: "openai-agents",
+      model: "gpt-5.5",
+      env: { ...process.env, LITE_HARNESS_SERVER: `node ${fakeServer}` },
+    },
+  });
+
+  const messages = [];
+  for await (const msg of q) {
+    messages.push(msg);
+  }
+
+  assert.equal(messages.at(-1).result, "echo: harness");
+});

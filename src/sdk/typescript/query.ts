@@ -16,7 +16,7 @@ import { decodeMessage } from "./decode.js";
 import { AbortError } from "./errors.js";
 import type { SDKMessage, SDKUserMessage } from "./messages.js";
 import { Transport } from "./transport.js";
-import type { Options, PermissionMode } from "./types.js";
+import type { AgentOptions, PermissionMode } from "./types.js";
 
 /**
  * The object returned by {@link query}. It IS the async generator (you iterate
@@ -38,7 +38,7 @@ export interface Query extends AsyncGenerator<SDKMessage, void, void> {
  *   --input-format stream-json --output-format stream-json --verbose
  *   [--agent <a>] [--model <m>] [--permission-mode <p>] [--cwd <dir>]
  */
-function buildLaunchArgs(options: Options): string[] {
+function buildLaunchArgs(options: AgentOptions): string[] {
   const args = [
     "--input-format",
     "stream-json",
@@ -46,8 +46,9 @@ function buildLaunchArgs(options: Options): string[] {
     "stream-json",
     "--verbose",
   ];
-  if (options.agent !== undefined) {
-    args.push("--agent", options.agent);
+  const harness = options.harness ?? options.agent;
+  if (harness !== undefined) {
+    args.push("--agent", harness);
   }
   if (options.model !== undefined) {
     args.push("--model", options.model);
@@ -70,7 +71,7 @@ class QueryRunner {
 
   constructor(
     prompt: string | AsyncIterable<SDKUserMessage>,
-    private readonly options: Options,
+    private readonly options: AgentOptions,
   ) {
     this.promptText = typeof prompt === "string" ? prompt : "";
     this.transport = new Transport({
@@ -217,7 +218,7 @@ export function query({
   options = {},
 }: {
   prompt: string | AsyncIterable<SDKUserMessage>;
-  options?: Options;
+  options?: AgentOptions;
 }): Query {
   const runner = new QueryRunner(prompt, options);
 

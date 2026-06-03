@@ -15,7 +15,7 @@ from transport import Transport
 from transport import SubprocessTransport
 from errors import CLIConnectionError
 from messages import Message
-from options import ClaudeAgentOptions, PermissionMode
+from options import AgentOptions, PermissionMode
 
 
 class ClaudeSDKClient:
@@ -31,10 +31,10 @@ class ClaudeSDKClient:
 
     def __init__(
         self,
-        options: ClaudeAgentOptions | None = None,
+        options: AgentOptions | None = None,
         transport: Transport | None = None,
     ) -> None:
-        self._options = options or ClaudeAgentOptions()
+        self._options = options or AgentOptions()
         self._transport = transport
         self._owns_transport = transport is None
         self._connected = False
@@ -55,7 +55,7 @@ class ClaudeSDKClient:
             opts = self._options
             cwd = str(opts.cwd) if opts.cwd is not None else None
             self._transport = SubprocessTransport(
-                agent=opts.agent,
+                agent=opts.selected_harness,
                 model=opts.model,
                 permission_mode=opts.permission_mode,
                 cwd=cwd,

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from lite_harness import (
+    AgentOptions,
     AssistantMessage,
-    ClaudeAgentOptions,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -49,17 +49,23 @@ async def test_query_resolves_via_env(fake_server_env: None) -> None:
 
 async def test_query_with_options(fake_server_command: list[str]) -> None:
     transport = SubprocessTransport(command=fake_server_command)
-    opts = ClaudeAgentOptions(model="claude-x", allowed_tools=["Read"])
+    opts = AgentOptions(model="claude-x", allowed_tools=["Read"])
     messages = [m async for m in query(prompt="hi", options=opts, transport=transport)]
     assert isinstance(messages[-1], ResultMessage)
 
 
-def test_options_to_wire_drops_stderr_and_agent() -> None:
-    opts = ClaudeAgentOptions(
-        model="m", stderr=lambda s: None, agent="codex", cwd="/tmp"
+def test_options_to_wire_drops_transport_only_fields() -> None:
+    opts = AgentOptions(
+        model="m",
+        stderr=lambda s: None,
+        harness="openai-agents",
+        agent="codex",
+        cwd="/tmp",
     )
     wire = opts.to_wire()
     assert "stderr" not in wire
+    assert "harness" not in wire
     assert "agent" not in wire
+    assert opts.selected_harness == "openai-agents"
     assert wire["model"] == "m"
     assert wire["cwd"] == "/tmp"

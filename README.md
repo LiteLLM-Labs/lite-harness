@@ -1,116 +1,149 @@
 # lite-harness
 
-The open agent runtime. Run any coding agent (Claude Code, Codex, OpenCode), on any model, as a portable service your whole team can use.
-This runtime normalizes the harness, the sandbox, and the model behind one interface, so the choice of model and the choice of coding agent become routing decisions instead of lock-in. Claude Code, Codex, OpenCode, GitHub Copilot, all behind one OpenCode-compatible API, with shared MCP tools, prompts, and sessions. One Dockerfile. Yours to run.
+Call every agent harness using one SDK: Claude Agent SDK, OpenAI Agents, and
+Pi AI.
 
+lite-harness manages:
+
+- One JavaScript and Python interface for multiple agent harnesses
+- Harness switching with `harness`, model switching with `model`
+- Claude Agent SDK-compatible streaming messages and errors
+- Optional LiteLLM AI Gateway routing for keys, budgets, logs, and fallbacks
+
+No gateway is required. Use provider-native API keys by default.
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
-![litellm_hero_v11](https://github.com/user-attachments/assets/7ff9d171-fcab-4657-8e44-8a9c8b978ac6)
+## JavaScript Usage
 
+```bash
+npm install @lite-harness/sdk
+```
 
-## ui
+```ts
+import { query } from "@lite-harness/sdk";
 
-<img width="2076" height="1194" alt="Xnapper-2026-05-30-17 47 11" src="https://github.com/user-attachments/assets/7e45c6c7-8973-42a3-b2a3-d053ef4f4484" />
+const prompt = "Fix the failing test";
 
+// Claude Agent SDK harness
+for await (const message of query({
+  prompt,
+  options: { harness: "claude-agent", model: "claude-opus-4-8" },
+})) {
+  console.log(message);
+}
 
-## usage
+// OpenAI Agents harness
+for await (const message of query({
+  prompt,
+  options: { harness: "openai-agents", model: "gpt-5.5" },
+})) {
+  console.log(message);
+}
 
-Install the skills, then deploy agents from any AI coding agent (Claude Code, Codex, Cursor, etc.):
+// Pi AI harness
+for await (const message of query({
+  prompt,
+  options: { harness: "pi-ai", model: "claude-opus-4-8" },
+})) {
+  console.log(message);
+}
+```
+
+## Python Usage
+
+```bash
+pip install lite-harness
+```
+
+```python
+from lite_harness import query, AgentOptions
+
+prompt = "Fix the failing test"
+
+# Claude Agent SDK harness
+async for message in query(
+    prompt=prompt,
+    options=AgentOptions(harness="claude-agent", model="claude-opus-4-8"),
+):
+    print(message)
+
+# OpenAI Agents harness
+async for message in query(
+    prompt=prompt,
+    options=AgentOptions(harness="openai-agents", model="gpt-5.5"),
+):
+    print(message)
+
+# Pi AI harness
+async for message in query(
+    prompt=prompt,
+    options=AgentOptions(harness="pi-ai", model="claude-opus-4-8"),
+):
+    print(message)
+```
+
+## Supported Harnesses
+
+- `claude-agent`: Claude Agent SDK / Claude Code behavior.
+  Upstream: [Python](https://github.com/anthropics/claude-agent-sdk-python),
+  [TypeScript](https://github.com/anthropics/claude-agent-sdk-typescript).
+- `openai-agents`: OpenAI Agents SDK behavior.
+  Upstream: [Python](https://github.com/openai/openai-agents-python),
+  [TypeScript](https://github.com/openai/openai-agents-js).
+- `pi-ai`: Pi AI coding-agent harness.
+  Upstream: [GitHub](https://github.com/earendil-works/pi),
+  [SDK docs](https://pi.dev/docs/latest/sdk).
+
+## With LiteLLM AI Gateway
+
+Add LiteLLM AI Gateway when you want central keys, budgets, logs, fallbacks, and
+provider routing.
+
+```bash
+export LITELLM_API_BASE=https://litellm.your-company.com/v1
+export LITELLM_API_KEY=sk-litellm-...
+```
+
+```ts
+import { query } from "@lite-harness/sdk";
+
+for await (const message of query({
+  prompt: "Debug this production trace",
+  options: {
+    harness: "openai-agents",
+    model: "anthropic/claude-opus-4-8",
+  },
+})) {
+  console.log(message);
+}
+```
+
+## Run As A Service
+
+lite-harness can also run coding agents as a portable service with shared MCP
+tools, prompts, sessions, sandboxing, cron, and human approval flows.
 
 ```bash
 npx skills add LiteLLM-Labs/lite-harness -g
 ```
 
-```
-/deploy-agent
+Then in Claude Code, Codex, Cursor, or another coding agent:
 
-> Deploy a GitHub stargazer outreach agent that DMs new stars on LinkedIn,
-  runs every 4 hours on weekdays, requires human approval before each send.
-
-  ✓ Checking capabilities... sandbox=e2b vault=available cron=supported
-  ✓ Stored vault key BROWSER_USE_API_KEY
-  ✓ Stored vault key LINKEDIN_PROFILE_ID
-  ✓ Created agent: agent_abc123 (opencode · claude-sonnet-4-6)
-  ✓ Attached vault keys + scheduled 0 */4 * * 1-5 America/Los_Angeles
-  ✓ Test run started: run_xyz789
-  → Logs: https://lite-harness.onrender.com/api/agents/agent_abc123/runs/run_xyz789/logs
-  → UI:   https://lite-harness.onrender.com/agents
-```
-
-Agents run on a cron schedule in an isolated sandbox. Human-in-the-loop approval flows through the Inbox UI.
-
-Supported harnesses: `opencode` `claude-code` `github-copilot` `codex` — [full CLI docs](cli/README.md)
-
-## setup
-
-```bash
-npx skills add LiteLLM-Labs/lite-harness -g
-```
-
-Then in any AI coding agent (Claude Code, Codex, Cursor, etc.):
-
-```
+```txt
 /lite-harness-setup
 ```
 
-Or follow the manual setup guide below.
+Supported service harnesses: `opencode`, `claude-code`, `github-copilot`,
+`codex`. See [CLI docs](cli/README.md) and
+[configuration docs](docs/configuration.md).
 
-<details>
-<summary>Manual setup</summary>
+## Docs
 
-```bash
-export MASTER_KEY=$(openssl rand -hex 32)
-echo "MASTER_KEY: $MASTER_KEY"
+[SDK](src/sdk/README.md) · [API reference](docs/api.md) ·
+[Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) ·
+[CLI](cli/README.md) · [Add a harness](docs/contributing-harness.md)
 
-docker run -p 4096:4096 \
-  -e LITELLM_API_BASE=https://your-litellm-gateway \
-  -e LITELLM_API_KEY=sk-... \
-  -e MASTER_KEY="$MASTER_KEY" \
-  ghcr.io/litellm-labs/lite-harness:latest
-```
-
-Open [localhost:4096](http://localhost:4096), paste the master key on the login page.
-
-</details>
-
-Needs a [LiteLLM](https://github.com/BerriAI/litellm) gateway. Full config: [docs/configuration.md](docs/configuration.md).
-
-## persistence
-
-By default, sessions (history, model context) are lost when the server restarts. To keep them across restarts, mount persistent storage at the data directory:
-
-**Docker:**
-```bash
-docker run -p 4096:4096 \
-  -v ./data:/home/sandbox/.local/share/lite-harness \
-  -e LITELLM_API_BASE=... \
-  -e LITELLM_API_KEY=... \
-  -e MASTER_KEY=... \
-  ghcr.io/litellm-labs/lite-harness:latest
-```
-
-**Custom path** (e.g. a mounted cloud volume at `/mnt/data`):
-```bash
--e DB_PATH=/mnt/data/db.db
-```
-
-On restart the server logs `hydrated N session(s) from db` and all prior sessions are immediately available.
-
-## sandboxing
-
-Set `E2B_API_KEY` or `DAYTONA_API_KEY` and agents get an isolated Linux sandbox automatically. Full options (templates, snapshots, vault): [docs/configuration.md](docs/configuration.md#sandbox-opencode-mcp).
-
-## about
-
-We built lite-harness because running opencode and claude-code as separate servers got hard to maintain - multiple services, different API specs, unreliable session management, different inputs for MCP tools and system prompts.
-
-So we wrapped all harnesses in an OpenCode-compatible server and put it in one Dockerfile, giving us one service to maintain, with shared MCP tools, prompts, and session management across all harnesses.
-
-## docs
-
-[API reference](docs/api.md) · [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) · [CLI](cli/README.md) · [Add a harness](docs/contributing-harness.md)
-
-## license
+## License
 
 MIT

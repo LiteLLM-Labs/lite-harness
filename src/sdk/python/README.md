@@ -5,7 +5,7 @@ Swap the import and existing code keeps working:
 
 ```diff
 - from claude_agent_sdk import query, ClaudeSDKClient, ClaudeAgentOptions
-+ from lite_harness import query, ClaudeSDKClient, ClaudeAgentOptions
++ from lite_harness import query, ClaudeSDKClient, AgentOptions
 ```
 
 The SDK is a thin client. It spawns the lite-harness server as a child process
@@ -25,7 +25,7 @@ One-shot:
 
 ```python
 import asyncio
-from lite_harness import query, ResultMessage
+from lite_harness import query, AgentOptions, ResultMessage
 
 async def main() -> None:
     async for message in query(prompt="Hello"):
@@ -38,9 +38,9 @@ asyncio.run(main())
 Stateful client (multiple prompts on one session):
 
 ```python
-from lite_harness import ClaudeSDKClient, ClaudeAgentOptions
+from lite_harness import ClaudeSDKClient, AgentOptions
 
-async with ClaudeSDKClient(options=ClaudeAgentOptions(model="claude-x")) as client:
+async with ClaudeSDKClient(options=AgentOptions(model="claude-x")) as client:
     await client.query("first question")
     async for message in client.receive_response():
         ...
@@ -59,9 +59,8 @@ The spawn command is resolved in order (per `PROTOCOL.md`):
 
 ## lite-harness extension
 
-`ClaudeAgentOptions.harness` (default `"claude"`) selects the server-side agent
-runtime. It is sent as a top-level `session/new` param, not inside `options`.
-Leaving it at the default keeps full drop-in compatibility.
+`AgentOptions.harness` selects the agent harness, for example
+`"claude-agent"`, `"openai-agents"`, or `"pi-ai"`.
 
 ## Unknown wire shapes
 
