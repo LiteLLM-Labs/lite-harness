@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { query } from "../dist/index.js";
+import { listHarnesses, query } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fakeServer = join(here, "fake-server.mjs");
@@ -101,4 +101,20 @@ test("harness option is accepted as the primary runtime selector", async () => {
   }
 
   assert.equal(messages.at(-1).result, "echo: harness");
+});
+
+test("listHarnesses() returns available harness metadata", async () => {
+  const harnesses = await listHarnesses({
+    options: {
+      env: { ...process.env, LITE_HARNESS_SERVER: `node ${fakeServer}` },
+    },
+  });
+
+  assert.deepEqual(
+    harnesses.map((harness) => harness.id),
+    ["claude-code", "codex"],
+  );
+  assert.equal(harnesses[0].name, "Claude Code");
+  assert.deepEqual(harnesses[0].aliases, ["claude", "cc"]);
+  assert.deepEqual(harnesses[1].aliases, ["openai"]);
 });
