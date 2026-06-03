@@ -12,10 +12,15 @@ lite-harness SDK manages:
 
 No gateway is required. Use provider-native API keys by default.
 
+> Preview: the SDK is not published to npm or PyPI yet. Clone this repo to try
+> it. If you want a packaged release, please
+> [file an issue](https://github.com/LiteLLM-Labs/lite-harness/issues).
+
 ## JavaScript Usage
 
 ```bash
-npm install @lite-harness/sdk
+git clone https://github.com/LiteLLM-Labs/lite-harness.git
+cd lite-harness
 ```
 
 ```ts
@@ -51,7 +56,9 @@ for await (const message of query({
 ## Python Usage
 
 ```bash
-pip install lite-harness
+git clone https://github.com/LiteLLM-Labs/lite-harness.git
+cd lite-harness
+export PYTHONPATH="$PWD/src/sdk/python:$PYTHONPATH"
 ```
 
 ```python
