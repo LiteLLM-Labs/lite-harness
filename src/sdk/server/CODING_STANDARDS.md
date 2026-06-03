@@ -66,8 +66,8 @@ boring, and cheap to start.
 
 ## Tests
 
-- Tests live under **`src/tests/`**, mirroring the source tree under `src/`
-  **1:1** (e.g. `src/tests/sdk/server/providers/codex/transformation.test.mjs`),
+- Tests live in the **repo-root `tests/`** folder, mirroring the full source
+  path **1:1** (e.g. `tests/src/sdk/server/providers/codex/transformation.test.mjs`),
   to keep core uncluttered.
 - `node:test` + `node:assert/strict`. Run with `npm test` from this dir.
 - Unit tests hit **no network**. Test pure transformations against **captured**

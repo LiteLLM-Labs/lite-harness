@@ -92,14 +92,14 @@ Unknown subtypes throw, which the wire returns as a correlated error response.
 
 ## Testing
 
-Tests live under **`src/tests/`**, mirroring the source tree under `src/` 1:1
-(e.g. `src/tests/sdk/server/providers/codex/transformation.test.mjs`), so the
+Tests live in the **repo-root `tests/`** folder, mirroring the full source path
+1:1 (e.g. `tests/src/sdk/server/providers/codex/transformation.test.mjs`), so the
 core stays uncluttered.
 
 ```bash
 cd src/sdk/server && npm test          # node --test, no network
 # or from the repo root:
-node --test "src/tests/sdk/server/**/*.test.mjs"
+node --test "tests/src/sdk/server/**/*.test.mjs"
 ```
 
 ### Testing the internal SDK directly (no stdio)
