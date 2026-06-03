@@ -89,6 +89,62 @@ Unknown subtypes throw, which the wire returns as a correlated error response.
 
 ## Testing
 
+Tests live under `tests/`, mirroring the source tree 1:1 (e.g.
+`tests/providers/codex/transformation.test.mjs`), so the core stays uncluttered.
+
 ```bash
-node --test src/sdk/server
+cd src/sdk/server
+npm test          # node --test (no network)
+```
+
+### Testing the internal SDK directly (no stdio)
+
+The internal "unified SDK" — `Session` plus the per-provider runtimes — is a
+plain in-process API. You can exercise it directly, without spawning the server
+or framing stream-json, which is the fastest way to unit-test behavior.
+
+**Drive a `Session` with a stub provider** (asserts the turn lifecycle: leading
+`system/init`, streamed frames, trailing `result`):
+
+```js
+import { Session } from "./session.mjs";
+
+const provider = {
+  id: "stub",
+  createRuntime: () => ({
+    model: "stub-model",
+    async *runTurn({ prompt }) {
+      yield { type: "assistant", message: { model: "stub-model", content: [{ type: "text", text: `echo: ${prompt}` }] }, parent_tool_use_id: null };
+    },
+  }),
+};
+
+const session = new Session({ provider, env: {}, stderr: process.stderr });
+const frames = [];
+for await (const f of session.runTurn({ prompt: "hi", content: "hi" })) frames.push(f);
+// frames: [ system/init, assistant("echo: hi"), result(success) ]
+```
+
+**Test a provider transformation in isolation** (pure — no SDK, no network):
+
+```js
+import { eventToFrames } from "./providers/codex/transformation.mjs";
+
+eventToFrames(
+  { type: "raw_model_stream_event", data: { type: "output_text_delta", delta: "4" } },
+  { sessionId: "s", model: "m" },
+);
+// → [ { type: "stream_event", session_id: "s", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "4" } } } ]
+```
+
+**Drive a real provider runtime against LiteLLM** (integration; needs
+`LITELLM_API_BASE` / `LITELLM_API_KEY`):
+
+```js
+import * as anthropic from "./providers/anthropic/index.mjs";
+
+const runtime = anthropic.createRuntime({ env: process.env, diagnostics: () => {} });
+for await (const frame of runtime.runTurn({ prompt: "What is 2 + 2?", session: { sessionId: "s" } })) {
+  console.log(frame.type, frame.type === "assistant" ? frame.message.content : "");
+}
 ```
