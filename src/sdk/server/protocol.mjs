@@ -3,13 +3,14 @@ import { createInterface } from "node:readline";
 // ---------------------------------------------------------------------------
 // Launch flags. The SDK spawns us mirroring the claude CLI:
 //   --input-format stream-json --output-format stream-json --verbose
-//   [--agent <a>] [--model <m>] [--permission-mode <p>] [--cwd <dir>]
+//   [--agent <a>] [--model <m>] [--effort <e>] [--permission-mode <p>] [--cwd <dir>]
 // Unknown flags are tolerated and ignored (forward-compatible with the CLI).
 // ---------------------------------------------------------------------------
 export function parseLaunchArgs(argv, defaults = {}) {
   const options = {
     agent: defaults.agent ?? "claude",
     model: defaults.model ?? null,
+    effort: defaults.effort ?? null,
     permissionMode: defaults.permissionMode ?? "default",
     cwd: defaults.cwd ?? process.cwd(),
     verbose: false,
@@ -39,6 +40,9 @@ export function parseLaunchArgs(argv, defaults = {}) {
         break;
       case "--model":
         options.model = value;
+        break;
+      case "--effort":
+        options.effort = value;
         break;
       case "--permission-mode":
         options.permissionMode = value;

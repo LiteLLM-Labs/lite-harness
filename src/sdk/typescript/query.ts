@@ -36,7 +36,7 @@ export interface Query extends AsyncGenerator<SDKMessage, void, void> {
 /**
  * Build the stream-json launch flags from options, mirroring the claude CLI:
  *   --input-format stream-json --output-format stream-json --verbose
- *   [--agent <a>] [--model <m>] [--permission-mode <p>] [--cwd <dir>]
+ *   [--agent <a>] [--model <m>] [--effort <e>] [--permission-mode <p>] [--cwd <dir>]
  */
 function buildLaunchArgs(options: AgentOptions): string[] {
   const args = [
@@ -52,6 +52,9 @@ function buildLaunchArgs(options: AgentOptions): string[] {
   }
   if (options.model !== undefined) {
     args.push("--model", options.model);
+  }
+  if (options.effort !== undefined) {
+    args.push("--effort", String(options.effort));
   }
   if (options.permissionMode !== undefined) {
     args.push("--permission-mode", options.permissionMode);

@@ -42,7 +42,7 @@ const prompt = "Fix the failing test";
 // Claude Code harness
 for await (const message of query({
   prompt,
-  options: { harness: "claude-code", model: "claude-opus-4-8" },
+  options: { harness: "claude-code", model: "claude-opus-4-8", effort: "high" },
 })) {
   console.log(message);
 }
@@ -50,7 +50,7 @@ for await (const message of query({
 // Codex harness
 for await (const message of query({
   prompt,
-  options: { harness: "codex", model: "gpt-5.5" },
+  options: { harness: "codex", model: "gpt-5.5", effort: "medium" },
 })) {
   console.log(message);
 }
@@ -70,14 +70,14 @@ prompt = "Fix the failing test"
 # Claude Code harness
 async for message in query(
     prompt=prompt,
-    options=AgentOptions(harness="claude-code", model="claude-opus-4-8"),
+    options=AgentOptions(harness="claude-code", model="claude-opus-4-8", effort="high"),
 ):
     print(message)
 
 # Codex harness
 async for message in query(
     prompt=prompt,
-    options=AgentOptions(harness="codex", model="gpt-5.5"),
+    options=AgentOptions(harness="codex", model="gpt-5.5", effort="medium"),
 ):
     print(message)
 ```

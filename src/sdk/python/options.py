@@ -129,6 +129,7 @@ class AgentOptions:
             "resume": self.resume,
             "max_turns": self.max_turns,
             "model": self.model,
+            "effort": self.effort,
             "cwd": str(self.cwd) if self.cwd is not None else None,
             "add_dirs": [str(d) for d in self.add_dirs],
             "settings": self.settings,

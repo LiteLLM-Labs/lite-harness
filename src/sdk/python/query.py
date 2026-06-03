@@ -38,6 +38,7 @@ async def query(
         transport = SubprocessTransport(
             agent=opts.selected_harness,
             model=opts.model,
+            effort=opts.effort,
             permission_mode=opts.permission_mode,
             cwd=cwd,
             env=opts.env or None,

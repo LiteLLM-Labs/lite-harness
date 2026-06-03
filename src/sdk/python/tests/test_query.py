@@ -54,9 +54,20 @@ async def test_query_with_options(fake_server_command: list[str]) -> None:
     assert isinstance(messages[-1], ResultMessage)
 
 
+def test_subprocess_transport_includes_effort_launch_flag(
+    fake_server_command: list[str],
+) -> None:
+    transport = SubprocessTransport(command=fake_server_command, effort="low")
+
+    assert "--effort" in transport._command
+    effort_index = transport._command.index("--effort")
+    assert transport._command[effort_index : effort_index + 2] == ["--effort", "low"]
+
+
 def test_options_to_wire_drops_transport_only_fields() -> None:
     opts = AgentOptions(
         model="m",
+        effort="medium",
         stderr=lambda s: None,
         harness="openai",
         agent="codex",
@@ -68,4 +79,5 @@ def test_options_to_wire_drops_transport_only_fields() -> None:
     assert "agent" not in wire
     assert opts.selected_harness == "openai"
     assert wire["model"] == "m"
+    assert wire["effort"] == "medium"
     assert wire["cwd"] == "/tmp"
