@@ -8,7 +8,6 @@ lite-harness manages:
 - One JavaScript and Python interface for multiple agent harnesses
 - Harness switching with `harness`, model switching with `model`
 - Claude Agent SDK-compatible streaming messages and errors
-- Optional LiteLLM AI Gateway routing for keys, budgets, logs, and fallbacks
 
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
