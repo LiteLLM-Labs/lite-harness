@@ -10,8 +10,6 @@ lite-harness manages:
 - Claude Agent SDK-compatible streaming messages and errors
 - Optional LiteLLM AI Gateway routing for keys, budgets, logs, and fallbacks
 
-No gateway is required. Use provider-native API keys by default.
-
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
 ## JavaScript Usage
