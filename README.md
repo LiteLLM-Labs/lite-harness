@@ -9,12 +9,17 @@ lite-harness manages:
 - Harness switching with `harness`, model switching with `model`
 - Claude Agent SDK-compatible streaming messages and errors
 
+> Preview: the SDK is not published to npm or PyPI yet. Clone this repo to try
+> it. If you want a packaged release, please
+> [file an issue](https://github.com/LiteLLM-Labs/lite-harness/issues).
+
 [![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
 
 ## TypeScript Usage
 
 ```bash
-npm install @lite-harness/sdk
+git clone https://github.com/LiteLLM-Labs/lite-harness.git
+cd lite-harness
 ```
 
 ```ts
@@ -50,7 +55,9 @@ for await (const message of query({
 ## Python Usage
 
 ```bash
-pip install lite-harness
+git clone https://github.com/LiteLLM-Labs/lite-harness.git
+cd lite-harness
+export PYTHONPATH="$PWD/src/sdk/python:$PYTHONPATH"
 ```
 
 ```python
