@@ -45,12 +45,11 @@ There is **no client class** — this matches the upstream JS SDK shape exactly.
 
 ## How it works
 
-The SDK is a thin client. It spawns the lite-harness server as a child process
-and speaks newline-delimited JSON-RPC over stdio (see
-[`../PROTOCOL.md`](../PROTOCOL.md)). The server owns the agent runtimes; the SDK
-owns only process + wire + type-decode glue.
+The SDK is a thin client. It launches the selected harness for you and speaks
+newline-delimited JSON-RPC over stdio (see [`../PROTOCOL.md`](../PROTOCOL.md)).
+The SDK owns only process + wire + type-decode glue.
 
-Server command resolution order:
+Harness command resolution order:
 
 1. an explicit transport command (used by tests),
 2. the `LITE_HARNESS_SERVER` env var (a command line), else
@@ -65,7 +64,7 @@ npm run build       # emits dist/*.js + dist/*.d.ts
 npm test            # builds, then runs node --test against the fake server
 ```
 
-Tests use a deterministic in-repo fake server (`test/fake-server.mjs`) injected
+Tests use a deterministic in-repo fake harness (`test/fake-server.mjs`) injected
 via `LITE_HARNESS_SERVER`. No network or real model access is required.
 
 ## Not yet implemented (v0)

@@ -15,13 +15,13 @@ from decode import decode_message, is_result
 from transport import Transport
 from transport import SubprocessTransport
 from messages import Message
-from options import ClaudeAgentOptions
+from options import AgentOptions
 
 
 async def query(
     *,
     prompt: str | AsyncIterable[dict[str, Any]],
-    options: ClaudeAgentOptions | None = None,
+    options: AgentOptions | None = None,
     transport: Transport | None = None,
 ) -> AsyncIterator[Message]:
     """Run a single prompt to completion, yielding each decoded message.
@@ -29,14 +29,14 @@ async def query(
     The async iterator ends after the terminating ``ResultMessage``.
     """
 
-    opts = options or ClaudeAgentOptions()
+    opts = options or AgentOptions()
     prompt_text = prompt if isinstance(prompt, str) else await _join_prompt(prompt)
 
     owns_transport = transport is None
     if transport is None:
         cwd = str(opts.cwd) if opts.cwd is not None else None
         transport = SubprocessTransport(
-            agent=opts.agent,
+            agent=opts.selected_harness,
             model=opts.model,
             permission_mode=opts.permission_mode,
             cwd=cwd,

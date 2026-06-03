@@ -1,15 +1,12 @@
 """Configuration options for a run.
 
-:class:`ClaudeAgentOptions` mirrors the upstream Claude Agent SDK options so
-existing code keeps working after a drop-in import swap. It is a true SUPERSET
-of ``claude_agent_sdk.ClaudeAgentOptions``: every upstream field name is
-present here so passing any upstream kwarg never raises ``TypeError``. The one
-lite-only addition is :attr:`ClaudeAgentOptions.agent`, which selects the
-lite-harness agent runtime.
+:class:`AgentOptions` is the lite-harness public options type. It accepts the
+Claude Agent SDK option field set for migration compatibility, plus
+``harness`` for choosing the agent harness (for example ``"claude-agent"``,
+``"openai-agents"``, or ``"pi-ai"``).
 
-Many advanced upstream fields (hooks, MCP SDK servers, sandbox, plugins, …)
-are accepted for drop-in compatibility but are NOT yet honored by the
-lite-harness server — see :meth:`ClaudeAgentOptions.to_wire`.
+Many advanced upstream fields (hooks, MCP SDK servers, sandbox, plugins, ...)
+are accepted for compatibility but are not yet honored by every harness.
 """
 
 from __future__ import annotations
@@ -30,8 +27,8 @@ Callback = Callable[..., Any]
 
 
 @dataclass
-class ClaudeAgentOptions:
-    """Options passed through to the server as opaque ``options`` config.
+class AgentOptions:
+    """Options passed through to the runtime as opaque ``options`` config.
 
     See ``PROTOCOL.md`` § Requests: the server receives this as a snake_case
     dict via :meth:`to_wire`.
@@ -104,9 +101,11 @@ class ClaudeAgentOptions:
     session_store_flush: Literal["batched", "eager"] = "batched"
 
     # -- lite-harness extension -------------------------------------------
-    # Selects which agent runtime the lite-harness server should use
-    # (e.g. "codex", "pi-ai"). Optional — when ``None`` the server's default
-    # runtime is used. Mirrors the Claude Agent SDK ``agent`` option.
+    # Selects which agent harness should handle the run
+    # (e.g. "claude-agent", "openai-agents", "pi-ai").
+    harness: str | None = None
+    # Backward-compatible alias accepted by older docs/builds and upstream
+    # Claude Agent SDK callers. ``harness`` wins when both are provided.
     agent: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
@@ -114,10 +113,10 @@ class ClaudeAgentOptions:
 
         Only the fields the stream-json server currently understands are
         serialized. Fields not in the wire payload are accepted for drop-in
-        compatibility but not yet honored by the server. Non-serializable /
+        compatibility but not yet honored by every harness. Non-serializable /
         transport-only fields (``stderr``) are dropped, ``Path`` values are
-        stringified, and ``agent`` is excluded because it is passed as a launch
-        flag, not inside ``options``.
+        stringified, and ``harness`` / ``agent`` are excluded because they are
+        passed as launch flags, not inside ``options``.
         """
 
         wire: dict[str, Any] = {
@@ -139,3 +138,14 @@ class ClaudeAgentOptions:
             "include_partial_messages": self.include_partial_messages,
         }
         return wire
+
+    @property
+    def selected_harness(self) -> str | None:
+        """Return the public harness selector, falling back to ``agent``."""
+
+        return self.harness if self.harness is not None else self.agent
+
+
+# Compatibility alias for code migrating from the Claude Agent SDK or older
+# lite-harness SDK examples. New lite-harness code should use ``AgentOptions``.
+ClaudeAgentOptions = AgentOptions

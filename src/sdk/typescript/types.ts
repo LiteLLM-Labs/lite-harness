@@ -1,12 +1,11 @@
 /**
- * Public option types. `Options` mirrors the Claude Agent SDK's `Options`
- * (camelCase) so existing code is drop-in compatible. `agent` mirrors the
- * Claude Agent SDK's own optional `agent` field and selects the lite-harness
- * runtime; being optional keeps drop-in compatibility intact.
+ * Public option types. `AgentOptions` is the lite-harness options type.
+ * It accepts the Claude Agent SDK's `Options` fields for migration
+ * compatibility, plus `harness` for selecting the agent harness.
  *
- * `Options` is a TRUE SUPERSET of the upstream `@anthropic-ai/claude-agent-sdk`
+ * `AgentOptions` is a TRUE SUPERSET of the upstream `@anthropic-ai/claude-agent-sdk`
  * `Options` type: every field the upstream SDK accepts is accepted here. Fields
- * that lite-harness honors directly (e.g. `agent`, `model`, `permissionMode`,
+ * that lite-harness honors directly (e.g. `harness`, `model`, `permissionMode`,
  * `cwd`, `env`) are mapped to launch flags in `buildLaunchArgs`. The remaining
  * advanced/complex fields are accepted purely for drop-in compatibility: they
  * type-check and are forwarded opaquely (or simply ignored) but are NOT yet
@@ -16,7 +15,7 @@
 
 export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
 
-export interface Options {
+export interface AgentOptions {
   /** Tool names the agent is allowed to use. */
   allowedTools?: string[];
   /** Tool names the agent is explicitly forbidden from using. */
@@ -55,12 +54,14 @@ export interface Options {
   /** Abort controller to cancel an in-flight run. */
   abortController?: AbortController;
 
-  /** Select a named agent runtime on the lite-harness server (e.g. "codex", "pi-ai"). */
+  /** Select the agent harness (e.g. "claude-agent", "openai-agents", "pi-ai"). */
+  harness?: string;
+  /** Backward-compatible alias. `harness` wins when both are provided. */
   agent?: string;
 
   // --- Upstream parity fields ---------------------------------------------
   // The fields below complete the superset of the upstream Claude Agent SDK
-  // `Options`. They are accepted for drop-in compatibility and forwarded
+  // `AgentOptions`. They are accepted for drop-in compatibility and forwarded
   // opaquely / not yet honored by the lite-harness runtime unless noted above.
 
   /**
@@ -313,3 +314,6 @@ export type AgentDefinition = Record<string, unknown>;
 
 /** A source from which settings may be loaded (e.g. "user", "project"). */
 export type SettingSource = string;
+
+/** Compatibility alias for older examples and Claude Agent SDK migration code. */
+export type Options = AgentOptions;
