@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { toFrames } from "../../../../../sdk/server/providers/anthropic/transformation.mjs";
+import { toFrames } from "../../../../../../src/sdk/server/providers/anthropic/transformation.mjs";
 
 const opts = { sessionId: "sess_test" };
 
