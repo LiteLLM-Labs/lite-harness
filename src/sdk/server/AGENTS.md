@@ -25,4 +25,5 @@ Drop a folder under `providers/<name>/`:
 - `transformation.mjs` — pure native-event → canonical-frame mapping.
 
 Auto-discovery (`providers/index.mjs`) registers it by `id`/alias. No other
-file changes. Add tests under `tests/providers/<name>/` (mirror the tree 1:1).
+file changes. Add tests under the repo-root `tests/` folder, mirroring the full
+source path 1:1 (e.g. `tests/src/sdk/server/providers/<name>/transformation.test.mjs`).
