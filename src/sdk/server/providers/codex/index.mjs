@@ -1,7 +1,8 @@
 // Codex provider: drives the @openai/codex-sdk in-process and maps its
 // ThreadEvents to the canonical wire. Routes through LiteLLM by configuring
-// baseUrl (passed as --config openai_base_url to the Codex CLI) and injecting
-// LITELLM_API_KEY as OPENAI_API_KEY so the CLI's model calls hit the gateway.
+// baseUrl (passed as --config openai_base_url to the Codex CLI) and passing
+// LITELLM_API_KEY as the Codex SDK apiKey so the CLI's model calls hit the
+// gateway, including its HTTP fallback path.
 import { Codex } from "@openai/codex-sdk";
 import { createEventTransformer } from "./transformation.mjs";
 
@@ -20,7 +21,16 @@ function buildCodexOptions(env) {
   // Codex CLI inherits process.env; inject the gateway key as OPENAI_API_KEY so
   // model calls authenticate against LiteLLM.
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || env.LITELLM_API_KEY;
-  return { baseUrl };
+  return {
+    baseUrl,
+    apiKey: env.LITELLM_API_KEY,
+    config: {
+      features: {
+        responses_websockets: false,
+        responses_websockets_v2: false,
+      },
+    },
+  };
 }
 
 export function createRuntime({ model, env = process.env, diagnostics = () => {} }) {
