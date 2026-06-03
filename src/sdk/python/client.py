@@ -54,12 +54,15 @@ class ClaudeSDKClient:
         if self._transport is None:
             opts = self._options
             cwd = str(opts.cwd) if opts.cwd is not None else None
+            command = [str(opts.cli_path)] if opts.cli_path is not None else None
             self._transport = SubprocessTransport(
+                command=command,
                 agent=opts.agent,
                 model=opts.model,
                 permission_mode=opts.permission_mode,
                 cwd=cwd,
                 env=opts.env or None,
+                extra_args=opts.extra_args,
                 stderr=opts.stderr,
             )
 
