@@ -33,7 +33,6 @@ export OPENAI_API_KEY=sk-...          # for harness "codex"
 
 ```bash
 npm install --prefix src/sdk/typescript && npm run build --prefix src/sdk/typescript
-# import "@lite-harness/sdk" from your project after `npm link`, or from dist/
 ```
 
 ```ts
