@@ -9,22 +9,25 @@ export const aliases = ["claude-agent", "claude", "claude-code", "cc"];
 export const harnessId = "claude-code";
 export const displayName = "Claude Code";
 
-// LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
-// route the SDK (and the claude CLI it drives) through the gateway; otherwise
-// leave the SDK's own ANTHROPIC_* env in place (direct to the provider). The
-// Anthropic SDK appends "/v1/messages", so strip a trailing "/v1". A pre-set
-// ANTHROPIC_BASE_URL always wins (don't clobber an explicit override).
-function applyLiteLlmEnv(env) {
-  if (!env.LITELLM_API_BASE || !env.LITELLM_API_KEY) return;
+// AI gateway routing is optional. Accepts either the LiteLLM-specific vars
+// (LITELLM_API_BASE / LITELLM_API_KEY) or the generic vars
+// (AI_GATEWAY_API_BASE / AI_GATEWAY_API_KEY); LITELLM_* takes precedence when
+// both are set. The Anthropic SDK appends "/v1/messages", so strip a trailing
+// "/v1". A pre-set ANTHROPIC_BASE_URL always wins (don't clobber an explicit
+// override).
+function applyGatewayEnv(env) {
+  const base = env.LITELLM_API_BASE || env.AI_GATEWAY_API_BASE;
+  const key = env.LITELLM_API_KEY || env.AI_GATEWAY_API_KEY;
+  if (!base || !key) return;
   if (!process.env.ANTHROPIC_BASE_URL) {
-    process.env.ANTHROPIC_BASE_URL = env.LITELLM_API_BASE.replace(/\/+$/, "").replace(/\/v1$/, "");
+    process.env.ANTHROPIC_BASE_URL = base.replace(/\/+$/, "").replace(/\/v1$/, "");
   }
-  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || env.LITELLM_API_KEY;
-  process.env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || env.LITELLM_API_KEY;
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || key;
+  process.env.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || key;
 }
 
 export function createRuntime({ model, permissionMode, cwd, env = process.env, diagnostics = () => {} }) {
-  applyLiteLlmEnv(env);
+  applyGatewayEnv(env);
   let currentModel = model || env.LITELLM_DEFAULT_MODEL || "claude-sonnet-4-6";
   let mode = permissionMode || "default";
   let controller = null;

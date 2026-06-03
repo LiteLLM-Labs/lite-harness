@@ -10,16 +10,19 @@ export const aliases = ["openai-agents", "openai"];
 export const harnessId = "codex";
 export const displayName = "Codex";
 
-// LiteLLM is optional. When both LITELLM_API_BASE and LITELLM_API_KEY are set,
-// route the Codex CLI through the gateway. Otherwise the CLI's own OPENAI_API_KEY
-// env var is used directly.
+// AI gateway routing is optional. Accepts either the LiteLLM-specific vars
+// (LITELLM_API_BASE / LITELLM_API_KEY) or the generic vars
+// (AI_GATEWAY_API_BASE / AI_GATEWAY_API_KEY); LITELLM_* takes precedence when
+// both are set. Otherwise the CLI's own OPENAI_API_KEY env var is used directly.
 function buildCodexOptions(env) {
-  if (!env.LITELLM_API_BASE || !env.LITELLM_API_KEY) return {};
-  const base = env.LITELLM_API_BASE.replace(/\/+$/, "");
-  const baseUrl = base.endsWith("/v1") ? base : `${base}/v1`;
+  const base = env.LITELLM_API_BASE || env.AI_GATEWAY_API_BASE;
+  const key = env.LITELLM_API_KEY || env.AI_GATEWAY_API_KEY;
+  if (!base || !key) return {};
+  const stripped = base.replace(/\/+$/, "");
+  const baseUrl = stripped.endsWith("/v1") ? stripped : `${stripped}/v1`;
   // Codex CLI inherits process.env; inject the gateway key as OPENAI_API_KEY so
-  // model calls authenticate against LiteLLM.
-  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || env.LITELLM_API_KEY;
+  // model calls authenticate against the gateway.
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || key;
   return { baseUrl };
 }
 
