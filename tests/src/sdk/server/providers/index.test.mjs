@@ -41,6 +41,17 @@ test("resolveProvider('codex') and its 'openai' alias resolve to the codex modul
   assert.equal(openai, codex, "openai alias should resolve to codex");
 });
 
+test("resolveProvider('hermes') and its aliases resolve to the hermes module", async () => {
+  const hermes = await resolveProvider("hermes");
+  assert.equal(hermes.id, "hermes");
+  assert.equal(typeof hermes.createRuntime, "function");
+
+  for (const alias of ["nous-hermes", "hermes-agent"]) {
+    const mod = await resolveProvider(alias);
+    assert.equal(mod, hermes, `alias ${alias} should resolve to hermes`);
+  }
+});
+
 test("resolveProvider('nope') throws with 'unsupported agent'", async () => {
   await assert.rejects(
     () => resolveProvider("nope"),
@@ -52,10 +63,10 @@ test("resolveProvider('nope') throws with 'unsupported agent'", async () => {
   );
 });
 
-test("loadProviders() returns a Map containing anthropic, claude, codex keys", async () => {
+test("loadProviders() returns a Map containing anthropic, claude, codex, hermes keys", async () => {
   const map = await loadProviders();
   assert.ok(map instanceof Map);
-  for (const key of ["anthropic", "claude", "codex"]) {
+  for (const key of ["anthropic", "claude", "codex", "hermes"]) {
     assert.ok(map.has(key), `expected map to contain key ${key}`);
   }
 });
