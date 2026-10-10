@@ -72,6 +72,56 @@ test('ten independent ballots overlap, then all ten peers work concurrently and 
   assert.equal(runner.run.status, 'complete');
 });
 
+test('pending public output uses first-delta time and resets when a contribution is accepted or a new cycle starts', async (t) => {
+  const electionGate = deferred();
+  const calls = new Map();
+  const {runner, store, clock} = setup(t, async (args) => {
+    if (args.phase === 'election') {await electionGate.promise; return ballot();}
+    const gate = deferred();
+    calls.set(`${args.id}:${args.cycle}`, {...args, gate});
+    return Promise.race([gate.promise, new Promise((_, reject) => args.signal.addEventListener('abort', () => reject(args.signal.reason), {once: true}))]);
+  });
+  runner.start({task: 'Show public conversation times', agentCount: 2, timeoutSeconds: 5});
+  assert.equal(runner.agent('peer-01').cycleStartedAt, null);
+  assert.equal(runner.agent('peer-01').currentOutputAt, null);
+  clock.advance(10);
+  electionGate.resolve();
+  await until(() => calls.has('peer-01:1'));
+  assert.equal(runner.agent('peer-01').cycleStartedAt, clock.now());
+  const first = calls.get('peer-01:1');
+  first.onEvent({type: 'delta', text: ''});
+  assert.equal(runner.agent('peer-01').currentOutputAt, null);
+  clock.advance(17);
+  const firstDeltaAt = clock.now();
+  first.onEvent({type: 'delta', text: 'Public '});
+  assert.equal(runner.agent('peer-01').currentOutputAt, firstDeltaAt);
+  clock.advance(20);
+  first.onEvent({type: 'delta', text: 'evidence'});
+  assert.equal(runner.agent('peer-01').currentOutputAt, firstDeltaAt);
+  runner.flush(true);
+  assert.equal(store.get(runner.run.id).agents[0].currentOutputAt, firstDeltaAt);
+  let accepted;
+  runner.on('event', (event) => {
+    if (event.agentId === 'peer-01' && event.type === 'message') accepted = {...runner.agent('peer-01')};
+  });
+  first.gate.resolve({text: 'Public evidence'});
+  await until(() => calls.has('peer-01:2'));
+  assert.equal(accepted.currentOutput, '');
+  assert.equal(accepted.currentOutputAt, null);
+  assert.equal(runner.agent('peer-01').cycleStartedAt, clock.now());
+  assert.equal(runner.agent('peer-01').currentOutputAt, null);
+  clock.advance(11);
+  calls.get('peer-01:2').onEvent({type: 'delta', text: 'Next evidence'});
+  assert.equal(runner.agent('peer-01').currentOutputAt, clock.now());
+  runner.stop();
+  await runner.done;
+  const stopped = runner.agent('peer-01').currentOutputAt;
+  clock.advance(11);
+  calls.get('peer-01:2').onEvent({type: 'delta', text: ' stale'});
+  assert.equal(runner.agent('peer-01').currentOutputAt, stopped);
+  assert.equal(runner.agent('peer-01').currentOutput, 'Next evidence');
+});
+
 test('finished cycles continue productive calls until the requested deadline and retain evolving coordinator results', async (t) => {
   const {runner, store, clock} = setup(t);
   runner.start({task: 'Keep investigating', timeoutSeconds: 5});
@@ -104,6 +154,8 @@ test('steering, peer messages, assignments and every peer latest contribution re
   runner.start({task: 'Inspect this project', timeoutSeconds: 5});
   await until(() => runner.agent('peer-02').cycles >= 1);
   runner.steer('Focus on accessibility.');
+  const directions = runner.run.messages.filter((message) => message.from === 'user' && message.kind === 'direction');
+  assert.deepEqual(directions.map(({initial}) => initial), [true, false]);
   await until(() => calls.some(({id, prompt}) => id === 'peer-01' && prompt.includes('Focus on accessibility.') && prompt.includes('Verify empty parser input')));
   const later = calls.find(({id, prompt}) => id === 'peer-01' && prompt.includes('Focus on accessibility.'));
   assert.match(later.prompt, /Inspect the parser edge case/);
@@ -253,6 +305,52 @@ test('follow-up includes prior result and recovery marks unfinished work interru
   clock.advance(5000); await runner.done;
   store.save({...runner.run, status: 'running'}); store.recover();
   assert.equal(store.get(runner.run.id).status, 'interrupted');
+});
+
+test('explicit follow-up restores recent directions and each peer prior work while a fresh chat stays separate', async (t) => {
+  let stage = 'original';
+  const calls = [];
+  const {runner, store} = setup(t, async (args) => {
+    calls.push({...args, stage});
+    if (args.phase === 'election') return ballot();
+    if (stage === 'original' && args.cycle === 1) return {text: JSON.stringify({text: `Completed finding for ${args.id}`, ...(args.id === 'peer-02' ? {result: 'Original shared result'} : {})})};
+    if (stage === 'original' && args.id === 'peer-01') args.onEvent({type: 'delta', text: 'Unfinished parser verification'});
+    await delay(10000, undefined, {signal: args.signal});
+    return {text: 'Unexpected completion'};
+  });
+  runner.start({task: 'Original parser investigation', agentCount: 2, timeoutSeconds: 5});
+  await until(() => runner.agent('peer-01').currentOutput === 'Unfinished parser verification' && runner.agent('peer-02').cycle === 2);
+  for (let index = 1; index <= 7; index++) runner.steer(`Direction marker ${index}`);
+  runner.stop(); await runner.done;
+  const parentId = runner.run.id;
+  assert.equal(store.get(parentId).agents[0].currentOutput, 'Unfinished parser verification');
+  stage = 'continued';
+  runner.start({task: 'Continue', parentId, agentCount: 2, timeoutSeconds: 5});
+  await until(() => calls.filter((call) => call.stage === stage && call.phase === 'work').length === 2);
+  const continued = calls.filter((call) => call.stage === stage);
+  for (const call of continued) {
+    assert.match(call.prompt, /Original parser investigation/);
+    assert.match(call.prompt, /Original shared result/);
+  }
+  for (const call of continued.filter(({phase}) => phase === 'work')) {
+    assert.doesNotMatch(call.prompt, /Direction marker [12]/);
+    for (let index = 3; index <= 7; index++) assert(call.prompt.includes(`Direction marker ${index}`));
+    if (call.id === 'peer-01') {
+      assert.match(call.prompt, /Your prior public work from the continued run[\s\S]*Unfinished parser verification/);
+      assert.match(call.prompt, /Completed finding for peer-01/);
+    } else {
+      assert.match(call.prompt, /Your prior public work from the continued run[\s\S]*Completed finding for peer-02/);
+      assert.doesNotMatch(call.prompt, /Unfinished parser verification/);
+    }
+  }
+  runner.stop(); await runner.done;
+  stage = 'fresh';
+  runner.start({task: 'Unrelated new task', agentCount: 2, timeoutSeconds: 5});
+  await until(() => calls.filter((call) => call.stage === stage && call.phase === 'work').length === 2);
+  assert.equal(runner.run.parentId, null);
+  for (const {prompt} of calls.filter((call) => call.stage === stage)) {
+    assert.doesNotMatch(prompt, /Previous task:|Previous result:|Original parser investigation|Original shared result|Direction marker|Unfinished parser verification|Completed finding for/);
+  }
 });
 
 test('persistence failures roll back initial start and abort later work without losing in-memory partials', async (t) => {
@@ -437,4 +535,221 @@ test('a broken adapter that never acknowledges abort cannot hold shutdown indefi
   assert.ok(Date.now() - started < 3500);
   assert.equal(runner.busy, false);
   assert.equal(runner.run.status, 'stopped');
+});
+
+test('an initial team larger than twelve overlaps all ballots and work calls', async (t) => {
+  const electionCalls = new Set();
+  const workCalls = new Set();
+  const cleaned = new Set();
+  const {runner, clock} = setup(t, async ({phase, id, signal}) => {
+    if (phase === 'election') {electionCalls.add(id); return ballot();}
+    workCalls.add(id);
+    try {await delay(10000, undefined, {signal});} finally {cleaned.add(id);}
+    return {text: 'Work'};
+  });
+  runner.start({task: 'Twenty-four independent workers', agentCount: 24, timeoutSeconds: 5});
+  await until(() => workCalls.size === 24);
+  assert.equal(electionCalls.size, 24);
+  assert.equal(runner.run.election.votes.length, 24);
+  assert.equal(runner.run.agents.filter(({status}) => status === 'running').length, 24);
+  clock.advance(5000); await runner.done;
+  assert.equal(cleaned.size, 24);
+  assert.equal(runner.busy, false);
+});
+
+test('adding working peers preserves the task, leader, deadline and result while sharing current context', async (t) => {
+  const calls = [];
+  const {runner} = setup(t, async (args) => {calls.push(args); return usefulAdapter(args);});
+  runner.start({task: 'Retain the shared investigation', agentCount: 2, timeoutSeconds: 5});
+  await until(() => runner.run.results.length > 0);
+  runner.steer('Preserve this user constraint');
+  const previous = runner.run;
+  const added = runner.addAgents({count: 20, harness: 'pi', model: 'new-peer-model'});
+  assert.equal(added.agents.length, 22);
+  for (const field of ['id', 'task', 'coordinatorId', 'deadlineAt', 'startedAt', 'result']) assert.equal(added[field], previous[field]);
+  assert.deepEqual(added.directions, previous.directions);
+  assert.deepEqual(added.results, previous.results);
+  assert(added.agents.slice(2).every(({harness, model}) => harness === 'pi' && model === 'new-peer-model'));
+  await until(() => new Set(calls.filter(({phase}) => phase === 'work').map(({id}) => id)).size === 22);
+  const joined = calls.find(({id, phase}) => id === 'peer-22' && phase === 'work');
+  assert.equal(joined.board.contributions.length, 22);
+  assert.equal(joined.team.length, 22);
+  assert.match(joined.prompt, /Retain the shared investigation/);
+  assert.match(joined.prompt, /Preserve this user constraint/);
+  assert(joined.prompt.includes(previous.result));
+  assert.equal(calls.filter(({phase}) => phase === 'election').length, 2);
+});
+
+test('peers joining during election wait for original ballots and then begin work without extra votes', async (t) => {
+  const gate = deferred();
+  const elections = new Set();
+  const work = new Set();
+  const {runner} = setup(t, async ({phase, id, signal}) => {
+    if (phase === 'election') {elections.add(id); await gate.promise; return ballot();}
+    work.add(id); await delay(10000, undefined, {signal}); return {text: 'Work'};
+  });
+  runner.start({task: 'Join an election in progress', agentCount: 3, timeoutSeconds: 5});
+  await until(() => elections.size === 3);
+  const deadline = runner.run.deadlineAt;
+  runner.addAgents({count: 5});
+  assert.equal(runner.run.election.eligibleVoters, 3);
+  assert(runner.run.agents.slice(3).every(({status}) => status === 'queued'));
+  assert.equal(work.size, 0);
+  gate.resolve();
+  await until(() => work.size === 8);
+  assert.equal(elections.size, 3);
+  assert.equal(runner.run.election.votes.length, 3);
+  assert.equal(runner.run.coordinatorId, 'peer-02');
+  assert.equal(runner.run.deadlineAt, deadline);
+});
+
+test('deadline completion waits for a late worker cleanup and fences its callbacks', async (t) => {
+  const cleanup = deferred();
+  const work = new Set();
+  let lateCallback;
+  const {runner, clock} = setup(t, async ({phase, id, signal, onEvent}) => {
+    if (phase === 'election') return ballot();
+    work.add(id);
+    if (id === 'peer-03') lateCallback = onEvent;
+    await new Promise((accept) => signal.addEventListener('abort', accept, {once: true}));
+    if (id === 'peer-03') await cleanup.promise;
+    throw new Error('Process exited');
+  });
+  runner.start({task: 'Wait for every worker', agentCount: 2, timeoutSeconds: 5});
+  await until(() => work.size === 2);
+  runner.addAgents({count: 1});
+  await until(() => work.size === 3);
+  clock.advance(5000);
+  await delay(10);
+  assert.equal(runner.run.status, 'complete');
+  assert.equal(runner.busy, true);
+  assert.throws(() => runner.addAgents({count: 1}), /running chat before its deadline/);
+  cleanup.resolve(); await runner.done;
+  assert.equal(runner.busy, false);
+  assert.equal(runner.workers.size, 0);
+  const before = runner.agent('peer-03').output;
+  lateCallback({type: 'delta', text: 'Late output must be ignored'});
+  assert.equal(runner.agent('peer-03').output, before);
+});
+
+test('invalid or excessive additions are atomic and no peers can join a stopped chat', async (t) => {
+  const {runner} = setup(t, async ({phase, signal}) => {if (phase === 'election') return ballot(); await delay(10000, undefined, {signal}); return {text: 'Work'};});
+  assert.throws(() => runner.start({task: 'Invalid size', agentCount: 101}), /2–100/);
+  assert.equal(runner.run, null);
+  runner.start({task: 'Validate all additions', agentCount: 2, timeoutSeconds: 5});
+  await until(() => runner.run.phase === 'working');
+  const before = runner.run;
+  for (const options of [{count: 0}, {count: 101}, {count: 99}, {count: 2.5}, {count: '3'}, {agents: []}, {agents: [before.agents[0]]}, {count: 2, agents: [defaultTeam()[2]]}, {count: 1, harness: 'invented'}, {count: 1, model: ''}]) {
+    assert.throws(() => runner.addAgents(options));
+    assert.deepEqual(runner.run, before);
+  }
+  runner.addAgents({count: 98});
+  assert.equal(runner.run.agents.length, 100);
+  const full = runner.run;
+  assert.throws(() => runner.addAgents({count: 1}), /100/);
+  assert.deepEqual(runner.run, full);
+  runner.stop(); await runner.done;
+  assert.throws(() => runner.addAgents({count: 1}), /running chat before its deadline/);
+});
+
+test('failed addition persistence rolls back membership, starts no new peers and preserves prior progress', async (t) => {
+  const calls = new Set();
+  const {runner, store} = setup(t, async ({phase, id, signal, onEvent}) => {
+    calls.add(id);
+    if (phase === 'election') return ballot();
+    onEvent({type: 'delta', text: 'Useful partial evidence'});
+    await delay(10000, undefined, {signal}); return {text: 'Work'};
+  });
+  runner.start({task: 'Persist membership before work', agentCount: 2, timeoutSeconds: 5});
+  await until(() => runner.agent('peer-01').output === 'Useful partial evidence');
+  store.save = () => {throw new Error('Disk full');};
+  assert.throws(() => runner.addAgents({count: 3}), /Could not add agents: Disk full/);
+  await runner.done;
+  assert.equal(runner.run.agents.length, 2);
+  assert.equal(runner.run.status, 'failed');
+  assert.equal(calls.size, 2);
+  assert.match(runner.run.result, /Useful partial evidence/);
+  assert.equal(runner.run.messages.some(({kind}) => kind === 'membership'), false);
+  assert.match(runner.run.events.at(-1).text, /No new agents started/);
+});
+
+test('a hundred-peer prompt remains valid JSON with every roster and contribution slot under heavy history', (t) => {
+  const {runner} = setup(t);
+  runner.start({task: 'T'.repeat(16000), agentCount: 100, timeoutSeconds: 5});
+  const ids = runner.run.agents.map(({id}) => id);
+  runner.update({agents: runner.run.agents.map((agent) => ({...agent, role: 'R'.repeat(2000), model: 'M'.repeat(200), assignment: 'A'.repeat(8000), lastContribution: `EVIDENCE_${agent.id} ${'fact '.repeat(1600)}`})),
+    directions: Array.from({length: 100}, () => 'D'.repeat(8000)),
+    proposals: Array.from({length: 6}, (_, index) => ({id: `p${index}`, from: 'peer-01', text: 'P'.repeat(8000), electorate: ids, votes: ids.slice(1).map((voterId) => ({voterId, stance: 'agree', reason: 'V'.repeat(2000)})), consensus: {status: 'accepted', eligible: 99, agree: 99}}))});
+  for (let index = 0; index < 30; index++) runner.message('peer-01', 'all', 'H'.repeat(8000));
+  const prompt = runner.prompt(runner.agent('peer-01'), {task: 'Prior '.repeat(3000), result: 'Previous '.repeat(2000),
+    directions: Array.from({length: 20}, () => 'Prior direction '.repeat(1000)), agents: [{id: 'peer-01', currentOutput: 'Unfinished public work '.repeat(1000)}]});
+  assert(prompt.length <= 150000);
+  const priorDirections = [...prompt.matchAll(/Previous user direction \(from the continued run\):\n([\s\S]*?)(?=\n\n)/g)];
+  assert.equal(priorDirections.length, 5);
+  assert(priorDirections.every((match) => match[1].length <= 1000));
+  assert(prompt.match(/Your prior public work from the continued run \(verify and continue\):\n([\s\S]*?)(?=\n\n)/)[1].length <= 4000);
+  const board = JSON.parse(prompt.split('longer recent history remains saved):\n')[1]);
+  assert.deepEqual(board.identities.map(({id}) => id), ids);
+  assert.deepEqual(board.contributions.map(({id}) => id), ids);
+  assert.match(board.contributions.at(-1).text, /EVIDENCE_peer-100/);
+});
+
+test('membership expansion freezes existing proposal votes and includes joiners only in later proposals', async (t) => {
+  const {runner} = setup(t, async ({phase, signal}) => {if (phase === 'election') return ballot(); await delay(10000, undefined, {signal}); return {text: 'Work'};});
+  runner.start({task: 'Keep decisions honest as peers join', agentCount: 2, timeoutSeconds: 5});
+  await until(() => runner.run.phase === 'working');
+  runner.acceptProposal('peer-01', {id: 'old', text: 'Original proposal'});
+  const oldId = runner.run.proposals[0].id;
+  runner.acceptVote('peer-02', {proposalId: oldId, stance: 'agree', reason: 'Evidence'});
+  runner.update({proposals: [...runner.run.proposals, {id: 'legacy', from: 'peer-01', text: 'Legacy proposal', votes: [{voterId: 'peer-02', stance: 'agree', reason: 'Prior evidence'}]}]});
+  runner.addAgents({count: 2});
+  runner.acceptVote('peer-03', {proposalId: oldId, stance: 'disagree', reason: 'Late voter'});
+  runner.acceptVote('peer-03', {proposalId: 'legacy', stance: 'disagree', reason: 'Late voter'});
+  for (const proposal of runner.run.proposals) {
+    assert.deepEqual(proposal.electorate, ['peer-01', 'peer-02']);
+    assert.equal(proposal.votes.length, 1);
+    assert.equal(countConsensus(proposal, runner.run.agents.map(({id}) => id)).status, 'accepted');
+  }
+  runner.acceptProposal('peer-01', {id: 'new', text: 'Proposal after joining'});
+  const fresh = runner.run.proposals.at(-1);
+  assert.equal(fresh.electorate.length, 4);
+  runner.acceptVote('peer-02', {proposalId: fresh.id, stance: 'agree', reason: 'Evidence'});
+  runner.acceptVote('peer-03', {proposalId: fresh.id, stance: 'agree', reason: 'Independent evidence'});
+  assert.equal(runner.run.proposals.at(-1).consensus.status, 'accepted');
+  assert.equal(runner.run.proposals.at(-1).consensus.eligible, 3);
+});
+
+test('demo mode respects configured counts and supplied teams without invoking real adapters', async (t) => {
+  let realCalls = 0;
+  const {runner} = setup(t, async () => {realCalls++; throw new Error('Real inference must not run');});
+  runner.start({demo: true, agentCount: 20, timeoutSeconds: 5});
+  assert.equal(runner.run.agents.length, 20);
+  runner.stop(); await runner.done;
+  const agents = defaultTeam({count: 24, harness: 'pi', model: 'demo-only'});
+  runner.start({demo: true, agents, timeoutSeconds: 5});
+  assert.equal(runner.run.agents.length, 24);
+  assert(runner.run.agents.every(({harness, model}) => harness === 'pi' && model === 'demo-only'));
+  runner.stop(); await runner.done;
+  assert.equal(realCalls, 0);
+});
+
+test('a hundred-peer election keeps every candidate in a bounded valid roster', async (t) => {
+  const prompts = [];
+  const {runner, store} = setup(t, async ({phase, prompt, signal}) => {
+    if (phase === 'election') {prompts.push(prompt); return ballot();}
+    await delay(10000, undefined, {signal}); return {text: 'Work'};
+  });
+  const agents = defaultTeam({count: 100}).map((agent) => ({...agent, name: 'N\u0001'.repeat(30), role: 'R\u0001'.repeat(1000), model: 'M\u0001'.repeat(100)}));
+  const parentId = randomUUID();
+  store.save({id: parentId, task: 'Prior task '.repeat(2000), result: 'Prior result '.repeat(2000), startedAt: 0, agents: [], events: [], directions: [], status: 'complete'});
+  runner.start({task: 'T'.repeat(16000), agents, parentId, timeoutSeconds: 5});
+  await until(() => prompts.length === 100);
+  assert(prompts.every((prompt) => prompt.length < 80000));
+  const priorContext = prompts[0].match(/Previous task:\n([\s\S]*?)\nPrevious result:\n([\s\S]*?)\nPeers:/);
+  assert(priorContext[1].startsWith('Prior task '));
+  assert(priorContext[2].startsWith('Prior result '));
+  assert(priorContext[1].length <= 4000);
+  assert(priorContext[2].length <= 4000);
+  const roster = JSON.parse(prompts[0].split('\nPeers: ')[1]);
+  assert.deepEqual(roster.map(({id}) => id), agents.map(({id}) => id));
 });
