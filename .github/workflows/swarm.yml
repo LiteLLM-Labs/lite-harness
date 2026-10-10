@@ -1,0 +1,25 @@
+name: Swarm CLI
+
+on:
+  pull_request:
+    paths:
+      - 'src/swarm/**'
+      - '.github/workflows/swarm.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/swarm/**'
+      - '.github/workflows/swarm.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check source
+        run: npm run check --prefix src/swarm
+      - name: Test swarm coordination and harness adapters
+        run: npm test --prefix src/swarm
