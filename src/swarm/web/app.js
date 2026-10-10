@@ -3,7 +3,7 @@ import { brainLayout, resizeTeam } from './assets/team-layout.js';
 import { groupChatEntries } from './assets/chat-feed.js';
 import { UNGROUPED, workstreamsForRun, workstreamMembers, inWorkstream } from './assets/workstreams.js';
 import { ChangesView } from './assets/changes-view.js';
-import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, currentWork, agentPresence, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
+import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, publicTranscript, currentWork, agentPresence, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 let state = { run: null, runs: [], defaults: {}, capabilities: [] };
@@ -30,6 +30,9 @@ const agentRows = new Map();
 let configuredTeam = null;
 let editingTeam = [];
 let addTargetId = null;
+let projectTargetId = null;
+let accessBusy = false;
+let accessFeedback = '';
 let selectedId = null;
 let filterId = '';
 let selectedResult = null;
@@ -99,7 +102,7 @@ function updateClock() {
 function renderProject(run = viewedRun()) {
   const workspace = run?.workspace || state.defaults.workspace || '';
   const enabled = run ? Boolean(run.toolsEnabled) && !run.demo : $('#tools-toggle').checked;
-  const mode = run?.demo ? 'Simulation' : enabled ? 'Local actions on' : 'Inspect only';
+  const mode = run?.demo ? 'Simulation' : enabled ? 'Standard tools' : 'Inspect only';
   const folder = workspace.split(/[\\/]/).filter(Boolean).at(-1) || 'Project';
   $('#actions-mode').textContent = mode;
   $('#workspace-label').textContent = folder;
@@ -109,16 +112,50 @@ function renderProject(run = viewedRun()) {
   if ($('#workspace-path').value !== workspace) $('#workspace-path').value = workspace;
   $('#copy-workspace').disabled = !workspace;
   $('#project-current').hidden = !run;
-  $('#project-current').textContent = run?.demo ? 'This is a simulated demo. It does not run local actions.' : `${run?.status === 'running' ? 'Current work period' : 'This work period'}: ${mode.toLowerCase()}.`;
-  $('#actions-setting-note').textContent = `${$('#tools-toggle').checked ? 'Enabled for the next work period.' : 'Inspect only for the next work period: agents can read project files.'}${run?.status === 'running' ? ' The current swarm keeps its existing access.' : ''}`;
-  const capability = state.defaults.localActions;
-  $('#actions-capability').hidden = capability?.commands !== false;
-  $('#actions-capability').textContent = capability?.commands === false ? `Some agents can edit files but cannot run commands on this server. ${capability.reason || ''}` : '';
+  $('#project-current').textContent = run?.demo ? 'This is a simulated demo. It does not run tools.' : `${run?.status === 'running' ? 'Current work period' : 'This work period'}: ${mode.toLowerCase()}.`;
+  const nextTools = $('#tools-toggle').checked;
+  const live = run?.status === 'running' && !run.demo;
+  const supported = state.defaults.liveAccess === true;
+  $('#tools-toggle').disabled = accessBusy;
+  $('#actions-setting-note').textContent = `Next work period: ${nextTools ? 'standard tools' : 'inspect only'}.${live ? ' Use Apply below to update this swarm too.' : ''}`;
+  $('#live-access-control').hidden = !live;
+  const changed = nextTools !== Boolean(run?.toolsEnabled);
+  $('#apply-access').disabled = accessBusy || !supported || run?.id !== projectTargetId || !changed;
+  $('#apply-access').textContent = accessBusy ? 'Applying…' : 'Apply to current swarm ↗';
+  $('#live-access-note').textContent = !supported ? 'The server update is pending. This swarm keeps working with its current access.' : run?.id !== projectTargetId ? 'The selected chat changed. Reopen settings to update that swarm.' : 'New work cycles use the updated settings. Calls already in progress keep their previous access.';
+  $('#access-feedback').hidden = !accessFeedback;
+  $('#access-feedback').textContent = accessFeedback;
 }
 
 function openProject() {
+  projectTargetId = viewedRun()?.id || null;
+  accessFeedback = '';
   renderProject();
   if (!$('#project-dialog').open) $('#project-dialog').showModal();
+}
+
+async function applyAccess() {
+  const run = viewedRun();
+  if (accessBusy || !run || run.id !== projectTargetId || run.status !== 'running' || run.demo) return;
+  const runId = run.id;
+  const revision = navigationRevision;
+  const toolsEnabled = $('#tools-toggle').checked;
+  accessBusy = true;
+  accessFeedback = '';
+  renderProject();
+  try {
+    await api('/api/access', {runId, toolsEnabled});
+    const latest = await api('/api/state');
+    if (revision === navigationRevision && viewedRun()?.id === runId) {
+      receiveState(latest);
+      accessFeedback = 'Applied. Calls already running keep their previous access; new cycles use these settings.';
+    }
+  } catch (error) {
+    if (revision === navigationRevision && viewedRun()?.id === runId) accessFeedback = error.status === 409 ? 'This work period ended. Your settings will be used when you send the next message.' : error.message;
+  } finally {
+    accessBusy = false;
+    renderProject();
+  }
 }
 
 function renderWorkstreams(run) {
@@ -475,7 +512,7 @@ function eventElement(event, run, full = false) {
   header.append(element('span', 'event-time', run?.startedAt ? `+${elapsed(run.startedAt, event.at)}` : ''));
   card.append(header);
   if (agent) card.append(element('div', 'event-model', `${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}`));
-  const text = event.text || '';
+  const text = !isUser && ['message', 'handoff', 'contribution'].includes(event.type) ? publicOutput(event.text) : event.text || '';
   const expanded = full || expandedEvents.has(event.id);
   const body = element('div', `event-body${expanded ? '' : ' preview'}`);
   richText(body, text);
@@ -555,10 +592,11 @@ function renderFeed(run, agents) {
   panel.scrollTop = stick ? panel.scrollHeight : position;
 }
 
-const MESSAGE_LABELS = {contribution: 'Contribution', election: 'Leader vote', proposal: 'Proposal', vote: 'Vote', assignment: 'Assignment', identity: 'Introduction', membership: 'Team change', coordination: 'Coordination', workstream: 'Workstream'};
+const MESSAGE_LABELS = {contribution: 'Contribution', election: 'Leader vote', proposal: 'Proposal', vote: 'Vote', assignment: 'Assignment', identity: 'Introduction', membership: 'Team change', coordination: 'Coordination', workstream: 'Workstream', access: 'Tool access'};
 function groupMessage(message, run) {
   const agent = agentById(message.from);
   const isUser = message.from === 'user';
+  const publicText = isUser ? message.text : publicOutput(message.text);
   const presence = agent ? agentPresence(agent, run) : null;
   const row = element('article', `group-message${isUser ? ' group-user' : ''}${message.streaming ? ' group-streaming' : ''}`);
   row.dataset.messageId = message.id;
@@ -590,10 +628,10 @@ function groupMessage(message, run) {
   const bubble = element('div', 'group-bubble');
   const label = message.streaming ? 'Writing…' : message.partial ? 'Partial contribution' : MESSAGE_LABELS[message.kind];
   if (label) bubble.append(element('div', 'group-kind', label));
-  const collapsible = message.text.length > 400 || message.text.split('\n').length > 8;
+  const collapsible = publicText.length > 400 || publicText.split('\n').length > 8;
   const body = element('div', `group-message-text${collapsible && !expandedMessages.has(message.id) ? ' collapsed' : ''}`);
   if (message.pending) body.append(element('span', 'group-writing', 'Composing a public update…'));
-  else richText(body, message.text);
+  else richText(body, publicText);
   bubble.append(body);
   if (message.proposalId) {
     const proposal = run.proposals?.find((item) => item.id === message.proposalId);
@@ -677,7 +715,7 @@ function renderResults(run) {
     const header = element('div', 'event-header');
     header.append(identityLogos(agent), element('span', 'event-name', agent?.name || 'Swarm'), element('span', 'event-type', 'FOR YOU'), element('span', 'event-time', `+${elapsed(run.startedAt, result.at)}`));
     const preview = element('div', 'result-preview');
-    richText(preview, publicOutput(result.text) || result.text);
+    richText(preview, publicOutput(result.text));
     const footer = element('div', 'result-card-footer');
     const consensus = consensusLabel(result.consensus);
     footer.append(element('span', consensus ? 'result-consensus' : 'result-cycle', consensus || `${result.cycle == null ? 'Shared result' : `Cycle ${result.cycle}`}${result.provisional ? ' · update' : ''}`));
@@ -693,7 +731,7 @@ function renderResults(run) {
 function openResult(result) {
   selectedResult = result;
   $('#result-detail').replaceChildren();
-  richText($('#result-detail'), publicOutput(result.text) || result.text);
+  richText($('#result-detail'), publicOutput(result.text));
   const consensus = consensusLabel(result.consensus);
   $('#result-detail-meta').textContent = `${agentName(result.agentId)}${result.cycle == null ? '' : ` · cycle ${result.cycle}`}${consensus ? ` · ${consensus}` : ''}`;
   if (!$('#result-dialog').open) $('#result-dialog').showModal();
@@ -729,7 +767,7 @@ function renderAgentDetails() {
   $('#agent-dialog-meta').replaceChildren(element('span', '', HARNESS_NAMES[agent.harness] || agent.harness), element('span', '', shortModel(agent.model, agent.harness)), element('span', '', `${Number(agent.cycles) || 0} completed cycles`), ...(agent.id === run?.coordinatorId ? [element('span', 'coordinator-badge', coordinatorTitle)] : []));
   $('#agent-dialog-assignment').textContent = agent.assignment || agent.role || 'Waiting for an assignment.';
   replaceText($('#output-panel'), currentWork(agent) || 'No public output yet. The agent’s contribution will stream here.');
-  replaceText($('#transcript-panel'), agent.transcript || currentWork(agent) || 'No public transcript yet.');
+  replaceText($('#transcript-panel'), publicTranscript(agent.transcript) || currentWork(agent) || 'No public transcript yet.');
   $('#output-panel').classList.add('rich-text');
   $('#transcript-panel').classList.add('rich-text');
   $('#agent-detail-status').textContent = stageDescription(agent);
@@ -1052,7 +1090,8 @@ $('#empty-demo-button').addEventListener('click', () => startRun(true));
 $('#team-button').addEventListener('click', openTeam);
 $('#project-button').addEventListener('click', openProject);
 $('#team-project-button').addEventListener('click', openProject);
-$('#tools-toggle').addEventListener('change', () => renderProject());
+$('#tools-toggle').addEventListener('change', () => { accessFeedback = ''; renderProject(); });
+$('#apply-access').addEventListener('click', applyAccess);
 $('#copy-workspace').addEventListener('click', () => copyText($('#workspace-path').value));
 $('#apply-team-count').addEventListener('click', () => applyTeamCount());
 $('#team-count').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); applyTeamCount(); } });
@@ -1085,8 +1124,8 @@ $('.view-tabs').addEventListener('keydown', (event) => {
   setAgentTab(next);
   $(`#${next}-tab`).focus();
 });
-$('#copy-result').addEventListener('click', () => copyText(publicOutput(selectedResult?.text) || selectedResult?.text));
-$('#copy-agent-output').addEventListener('click', () => copyText($('#transcript-tab').getAttribute('aria-selected') === 'true' ? agentById(selectedId)?.transcript : currentWork(agentById(selectedId) || {})));
+$('#copy-result').addEventListener('click', () => copyText(publicOutput(selectedResult?.text)));
+$('#copy-agent-output').addEventListener('click', () => copyText($('#transcript-tab').getAttribute('aria-selected') === 'true' ? publicTranscript(agentById(selectedId)?.transcript) : currentWork(agentById(selectedId) || {})));
 $('#stop-button').addEventListener('click', async () => {
   busy = true;
   render();
