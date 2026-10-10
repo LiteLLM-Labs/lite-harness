@@ -237,6 +237,19 @@ export class SwarmRunner extends EventEmitter {
     return this.run;
   }
 
+  setAccess({toolsEnabled} = {}) {
+    if (!this.busy || this.run?.status !== 'running' || this.controller.signal.aborted) throw Object.assign(new Error('Choose a running swarm to change its tools.'), {statusCode: 409});
+    if (this.run.demo) throw new Error('A simulation cannot use real tools.');
+    if (typeof toolsEnabled !== 'boolean') throw new Error('toolsEnabled must be a boolean.');
+    if (toolsEnabled === this.run.toolsEnabled) return this.run;
+    this.update({toolsEnabled});
+    this.message('user', 'all', toolsEnabled
+      ? 'Standard harness tools enabled for the next work cycles. Use your native file, shell and network tools to carry out the requested task. Calls already in progress keep their previous tools.'
+      : 'Inspect-only mode enabled for the next work cycles. Do not make changes or run commands. Calls already in progress keep their previous tools.', 'access');
+    this.flush();
+    return this.run;
+  }
+
   finishAgents(reason, status) {
     this.update({agents: this.run.agents.map((agent) => ['queued', 'running'].includes(agent.status)
       ? {...agent, transcript: agent.currentOutput ? `${agent.transcript}\n\nCycle ${agent.cycle} — interrupted public output\n${agent.currentOutput}`.slice(-MAX_OUTPUT) : agent.transcript, status: status === 'complete' && agent.cycles === 0 ? 'stopped' : status, activity: reason, endedAt: this.now()} : agent)});
@@ -300,7 +313,7 @@ export class SwarmRunner extends EventEmitter {
       `User task:\n${this.run.task}`,
       `Current assignment:\n${clip(agent.assignment, 4000)}`,
       `This is work cycle ${agent.cycle}. ${Math.ceil(this.remaining() / 1000)} seconds remain in the user's budget. Every peer works concurrently. Do useful next work now; do not wait for other peers or repeat a finished answer. Inspect, implement, verify, challenge, refine, or report a concrete blocker.`,
-      `Workspace: ${this.workspace}. Local actions are ${this.run.toolsEnabled ? 'enabled: use available tools to edit files and run local commands for the requested work. When asked to implement or fix something, make and verify the change instead of only proposing it. Coordinate file ownership with peers before overlapping edits; do not modify private configuration, publish changes, or act outside this project' : 'disabled: inspect files and report concrete evidence; do not edit files or claim that recommendations were executed'}. Command network access is disabled. Report actual command results and file changes; explain tool errors honestly.`,
+      `Workspace: ${this.workspace}. Local actions are ${this.run.toolsEnabled ? 'enabled: use your harness\'s standard tools to read, edit, run commands and access the network as the requested task requires. When asked to implement or fix something, make and verify the change instead of only proposing it. Coordinate file ownership with peers before overlapping edits; keep changes within this project unless the user requests otherwise' : 'disabled: inspect files and report concrete evidence; do not edit files or claim that recommendations were executed'}. Test the tools available in this invocation when needed; previous runs may have had different access. Report actual command results and file changes; explain tool errors honestly.`,
       'Report public actions, evidence, and useful conclusions only. Do not reveal hidden reasoning or invent tool use, measured improvements, consensus, or completed changes. Do not message external people or publish anything.',
       'Each proposal has an electorate fixed when it was created. Vote only if your stable peer ID is in that electorate. Newly joined peers participate in proposals created after they joined.',
       'Organize related work into a few useful workstreams named for this task, so the human can follow progress. Join an existing shared-board workstream when it fits by returning its exact id and name; otherwise propose a concise workstream with a stable lowercase hyphenated id (at most 40 characters) and name (at most 80 characters). Return "workstream":{"id":"task-area","name":"Task area"} alongside your contribution. You may change only your own membership. Reuse existing streams instead of creating a different stream for every peer or cycle. Coordinate with peers within and across streams.',
@@ -529,13 +542,14 @@ export class SwarmRunner extends EventEmitter {
     callController.signal.addEventListener('abort', rejectAbort, {once: true});
     if (callController.signal.aborted) rejectAbort();
     const adapter = this.run.demo ? runDemoAgent : this.adapter;
+    const toolsEnabled = context.phase === 'work' && this.run.toolsEnabled;
     let request;
     try {
       request = Promise.resolve().then(() => {
         if (callController.signal.aborted) throw callController.signal.reason;
         return adapter({
         id, harness: agent.harness, model: agent.model, cwd: this.workspace,
-        toolsEnabled: context.phase === 'work' && this.run.toolsEnabled, signal: callController.signal,
+        toolsEnabled, signal: callController.signal,
         coordinatorId: this.run.coordinatorId, team: this.run.agents.map(({id: peerId, name, role, harness, model}) => ({id: peerId, name, role, harness, model})),
         ...context,
         onEvent: (event) => {
