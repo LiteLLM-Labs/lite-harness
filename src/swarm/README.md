@@ -1,6 +1,6 @@
 # swarm
 
-One task. Ten peers. Every contribution in view.
+One task. Your team. Every contribution in view.
 
 A small CLI for a team of **Claude Code, Codex, OpenCode, and Pi** agents. They start as equal peers without assigned names or specialties, choose roles from the task, briefly vote for a coordinator, then work concurrently for the requested duration. They exchange public findings and directed messages, review proposals, and produce a continuously updated answer. There is no fixed Lead or round-robin work queue.
 
@@ -13,9 +13,12 @@ npm run setup:harnesses # installs the pinned Pi CLI locally
 ./swarm doctor
 ./swarm demo --open
 ./swarm run "Review this project and propose the three most useful improvements" --duration 600 --open
+./swarm run "Review this project from more angles" --agents 25 --duration 600 --open
 ```
 
 The default is ten peers: three Claude Code, three Codex, two OpenCode, and two Pi. Codex, Claude Code, and OpenCode use their installed executables. The setup command installs and verifies Pi 1.1.0 inside the ignored `.swarm/tools/pi` directory; it changes no global packages or user configuration. Authenticate the harnesses you use; `doctor` checks availability. A missing binary or failed call stays visible. The 30-second demo is explicitly simulated and makes no model calls or file changes.
+
+Choose **2–100 agents** in team settings or pass `--agents COUNT`. The mixed harness roster repeats as the team grows. During a run, use **Add agents** in the browser or type `/add 5` in the terminal. New peers receive the task and shared context, then work alongside the existing team for the remaining budget. The leader, deadline, and existing contributions stay in place. New peers added during the initial election begin work after those original ballots finish; they do not manufacture additional election votes. An existing proposal keeps its original voting membership, while new proposals include the expanded team.
 
 To use a single installed harness for all ten peers:
 
@@ -64,12 +67,12 @@ The default live budget is ten minutes (`--duration 600`, or the older `--timeou
 
 ## See and steer
 
-- The workspace opens as a chat: saved conversations in the sidebar, the human-facing answer in the center, and a composer below. **New chat** starts a fresh task without stopping other conversations. Select a saved chat to return to it.
+- The workspace opens as a group chat: each agent shares public contributions and directed messages in one conversation, with harness/model marks, the elected leader, and activity visible. Your task and follow-up directions appear alongside them. **Result** holds the evolving human-facing answer separately. **New chat** starts a fresh task without stopping other conversations; select a saved chat to return to it.
 - Open **Subagents** to see each peer's harness, model, assignment, live activity, and latest output. Select any peer for its public contribution and full retained transcript.
 - Open **Brain** for the Lens-inspired spatial view: connected harness logos, a prominent leader badge, and explicit Active/Inactive labels on every peer. Active means the peer is participating in a running swarm, including voting and brief retries; completed, stopped, failed, and waiting peers are inactive. Select a peer to inspect its work. The live feed shows harness and model marks alongside public messages, tool activity, votes, and status changes; answer updates remain separate.
 - Inspect the election and decision votes rather than inferring agreement from animation. Stars are decorative, not usage metrics or private model reasoning.
-- Send a direction from the terminal or browser. Every peer receives it on its next cycle; a model request already in flight is not interrupted.
-- Use `/stop`, the Stop button, or Ctrl+C to cancel. `/quit` closes the local server. Successful and partial output is retained.
+- Send a direction from the terminal or browser. Every peer receives it on its next cycle; a model request already in flight is not interrupted. After a work period finishes, either browser composer accepts your next message as a follow-up with the prior task, result, recent directions, and each peer’s retained contribution. No separate Continue action is required.
+- Use `/add COUNT` to grow the selected running team. Use `/stop`, the Stop button, or Ctrl+C to cancel. `/quit` closes the local server. Successful and partial output is retained.
 - `./swarm logs` prints the latest public conversation; `./swarm list` lists saved runs. `logs RUN-ID` selects history; `--json` prints structured records/events.
 - `./swarm run "Refine the result" --follow-up RUN-ID` includes the previous task and answer.
 - `./swarm ui --open` starts the local workspace and restores the latest run. Refresh reconnects without restarting agents. Ports are chosen automatically; `--port 4328` uses a fixed address.
@@ -82,7 +85,7 @@ The default live budget is ten minutes (`--duration 600`, or the older `--timeou
 ./swarm run "Solve this task" --config swarm.json --duration 300 --open
 ```
 
-See [examples/mixed-team.json](examples/mixed-team.json). A team has 2–12 peers with unique IDs. The default has no fixed identities or specialties; a custom config can supply your own instructions. Harness IDs are `claude`, `codex`, `opencode`, `pi`, and optional `native`. Every peer needs an explicit model or uses the current default for its harness. Old nonempty `dependsOn` pipelines are rejected with a migration message: remove dependencies to use peer collaboration.
+See [examples/mixed-team.json](examples/mixed-team.json). A team has 2–100 peers with unique IDs. Use `swarm init --agents 25` to generate a larger editable configuration. The default has no fixed identities or specialties; a custom config can supply your own instructions. Harness IDs are `claude`, `codex`, `opencode`, `pi`, and optional `native`. Every peer needs an explicit model or uses the current default for its harness. Old nonempty `dependsOn` pipelines are rejected with a migration message: remove dependencies to use peer collaboration.
 
 ## Workspace and persistence
 
@@ -90,7 +93,7 @@ Agents inspect `--cwd` (current directory by default). Writes are off unless you
 
 The built-in harness exposes bounded list/read/write tools with traversal and symlink checks. Pi and OpenCode use the same bounded workspace tools via isolated harness profiles; their shell, external plugins, and unrelated MCP servers are disabled. Codex uses its own read-only/workspace-write sandbox. Claude uses a restricted file-tool allowlist. These harness permissions are not equivalent OS isolation; use a disposable workspace for untrusted projects.
 
-Runs are private JSON files in `.swarm/runs` (`--data-dir` changes this). One process owns a data directory and supports up to four active conversations. Each conversation has its own team, duration, messages, and answer; switching chats does not stop work. Directions and Stop apply only to the selected conversation. Explicit follow-ups include the earlier task and answer; a fresh chat starts without that context. A restart marks unfinished runs interrupted rather than silently replaying calls. Public messages and tool activity are retained within bounded history limits; hidden reasoning is not collected. Do not put secrets in prompts or files agents are asked to inspect.
+Runs are private JSON files in `.swarm/runs` (`--data-dir` changes this). One process owns a data directory and supports up to four active conversations. Each conversation has its own team, duration, messages, and answer; switching chats does not stop work. Directions and Stop apply only to the selected conversation. Explicit follow-ups include the earlier task and answer, recent directions, and each peer’s retained public work; a fresh chat starts without that context. A restart marks unfinished runs interrupted rather than silently replaying calls. Public messages and tool activity are retained within bounded history limits; hidden reasoning is not collected. Do not put secrets in prompts or files agents are asked to inspect.
 
 The server binds only to `127.0.0.1`, validates Host/Origin, and requires a session bearer token for every API route. The local page receives it automatically. This is a local tool; no public deployment, tunnel, or account service is included.
 
@@ -101,7 +104,7 @@ npm run check
 npm test
 ```
 
-Tests cover ten-way concurrency, election and vote validation, continued work through the deadline, steering, failure/replacement behavior, cancellation and process cleanup, persistence/recovery, API authentication and origin checks, gateway streaming, workspace file boundaries, and real CLI stream formats. Fixture tests do not prove live provider access.
+Tests cover configurable concurrency and live additions through the 100-peer limit, frozen proposal membership, election and vote validation, continued work through the deadline, steering, failure/replacement behavior, cancellation and process cleanup, persistence/recovery, API authentication and origin checks, gateway streaming, workspace file boundaries, and real CLI stream formats. Fixture tests do not prove live provider access.
 
 Visual and logo provenance: [web/assets/PROVENANCE.md](web/assets/PROVENANCE.md). Harness and model marks identify the selected runtime/provider; they do not imply endorsement.
 
