@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {extname, resolve, sep} from 'node:path';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
-import {defaultModel} from './team.mjs';
+import {defaultModel, defaultTeam, HARNESSES} from './team.mjs';
 import {availableHarnesses} from './adapters.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
@@ -26,11 +26,21 @@ async function readJSON(request) {
 export async function startServer({runner, store, port = 4318, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
   const clients = new Set();
   const found = suppliedCapabilities ?? await availableHarnesses();
-  const capabilities = Array.isArray(found) ? found : Object.entries(found).map(([id, value]) => ({id, name: {native: 'Swarm · LiteLLM', codex: 'Codex', claude: 'Claude Code'}[id], ...value}));
+  const capabilities = Array.isArray(found) ? found : Object.entries(found).map(([id, value]) => ({id, name: {native: 'Swarm · LiteLLM', codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi'}[id], ...value}));
+  const history = store.list().slice(0, 30).map(({id, task, status, startedAt, demo}) => ({id, task, status, startedAt, demo}));
+  const summaries = () => {
+    if (!runner.run) return history;
+    const {id, task, status, startedAt, demo} = runner.run;
+    const prior = history.findIndex((run) => run.id === id);
+    if (prior >= 0) history.splice(prior, 1);
+    history.unshift({id, task, status, startedAt, demo});
+    history.splice(30);
+    return history;
+  };
   const state = () => ({
     run: runner.run,
-    runs: store.list().slice(0, 30).map(({id, task, status, startedAt, demo}) => ({id, task, status, startedAt, demo})),
-    defaults: {model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
+    runs: summaries(),
+    defaults: {team: defaultTeam(), harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
     capabilities,
   });
   const broadcast = () => {
