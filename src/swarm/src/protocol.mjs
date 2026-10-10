@@ -55,10 +55,18 @@ export function parseIdentityReply(text) {
   return parseIdentity(readPublicObject(text)?.identity);
 }
 
+function parseWorkstream(value) {
+  if (!objectValue(value) || typeof value.id !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(value.id)) return null;
+  if (typeof value.name !== 'string') return null;
+  const name = value.name.trim();
+  if (!name || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name)) return null;
+  return {id: value.id, name};
+}
+
 export function parseWorkReply(text, agentIds) {
   const object = readPublicObject(text);
-  const structured = object && ['text', 'contribution', 'messages', 'assignments', 'proposal', 'votes', 'result', 'identity'].some((key) => Object.hasOwn(object, key));
-  if (!structured) return {text: boundedText(text, MAX_REPLY), messages: [], assignments: [], votes: [], proposal: null, result: '', identity: null};
+  const structured = object && ['text', 'contribution', 'messages', 'assignments', 'proposal', 'votes', 'result', 'identity', 'workstream'].some((key) => Object.hasOwn(object, key));
+  if (!structured) return {text: boundedText(text, MAX_REPLY), messages: [], assignments: [], votes: [], proposal: null, result: '', identity: null, workstream: null};
   const messages = (Array.isArray(object.messages) ? object.messages : []).slice(0, 12)
     .filter((message) => objectValue(message) && (message.to === 'all' || agentIds.includes(message.to)) && boundedText(message.text))
     .map((message) => ({to: message.to, text: boundedText(message.text)}));
@@ -72,7 +80,7 @@ export function parseWorkReply(text, agentIds) {
     ? {id: boundedText(object.proposal.id, 80), text: boundedText(object.proposal.text)} : null;
   const result = boundedText(object.result, MAX_REPLY);
   const contribution = boundedText(object.text ?? object.contribution, MAX_REPLY) || result || proposal?.text || messages.map((message) => message.text).join('\n\n');
-  return {text: contribution, messages, assignments, votes, proposal, result, identity: parseIdentity(object.identity), resultProposalId: boundedText(object.resultProposalId, 120)};
+  return {text: contribution, messages, assignments, votes, proposal, result, identity: parseIdentity(object.identity), workstream: parseWorkstream(object.workstream), resultProposalId: boundedText(object.resultProposalId, 120)};
 }
 
 export function countConsensus(proposal, agentIds) {
