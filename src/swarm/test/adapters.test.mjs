@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { availableHarnesses, buildCliCommand, executeWorkspaceTool, gatewayUrl, parseSse, runAgent, workspaceToolDefinitions } from '../src/adapters.mjs';
 import { prepareHarnessProfile } from '../src/harness-profiles.mjs';
 
@@ -102,21 +103,23 @@ test('native defaults to read-only tools and rejects an unadvertised write', asy
   await assert.rejects(readFile(join(cwd, 'unexpected.txt')), { code: 'ENOENT' });
 });
 
-test('local actions advertise bounded commands only when enabled and keep Claude native Bash unavailable', async t => {
+test('CLI local actions use built-in tools without custom command servers or bypass flags', async t => {
   const cwd = await workspace(t);
   assert.deepEqual(workspaceToolDefinitions(false).map(tool => tool.name), ['list_files', 'read_file']);
-  assert(workspaceToolDefinitions(true).some(tool => tool.name === 'run_command'));
   await assert.rejects(executeWorkspaceTool(cwd, 'run_command', {command: 'echo blocked'}), /Local actions are disabled/);
-  const enabled = buildCliCommand({harness: 'claude', cwd, toolsEnabled: true});
-  assert(!enabled.args.includes('--safe-mode'));
-  assert.equal(enabled.args[enabled.args.indexOf('--setting-sources') + 1], '');
-  const config = JSON.parse(enabled.args[enabled.args.indexOf('--mcp-config') + 1]);
-  assert.equal(config.mcpServers.swarm_actions.args.at(-1), 'command');
-  assert.equal(config.mcpServers.swarm_actions.alwaysLoad, true);
-  assert(enabled.args[enabled.args.indexOf('--allowedTools') + 1].includes('mcp__swarm_actions__run_command'));
-  assert(!enabled.args[enabled.args.indexOf('--tools') + 1].includes('Bash'));
+  const claude = buildCliCommand({harness: 'claude', cwd, toolsEnabled: true});
+  assert(!claude.args.includes('--safe-mode'));
+  assert(!claude.args.includes('--restricted'));
+  for (const flag of ['--setting-sources', '--strict-mcp-config', '--mcp-config', '--tools']) assert(!claude.args.includes(flag));
+  assert.equal(claude.args[claude.args.indexOf('--allowedTools') + 1], 'Read,Glob,Grep,Write,Edit,Bash,WebFetch,WebSearch');
   const pi = buildCliCommand({harness: 'pi', cwd, toolsEnabled: true});
-  assert(pi.args[pi.args.indexOf('--tools') + 1].includes('run_command'));
+  for (const flag of ['--tools', '--no-extensions', '--no-mcp']) assert(!pi.args.includes(flag));
+  assert(!pi.args.includes('--extension'));
+  assert(!pi.args.includes('--no-builtin-tools'));
+  const opencode = buildCliCommand({harness: 'opencode', cwd, toolsEnabled: true});
+  assert.equal(opencode.args[opencode.args.indexOf('--agent') + 1], 'build');
+  assert(!opencode.args.includes('--pure'));
+  for (const command of [claude, pi, opencode]) assert(!command.args.some(arg => /bypass|dangerously/.test(arg)));
 });
 
 test('native performs an actual sandboxed command and reports redacted public command results', {skip: process.platform !== 'darwin'}, async t => {
@@ -140,6 +143,60 @@ test('native performs an actual sandboxed command and reports redacted public co
   assert(!JSON.stringify(events).includes(secret));
 });
 
+test('network settings reach real native tools and their model-visible descriptions', {skip: process.platform !== 'darwin'}, async t => {
+  const cwd = await workspace(t);
+  let visits = 0;
+  const server = createServer((_request, response) => {visits++; response.end('network verified');});
+  await new Promise(accept => server.listen(0, '127.0.0.1', accept));
+  t.after(() => new Promise(accept => server.close(accept)));
+  const source = `require('node:http').get('http://127.0.0.1:${server.address().port}',response=>response.pipe(process.stdout)).on('error',error=>{console.error(error.code);process.exitCode=1;});`;
+  const shellQuote = text => `'${text.replaceAll("'", "'\\''")}'`;
+  const command = `${shellQuote(process.execPath)} -e ${shellQuote(source)}`;
+  for (const setting of [false, true, undefined]) {
+    const networkEnabled = setting !== false;
+    let calls = 0;
+    const fetch = t.mock.method(globalThis, 'fetch', async (_url, options) => {
+      const request = JSON.parse(options.body);
+      const phrase = networkEnabled ? /network is enabled/ : /network is disabled/;
+      assert.match(request.messages[0].content, phrase);
+      assert.match(request.tools.find(tool => tool.function.name === 'run_command').function.description, phrase);
+      if (calls++ === 0) return streamResponse([{choices: [{index: 0, delta: {tool_calls: [{index: 0, id: 'network-1', function: {name: 'run_command', arguments: JSON.stringify({command})}}]}, finish_reason: 'tool_calls'}]}]);
+      const result = JSON.parse(request.messages.at(-1).content);
+      assert.equal(result.networkEnabled, networkEnabled);
+      if (networkEnabled) {assert.equal(result.exitCode, 0); assert.equal(result.stdout, 'network verified');}
+      else {assert.equal(result.exitCode, 1); assert.match(result.stderr, /EPERM|EACCES/);}
+      return streamResponse([{choices: [{index: 0, delta: {content: 'Observed the actual network result.'}, finish_reason: 'stop'}]}]);
+    });
+    await runAgent({cwd, prompt: 'Check the local service', toolsEnabled: true, networkEnabled: setting, env: {LITELLM_API_KEY: 'synthetic-key'}});
+    fetch.mock.restore();
+  }
+  assert.equal(visits, 2);
+});
+
+test('native CLI actions include normal networking and inspection removes write/command tools', async t => {
+  const cwd = await workspace(t);
+  const env = {LITELLM_API_KEY: 'synthetic-key'};
+  const codex = buildCliCommand({harness: 'codex', cwd, toolsEnabled: true});
+  assert(codex.args.includes('sandbox_workspace_write.network_access=true'));
+  const inspect = buildCliCommand({harness: 'codex', cwd, toolsEnabled: false});
+  assert(inspect.args.includes('sandbox_workspace_write.network_access=false'));
+  const claude = buildCliCommand({harness: 'claude', cwd, toolsEnabled: false});
+  assert.equal(claude.args[claude.args.indexOf('--tools') + 1], 'Read,Glob,Grep');
+  assert(claude.args.includes('--safe-mode'));
+  const pi = buildCliCommand({harness: 'pi', cwd, toolsEnabled: false});
+  assert.equal(pi.args[pi.args.indexOf('--tools') + 1], 'read,grep,find,ls');
+  assert(pi.args.includes('--no-approve'));
+  assert(buildCliCommand({harness: 'opencode', cwd, toolsEnabled: false}).args.includes('--pure'));
+  for (const toolsEnabled of [false, true]) {
+    const profile = await prepareHarnessProfile({harness: 'opencode', cwd, toolsEnabled, model: 'test', env, baseUrl: 'https://example.com/v1'});
+    t.after(profile.cleanup);
+    const config = JSON.parse(profile.environment.OPENCODE_CONFIG_CONTENT);
+    assert.equal(config.agent, undefined);
+    assert.equal(config.mcp, undefined);
+    assert.deepEqual(config.permission, toolsEnabled ? {external_directory: 'deny'} : {'*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow'});
+  }
+});
+
 test('gateway authentication and incomplete streams fail transparently with no fallback', async t => {
   const cwd = await workspace(t);
   await assert.rejects(runAgent({ prompt: 'hello', cwd, env: {} }), /LITELLM_API_KEY/);
@@ -150,13 +207,18 @@ test('gateway authentication and incomplete streams fail transparently with no f
 });
 
 test('CLI arguments keep native permissions and exclude bypass flags', () => {
-  const codex = buildCliCommand({ harness: 'codex', cwd: '/tmp/project', toolsEnabled: true, model: 'test-model' });
+  const codex = buildCliCommand({ harness: 'codex', cwd: '/tmp/project', toolsEnabled: true, model: 'test-model', env: {} });
   assert(codex.args.includes('workspace-write'));
-  assert(codex.args.includes('--ignore-user-config'));
-  for (const feature of ['plugins', 'apps', 'hooks', 'skill_mcp_dependency_install']) assert(codex.args.includes(feature));
+  assert(!codex.args.includes('--ignore-user-config'));
+  assert(!codex.args.includes('plugins'));
+  const gateway = buildCliCommand({harness: 'codex', cwd: '/tmp/project', toolsEnabled: true, env: {LITELLM_API_KEY: 'test-key'}});
+  assert(gateway.args.includes('plugins'));
+  const inspect = buildCliCommand({harness: 'codex', cwd: '/tmp/project', toolsEnabled: false});
+  assert(inspect.args.includes('--ignore-user-config'));
+  for (const feature of ['apps', 'hooks', 'skill_mcp_dependency_install']) assert(!codex.args.includes(feature));
   assert(!codex.args.some(arg => arg.includes('bypass')));
   const claude = buildCliCommand({ harness: 'claude', cwd: '/tmp/project', toolsEnabled: false });
-  assert(claude.args.includes('--restricted'));
+  assert(!claude.args.includes('--restricted'));
   assert(claude.args.includes('Read,Glob,Grep'));
   assert(!claude.args.includes('Read,Glob,Grep,Write,Edit'));
 });
@@ -303,27 +365,33 @@ test('workspace tools protect private configuration but allow example environmen
   assert.equal(await executeWorkspaceTool(cwd, 'read_file', { path: '.env.example' }), 'configuration');
 });
 
-test('Pi and OpenCode disable ambient tools and use only the isolated gateway profile', async t => {
+test('gateway profiles add routing without suppressing native project configuration', async t => {
   const cwd = await workspace(t);
   const env = { LITELLM_API_KEY: 'gateway-private-test-key' };
   const pi = buildCliCommand({ harness: 'pi', cwd, model: 'openai/gpt-6-astra', env });
-  for (const option of ['--no-mcp', '--no-builtin-tools', '--no-extensions', '--no-context-files', '--no-session']) assert(pi.args.includes(option));
-  assert(pi.args.includes('list_files,read_file'));
+  for (const option of ['--no-mcp', '--no-extensions', '--no-session']) assert(pi.args.includes(option));
+  for (const option of ['--no-builtin-tools', '--no-context-files', '--extension']) assert(!pi.args.includes(option));
+  assert(pi.args.includes('read,grep,find,ls'));
   const piProfile = await prepareHarnessProfile({ harness: 'pi', cwd, model: 'openai/gpt-6-astra', env, baseUrl: 'https://example.com/v1' });
   t.after(piProfile.cleanup);
   const modelsText = await readFile(join(piProfile.environment.PI_CODING_AGENT_DIR, 'models.json'), 'utf8');
   assert(!modelsText.includes(env.LITELLM_API_KEY));
   assert.equal(JSON.parse(modelsText).providers.swarm.apiKey, '${LITELLM_API_KEY}');
-  assert.equal(piProfile.environment.SWARM_WORKSPACE_WRITE, '0');
+  assert.equal(piProfile.environment.SWARM_WORKSPACE_WRITE, undefined);
+  assert.equal(piProfile.environment.PI_OFFLINE, undefined);
   const profile = await prepareHarnessProfile({ harness: 'opencode', cwd, model: 'openai/gpt-6-astra', env, baseUrl: 'https://example.com/v1' });
   t.after(profile.cleanup);
   assert.equal(profile.environment.OPENCODE_DISABLE_PROJECT_CONFIG, 'true');
+  const normal = await prepareHarnessProfile({harness: 'opencode', cwd, toolsEnabled: true, model: 'test', env, baseUrl: 'https://example.com/v1'});
+  t.after(normal.cleanup);
+  assert.deepEqual(Object.keys(normal.environment), ['OPENCODE_CONFIG_CONTENT']);
+  await assert.rejects(stat(join(piProfile.environment.PI_CODING_AGENT_DIR, 'settings.json')), {code: 'ENOENT'});
   const config = JSON.parse(profile.environment.OPENCODE_CONFIG_CONTENT);
   assert(!profile.environment.OPENCODE_CONFIG_CONTENT.includes(env.LITELLM_API_KEY));
-  assert.deepEqual(config.permission, { '*': 'deny', 'workspace_*': 'allow' });
-  assert.deepEqual(config.agent.swarm.tools, { '*': false, 'workspace_*': true });
-  assert.equal(config.mcp.workspace.environment.LITELLM_API_KEY, '');
-  assert.equal(config.mcp.workspace.command.at(-1), 'read');
+  assert.deepEqual(config.permission, { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' });
+  assert.equal(config.agent, undefined);
+  assert.equal(config.mcp, undefined);
+  for (const property of ['enabled_providers', 'autoupdate', 'share', 'snapshot', 'plugin', 'instructions']) assert.equal(config[property], undefined);
 });
 
 test('Codex gateway routing uses a validated Responses provider, scoped credentials and isolated config', async t => {
@@ -416,11 +484,57 @@ test('CLI command events include exit and output details while redacting every p
   assert(!JSON.stringify(emitted).includes(secret));
 });
 
-test('Claude reports an explicit local command server rejection instead of pretending action tools loaded', async t => {
+
+test('native harness command results preserve actual output and reported exit metadata', async t => {
   const cwd = await workspace(t);
-  const events = [{type: 'system', subtype: 'init', model: 'claude-test', mcp_server_errors: [{name: 'swarm_actions', type: 'configuration', message: 'Local command server rejected'}]}, {type: 'result', result: 'I cannot execute commands'}];
-  const binary = await fakeCli(t, cwd, `process.stdin.resume(); process.stdin.on('end', () => {for (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));});`);
-  await assert.rejects(runAgent({harness: 'claude', cwd, prompt: 'Perform actions', toolsEnabled: true, env: {SWARM_CLAUDE_BIN: binary}}), /local command server did not load.*rejected/);
+  const secret = 'synthetic-native-command-secret';
+  const fixtures = {
+    pi: [
+      {type: 'tool_execution_start', toolCallId: 'shell1', toolName: 'bash', args: {command: 'printf output'}},
+      {type: 'tool_execution_end', toolCallId: 'shell1', toolName: 'bash', result: {content: [{type: 'text', text: secret}], structuredContent: {output: secret, exit_code: 0, truncated: false}}},
+      {type: 'message_end', message: {role: 'assistant', stopReason: 'stop', content: [{type: 'text', text: 'Done'}]}},
+      {type: 'agent_end'},
+    ],
+    opencode: [
+      {type: 'tool_use', part: {id: 'shell1', tool: 'bash', state: {status: 'completed', input: {command: 'printf output'}, output: secret, metadata: {exit: 0}}}},
+      {type: 'text', part: {id: 'answer', text: 'Done'}},
+      {type: 'step_finish', part: {reason: 'stop'}},
+    ],
+    claude: [
+      {type: 'assistant', message: {content: [{type: 'tool_use', id: 'shell1', name: 'Bash', input: {command: 'printf output'}}]}},
+      {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: 'shell1', content: secret}]}, tool_use_result: {stdout: secret, stderr: '', interrupted: false}},
+      {type: 'result', result: 'Done'},
+    ],
+  };
+  for (const [harness, sequence] of Object.entries(fixtures)) {
+    const binary = await fakeCli(t, cwd, `process.stdin.resume(); process.stdin.on('end', () => {for (const event of ${JSON.stringify(sequence)}) console.log(JSON.stringify(event));});`);
+    const emitted = [];
+    await runAgent({harness, cwd, prompt: 'Use your native tools', toolsEnabled: true, env: {LITELLM_API_KEY: secret, [`SWARM_${harness.toUpperCase()}_BIN`]: binary}, onEvent: event => emitted.push(event)});
+    const result = emitted.find(event => event.type === 'tool' && event.status === 'completed');
+    assert.equal(result.name, harness === 'claude' ? 'Bash' : 'bash');
+    assert.equal(result.command, 'printf output');
+    assert.equal(result.stdout, '[redacted]');
+    assert.equal(result.exitCode, harness === 'claude' ? undefined : 0);
+    assert(!JSON.stringify(emitted).includes(secret));
+  }
+});
+
+test('OpenCode incomplete permission rejection exposes its actual diagnostic without accepting partial work', async t => {
+  const cwd = await workspace(t);
+  const secret = 'synthetic-permission-secret';
+  const sequence = [
+    {type: 'step_start'},
+    {type: 'tool_use', part: {id: 'read-1', tool: 'read', state: {status: 'error', error: 'The user rejected permission to use this specific tool call.'}}},
+    {type: 'step_finish', part: {reason: 'tool-calls'}},
+  ];
+  const binary = await fakeCli(t, cwd, `process.stdin.resume(); process.stdin.on('end', () => {for (const event of ${JSON.stringify(sequence)}) console.log(JSON.stringify(event)); process.stderr.write(${JSON.stringify('\u001b[93mpermission requested: external_directory (' + secret + '/*); auto-rejecting\u001b[0m')});});`);
+  await assert.rejects(runAgent({harness: 'opencode', cwd, prompt: 'Read context', toolsEnabled: true, env: {LITELLM_API_KEY: secret, SWARM_OPENCODE_BIN: binary}}), error => {
+    assert.match(error.message, /permission requested: external_directory/);
+    assert.match(error.message, /auto-rejecting/);
+    assert(!error.message.includes(secret));
+    assert(!error.message.includes('\u001b'));
+    return true;
+  });
 });
 
 test('new harnesses surface zero-exit upstream failures and clean profiles after cancellation', async t => {
