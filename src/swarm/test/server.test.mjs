@@ -38,7 +38,7 @@ async function until(check) {
   assert.fail('Expected chat lifecycle condition did not occur');
 }
 
-async function chatFixture(t) {
+async function chatFixture(t, serverOptions = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'swarm-chat-http-'));
   const store = new RunStore(directory);
   const clock = manualClock();
@@ -52,7 +52,7 @@ async function chatFixture(t) {
     await delay(2, undefined, {signal: args.signal});
     return {text: JSON.stringify({text: `Contribution for ${task}`, result: `ANSWER_MARKER:${task}`, proposal: {id: 'evidence', text: `Proposal for ${task}`}})};
   }});
-  const server = await startServer({runner, store, port: 0, capabilities: []});
+  const server = await startServer({runner, store, port: 0, capabilities: [], ...serverOptions});
   t.after(async () => {runner.stop(); await runner.done; await server.close(); rmSync(directory, {recursive: true, force: true});});
   const headers = {Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json'};
   const get = (path) => fetch(`${server.url}${path}`, {headers});
@@ -104,9 +104,25 @@ test('HTTP view runs, streams, steers, stops, and persists a swarm with origin p
   assert.deepEqual([...new Set(state.defaults.team.map((peer) => peer.harness))].sort(), ['claude', 'codex', 'opencode', 'pi']);
   assert.equal(state.defaults.harnessModels.codex, 'gpt-6.1-sol');
   assert.equal(state.defaults.duration, 600);
+  assert.equal(state.defaults.toolsEnabled, true);
+  assert.equal(state.defaults.workspace, runner.workspace);
+  assert.equal(typeof state.defaults.localActions.commands, 'boolean');
+  assert.equal(state.defaults.localActions.network, false);
+  assert.equal(run.toolsEnabled, true);
   assert.equal(state.run.status, 'stopped');
   assert.equal((await get('/api/runs/not-an-id')).status, 404);
   assert.equal((await post('/api/run', {task: 'ok', agents: []})).status, 400);
+});
+
+test('HTTP action defaults honor an inspect-only server and explicit next-period choices', async (t) => {
+  const {get, post, start} = await chatFixture(t, {toolsEnabled: false});
+  const state = await (await get('/api/state')).json();
+  assert.equal(state.defaults.toolsEnabled, false);
+  assert.equal((await start('Inspect this project')).toolsEnabled, false);
+  await post('/api/stop');
+  assert.equal((await start('Implement the change', {toolsEnabled: true})).toolsEnabled, true);
+  await post('/api/stop');
+  assert.equal((await start('Try a demo', {toolsEnabled: true, demo: true})).toolsEnabled, false);
 });
 
 test('new chats reset state after completed or stopped runs and retain both histories without a subscriber', async (t) => {
