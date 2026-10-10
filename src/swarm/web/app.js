@@ -1,4 +1,6 @@
 import { Constellation } from './assets/constellation.js';
+import { brainLayout, resizeTeam } from './assets/team-layout.js';
+import { groupChatEntries } from './assets/chat-feed.js';
 import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, currentWork, agentPresence, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -7,12 +9,19 @@ let historicalRun = null;
 let draftMode = false;
 let parentRun = null;
 let brainView = false;
+let contentView = 'chat';
+const contentScroll = {chat: 0, results: 0};
+const groupRows = new Map();
+const expandedMessages = new Set();
 let inspectorOpen = false;
 let sidebarSignature = '';
 let navigationRevision = 0;
+let requestedChatId = null;
+let pendingSubmission = null;
 const agentRows = new Map();
 let configuredTeam = null;
 let editingTeam = [];
+let addTargetId = null;
 let selectedId = null;
 let filterId = '';
 let selectedResult = null;
@@ -32,6 +41,7 @@ const field = new Constellation($('#constellation'));
 function defaultTeam() {
   return (state.defaults.team || []).map((agent) => ({ ...agent, status: 'queued' }));
 }
+function maxAgents() { return Number(state.defaults.maxAgents) || 100; }
 function viewedRun() { return draftMode ? null : historicalRun || state.run; }
 function displayAgents() { return viewedRun()?.agents || configuredTeam || defaultTeam(); }
 function agentById(id) { return displayAgents().find((agent) => agent.id === id); }
@@ -52,7 +62,11 @@ async function api(path, body) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(result.error || `Request failed (${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 function runDuration() {
@@ -101,20 +115,27 @@ function renderStatus(run, agents) {
   $('#run-button').disabled = busy || !(configuredTeam || defaultTeam()).length;
   $('#stop-button').hidden = !running;
   $('#stop-button').disabled = busy;
-  $('#task-input').disabled = busy;
-  $('#task-input').placeholder = running ? 'Add context or redirect this swarm…' : run || parentRun ? 'Continue the conversation…' : 'Give your swarm something to work on…';
+  $('#task-input').disabled = busy && !draftMode;
+  $('#task-input').placeholder = running ? 'Add context or redirect this swarm…' : run || parentRun ? 'Message your swarm to continue…' : 'Give your swarm something to work on…';
   $('#demo-button').disabled = busy;
   $('#team-button').disabled = currentRunning && !draftMode;
-  $('#continue-chat-button').hidden = !run || running;
+  $('#continue-chat-button').hidden = true;
   $('#draft-context').hidden = !draftMode || !parentRun;
   $('#draft-context-text').textContent = parentRun ? `Following up on: ${parentRun.task}` : '';
   $('#return-chat-button').hidden = !state.run && !parentRun;
   $('#stop-button').title = draftMode && currentRunning ? 'Stop the swarm in your other chat' : 'Stop this swarm';
-  $('#steering-input').disabled = !running || Boolean(historicalRun) || busy;
-  $('#steering-button').disabled = !running || Boolean(historicalRun) || busy;
-  $('#steering-note').textContent = running && !historicalRun ? 'Your guidance is shared with the team’s next work cycles.' : 'Your guidance joins the shared context.';
+  $('#steering-input').disabled = !run || busy;
+  $('#steering-button').disabled = !run || busy;
+  $('#steering-input').placeholder = run && !running ? 'Message this swarm to continue…' : 'Guide the team…';
+  $('#steering-note').textContent = running ? 'Your guidance is shared with the team’s next work cycles.' : run ? 'Your next message continues with this team’s context.' : 'Your guidance joins the shared context.';
   $('#gateway-label').title = state.defaults.baseUrl || 'Gateway configured by your local CLI';
-  $('#team-button-label').textContent = `${(configuredTeam || defaultTeam()).length || 'Your'} agents`;
+  $('#team-button-label').textContent = `${(running ? agents.length : configuredTeam?.length || agents.length) || 'Your'} agents`;
+  for (const button of document.querySelectorAll('[data-add-agents]')) {
+    button.hidden = !running;
+    button.disabled = busy || !state.defaults.maxAgents || agents.length >= maxAgents();
+    button.title = !state.defaults.maxAgents ? 'Server update pending; the current swarm keeps working.' : agents.length >= maxAgents() ? `This swarm has reached the ${maxAgents()}-agent limit.` : 'Add peers to this swarm';
+  }
+  if ($('#add-agents-dialog').open && (!running || run.id !== addTargetId)) $('#add-agents-dialog').close();
   updateDurationLabel();
   if (running && run.deadlineAt) $('#duration-label').textContent = `${elapsed(run.startedAt, run.deadlineAt)} ${run.demo ? 'demo playback' : 'work budget'}`;
   updateClock();
@@ -122,6 +143,7 @@ function renderStatus(run, agents) {
 
 function newChat(followUp = false) {
   navigationRevision += 1;
+  requestedChatId = null;
   const prior = followUp ? viewedRun() : null;
   parentRun = prior;
   configuredTeam = prior ? prior.agents.map(({id, name, role, harness, model}) => ({id, name, role, harness, model, status: 'queued'})) : null;
@@ -129,6 +151,8 @@ function newChat(followUp = false) {
   historicalRun = null;
   selectedId = null;
   $('#task-input').value = '';
+  contentView = 'chat';
+  contentScroll.chat = contentScroll.results = 0;
   setView(false);
   showInspector(false);
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
@@ -143,9 +167,27 @@ function setView(spatial) {
   document.body.classList.toggle('brain-mode', spatial);
   $('#stage').hidden = !spatial;
   $('#brain-view-button').setAttribute('aria-pressed', String(spatial));
-  $('#chat-view-button').setAttribute('aria-pressed', String(!spatial));
+  $('#chat-view-button').setAttribute('aria-pressed', String(!spatial && contentView === 'chat'));
+  $('#results-view-button').setAttribute('aria-pressed', String(!spatial && contentView === 'results'));
+  updateContentVisibility();
   if (spatial) showInspector(false);
   scheduleFieldLayout();
+}
+
+function updateContentVisibility() {
+  const results = brainView || contentView === 'results';
+  $('#group-feed').hidden = results;
+  $('#human-feed').hidden = !results;
+  $('#conversation-label').textContent = results ? 'Results for you' : 'Group conversation';
+  $('#conversation-label').hidden = !viewedRun();
+  $('#chat-scroll').setAttribute('aria-label', results ? 'Results from the swarm' : 'Group conversation');
+}
+function showContent(view) {
+  if (!brainView) contentScroll[contentView] = $('#chat-scroll').scrollTop;
+  contentView = view;
+  setView(false);
+  render();
+  $('#chat-scroll').scrollTop = contentScroll[view];
 }
 
 function showInspector(open) {
@@ -157,6 +199,7 @@ function showInspector(open) {
 }
 
 async function selectChat(id) {
+  requestedChatId = id;
   const revision = ++navigationRevision;
   try {
     const next = await api('/api/select', {id});
@@ -181,13 +224,14 @@ function renderChat(run, agents) {
   $('#agent-overview').hidden = !run;
   $('#agents-count').textContent = agents.length;
   $('#inspector-count').textContent = agents.length;
-  const working = agents.filter((agent) => agent.status === 'running').length;
-  const cycles = agents.reduce((sum, agent) => sum + (agent.cycles || 0), 0);
-  $('#overview-title').textContent = run?.phase === 'electing' ? 'The peers are choosing a coordinator' : run?.status === 'running' ? `${working} subagents working` : `${agents.length} subagents · ${run?.status || 'ready'}`;
-  $('#overview-detail').textContent = `${cycles} contributions · Open their work and conversations`;
+  const working = agents.filter((agent) => agentPresence(agent, run).active).length;
+  const leader = agents.find((agent) => agent.id === run?.coordinatorId);
+  $('#overview-title').textContent = `${agents.length} agents in this conversation`;
+  $('#overview-detail').textContent = `${working} active · ${leader ? `Leader: ${leader.name}` : run?.phase === 'electing' ? 'Choosing a leader' : 'No leader'} · View their work`;
   $('#overview-logos').replaceChildren(...agents.map((agent) => logo(agent.harness)));
   $('#chat-run-status').hidden = !run;
-  $('#chat-run-status').textContent = run?.status === 'running' ? 'The team is working. You can send more context below.' : run?.status === 'complete' ? 'Work period complete. Send a follow-up to keep working with these peers.' : run ? `This chat’s swarm is ${run.status}. Its work is preserved.` : '';
+  updateContentVisibility();
+  $('#chat-run-status').textContent = run?.status === 'running' ? 'The team is working. You can send more context below.' : run?.status === 'complete' ? 'Work period complete. Message your swarm to continue with its context.' : run ? `This swarm is ${run.status}. Send a message to continue with its context.` : '';
   const signature = JSON.stringify([state.runs, run?.id, draftMode]);
   if (signature !== sidebarSignature) {
     sidebarSignature = signature;
@@ -269,18 +313,26 @@ function scheduleFieldLayout() {
   layoutPending = true;
   requestAnimationFrame(() => {
     layoutPending = false;
-    const stage = $('#stage').getBoundingClientRect();
+    const stageElement = $('#stage');
+    let stage = stageElement.getBoundingClientRect();
     if (!stage.width || !stage.height) return;
-    const positions = [[.18,.44],[.35,.59],[.65,.56],[.86,.44],[.08,.68],[.245,.80],[.435,.77],[.61,.82],[.80,.78],[.93,.66]];
-    displayAgents().forEach((agent, index) => {
+    const agentsToPosition = displayAgents();
+    const expanded = agentsToPosition.length > 10;
+    document.body.classList.toggle('large-brain', expanded);
+    let layout = brainLayout(agentsToPosition.length, stage.width, stage.height);
+    if (expanded) stageElement.style.setProperty('--brain-height', `${layout.height}px`);
+    else stageElement.style.removeProperty('--brain-height');
+    $('#workspace').style.setProperty('--brain-height', expanded ? `${layout.height}px` : '');
+    stage = stageElement.getBoundingClientRect();
+    layout = brainLayout(agentsToPosition.length, stage.width, stage.height);
+    agentsToPosition.forEach((agent, index) => {
       const node = cards.get(agent.id)?.node;
       if (!node) return;
-      const point = stage.width < 650 ? [.26 + (index % 2) * .49, .29 + Math.floor(index / 2) * .135 + (index % 2) * .025] : positions[index] || [.14 + ((index - 10) % 2) * .7, .9];
-      node.style.left = `${Math.max(78, Math.min(stage.width - 78, point[0] * stage.width))}px`;
-      node.style.top = `${point[1] * stage.height}px`;
+      node.style.left = `${layout.points[index].x}px`;
+      node.style.top = `${layout.points[index].y}px`;
     });
     $('#election-button').style.left = '50%';
-    $('#election-button').style.top = `${stage.height * (stage.width < 650 ? .18 : .32)}px`;
+    $('#election-button').style.top = `${layout.hubY}px`;
     const position = (node) => {
       const rect = node.getBoundingClientRect();
       return { x: (rect.left + rect.width / 2 - stage.left) / stage.width * 1920, y: (rect.top + rect.height / 2 - stage.top) / stage.height * 1080 };
@@ -369,30 +421,111 @@ function renderFeed(run, agents) {
   panel.scrollTop = stick ? panel.scrollHeight : position;
 }
 
+const MESSAGE_LABELS = {contribution: 'Contribution', election: 'Leader vote', proposal: 'Proposal', vote: 'Vote', assignment: 'Assignment', identity: 'Introduction', membership: 'Team change', coordination: 'Coordination'};
+function groupMessage(message, run) {
+  const agent = agentById(message.from);
+  const isUser = message.from === 'user';
+  const presence = agent ? agentPresence(agent, run) : null;
+  const row = element('article', `group-message${isUser ? ' group-user' : ''}${message.streaming ? ' group-streaming' : ''}`);
+  row.dataset.messageId = message.id;
+  if (agent) row.append(identityLogos(agent));
+  const main = element('div', 'group-message-main');
+  const header = element('div', 'group-message-header');
+  const name = element(agent ? 'button' : 'span', 'group-author', isUser ? 'You' : agent?.name || message.from || 'Swarm');
+  if (agent) name.addEventListener('click', () => openAgent(agent.id));
+  header.append(name);
+  if (presence?.leader) {
+    const leader = element('span', 'group-leader', 'Leader');
+    leader.title = 'Current elected leader';
+    header.append(leader);
+  }
+  if (presence) {
+    const status = element('span', `group-presence${presence.active ? ' active' : ''}`, presence.label);
+    status.prepend(element('span', 'status-dot'));
+    header.append(status);
+  }
+  if (message.to && message.to !== 'all') header.append(element('span', 'group-recipient', `→ ${agentName(message.to)}`));
+  if (message.at != null) header.append(element('span', 'group-time', `+${elapsed(run.startedAt, message.at)}`));
+  main.append(header);
+  if (agent) main.append(element('div', 'group-model', `${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}`));
+  const bubble = element('div', 'group-bubble');
+  const label = message.streaming ? 'Writing…' : message.partial ? 'Partial contribution' : MESSAGE_LABELS[message.kind];
+  if (label) bubble.append(element('div', 'group-kind', label));
+  const collapsible = message.text.length > 400 || message.text.split('\n').length > 8;
+  const body = element('div', `group-message-text${collapsible && !expandedMessages.has(message.id) ? ' collapsed' : ''}`);
+  if (message.pending) body.append(element('span', 'group-writing', 'Composing a public update…'));
+  else richText(body, message.text);
+  bubble.append(body);
+  if (message.proposalId) {
+    const proposal = run.proposals?.find((item) => item.id === message.proposalId);
+    const count = consensusLabel(proposal?.consensus || message.consensus);
+    if (count) bubble.append(element('div', 'group-consensus', count));
+  }
+  if (collapsible) {
+    const expand = element('button', 'group-expand', expandedMessages.has(message.id) ? 'Show less' : 'Read full message');
+    expand.addEventListener('click', () => {
+      if (expandedMessages.has(message.id)) expandedMessages.delete(message.id); else expandedMessages.add(message.id);
+      groupRows.get(message.id).signature = '';
+      renderGroupChat(viewedRun());
+    });
+    bubble.append(expand);
+  }
+  main.append(bubble);
+  row.append(main);
+  return row;
+}
+function renderGroupChat(run) {
+  const messages = groupChatEntries(run);
+  const panel = $('#chat-scroll');
+  const stick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 70;
+  const position = panel.scrollTop;
+  const anchor = [...$('#group-feed').children].find((node) => node.getBoundingClientRect().bottom > panel.getBoundingClientRect().top);
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  const ids = new Set(messages.map((message) => message.id));
+  for (const [id] of groupRows) if (!ids.has(id)) { groupRows.delete(id); expandedMessages.delete(id); }
+  const rows = messages.map((message) => {
+    const agent = agentById(message.from);
+    const consensus = run?.proposals?.find((proposal) => proposal.id === message.proposalId)?.consensus;
+    const signature = JSON.stringify([message, agent?.name, agent?.harness, agent?.model, agent && agentPresence(agent, run), consensus]);
+    let entry = groupRows.get(message.id);
+    if (!entry || signature !== entry.signature) {
+      entry = {signature, node: groupMessage(message, run)};
+      groupRows.set(message.id, entry);
+    }
+    return entry.node;
+  });
+  const feed = $('#group-feed');
+  const retained = new Set(rows);
+  for (const child of [...feed.children]) if (!retained.has(child)) child.remove();
+  let cursor = feed.firstElementChild;
+  for (const row of rows) {
+    if (row === cursor) cursor = cursor.nextElementSibling;
+    else feed.insertBefore(row, cursor);
+  }
+  if (!messages.length && run) feed.replaceChildren(element('p', 'group-empty', 'The team’s first messages will appear here. Each peer speaks in its own name.'));
+  if (!brainView && contentView === 'chat') {
+    if (stick) panel.scrollTop = panel.scrollHeight;
+    else if (anchor?.isConnected) panel.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+    else panel.scrollTop = position;
+  }
+}
+
 function resultEntries(run) {
   if (run?.results?.length) return run.results;
   return run?.result ? [{ id: `${run.id}-result`, at: run.endedAt || run.startedAt, agentId: run.coordinatorId, text: run.result, cycle: null }] : [];
 }
 function renderResults(run) {
   const results = resultEntries(run);
-  const directions = (run?.messages || []).filter((message) => message.kind === 'direction' && message.from === 'user').filter((message) => {
-    const sinceStart = Number(new Date(message.at)) - Number(new Date(run.startedAt));
-    return !(sinceStart >= 0 && sinceStart < 1000 && run.task.startsWith(message.text));
-  });
-  const timeline = [...results, ...directions.map((message) => ({...message, userDirection: true}))].sort((a, b) => Number(new Date(a.at)) - Number(new Date(b.at)));
+  const timeline = results;
   $('#result-count').textContent = `${results.length} ${results.length === 1 ? 'UPDATE' : 'UPDATES'}`;
   const signature = JSON.stringify([run?.id, timeline]);
-  if (signature === resultsSignature || !timeline.length) return;
+  $('#results-view-button').title = `${results.length} human-facing ${results.length === 1 ? 'update' : 'updates'}`;
+  if (signature === resultsSignature) return;
   resultsSignature = signature;
   const panel = $('#chat-scroll');
   const stick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 60;
   const position = panel.scrollTop;
   $('#human-feed').replaceChildren(...timeline.map((result) => {
-    if (result.userDirection) {
-      const message = element('div', 'chat-user-message chat-direction');
-      message.append(element('span', 'chat-author', 'You'), element('div', '', result.text));
-      return message;
-    }
     const agent = agentById(result.agentId);
     const card = element('article', 'result-card');
     const header = element('div', 'event-header');
@@ -408,6 +541,7 @@ function renderResults(run) {
     card.append(header, preview, footer);
     return card;
   }));
+  if (!timeline.length && run) $('#human-feed').append(element('p', 'group-empty', 'The team’s human-facing answers will appear here. Follow their conversation in Chat while they work.'));
   panel.scrollTop = stick ? panel.scrollHeight : position;
 }
 function openResult(result) {
@@ -491,6 +625,9 @@ function renderElection() {
 
 function clearHumanFeed() {
   $('#human-feed').replaceChildren();
+  $('#group-feed').replaceChildren();
+  groupRows.clear();
+  expandedMessages.clear();
   $('#feed').replaceChildren(element('p', 'empty-feed', 'Peer messages and tool activity appear here once the work begins.'));
 }
 function render() {
@@ -510,11 +647,13 @@ function render() {
   renderCards(agents, run);
   renderFeed(run, agents);
   renderResults(run);
+  renderGroupChat(run);
   if ($('#agent-dialog').open) renderAgentDetails();
   if ($('#election-dialog').open) renderElection();
 }
 function receiveState(next) {
-  state = { ...state, ...next };
+  const keepSelection = pendingSubmission && pendingSubmission.revision !== navigationRevision && requestedChatId && next.run?.id !== requestedChatId;
+  state = { ...state, ...next, ...(keepSelection ? {run: state.run} : {}) };
   if (!defaultsApplied && state.defaults.team?.length) {
     defaultsApplied = true;
     const duration = Number(state.defaults.duration) || 600;
@@ -527,7 +666,15 @@ function receiveState(next) {
 }
 
 function openTeam() {
-  editingTeam = (configuredTeam || defaultTeam()).map((agent) => ({ ...agent }));
+  editingTeam = (configuredTeam || viewedRun()?.agents || defaultTeam()).map((agent) => ({ ...agent }));
+  $('#team-count').max = String(maxAgents());
+  $('#team-count-limit').textContent = `2–${maxAgents()} agents per swarm`;
+  renderTeamEditor();
+  $('#team-button').setAttribute('aria-expanded', 'true');
+  $('#team-dialog').showModal();
+}
+function renderTeamEditor() {
+  $('#team-count').value = String(editingTeam.length);
   const capabilityMap = new Map((state.capabilities || []).map((capability) => [capability.id, capability]));
   const harnesses = [...new Set([...Object.keys(HARNESS_NAMES).filter((id) => id !== 'claude-code'), ...editingTeam.map((agent) => agent.harness)])];
   $('#team-editor').replaceChildren(...editingTeam.map((agent) => {
@@ -560,34 +707,110 @@ function openTeam() {
     row.append(name, harnessLabel, modelLabel);
     return row;
   }));
-  $('#team-button').setAttribute('aria-expanded', 'true');
-  $('#team-dialog').showModal();
 }
 function saveTeam() {
-  configuredTeam = editingTeam.map((agent) => ({ ...agent, harness: $(`#harness-${CSS.escape(agent.id)}`).value, model: $(`#model-${CSS.escape(agent.id)}`).value.trim(), status: 'queued' }));
+  editingTeam = editingTeam.map((agent) => ({ ...agent, harness: $(`#harness-${CSS.escape(agent.id)}`).value, model: $(`#model-${CSS.escape(agent.id)}`).value.trim(), status: 'queued' }));
+  configuredTeam = editingTeam.map((agent) => ({...agent}));
   if (!viewedRun()) render();
 }
-async function startRun(demo = false) {
-  const task = $('#task-input').value.trim();
-  if (!demo && !task) { $('#task-input').focus(); return; }
-  if (busy) return;
-  const revision = navigationRevision;
+function applyTeamCount(count = Number($('#team-count').value)) {
+  if (!Number.isInteger(count) || count < 2 || count > maxAgents()) {
+    toast(`Choose between 2 and ${maxAgents()} agents.`);
+    $('#team-count').focus();
+    return false;
+  }
+  saveTeam();
+  editingTeam = resizeTeam(editingTeam, count, defaultTeam());
+  configuredTeam = editingTeam.map((agent) => ({...agent}));
+  renderTeamEditor();
+  render();
+  return true;
+}
+function openAddAgents() {
+  const run = viewedRun();
+  if (run?.status !== 'running') return;
+  addTargetId = run.id;
+  const remaining = maxAgents() - run.agents.length;
+  $('#add-count').max = String(remaining);
+  $('#add-count').value = String(Math.min(5, remaining));
+  $('#add-count-limit').textContent = `${run.agents.length} agents now · room for ${remaining} more · limit ${maxAgents()}`;
+  const options = [element('option', '', 'Mixed harnesses')];
+  options[0].value = '';
+  for (const capability of state.capabilities || []) {
+    if (capability.id === 'claude-code') continue;
+    const option = element('option', '', HARNESS_NAMES[capability.id] || capability.name);
+    option.value = capability.id;
+    option.disabled = capability.available === false;
+    options.push(option);
+  }
+  $('#add-harness').replaceChildren(...options);
+  $('#add-model').value = '';
+  $('#add-model-label').hidden = true;
+  $('#add-agents-dialog').showModal();
+  $('#add-count').focus();
+}
+async function addAgents(event) {
+  event.preventDefault();
+  const run = viewedRun();
+  const count = Number($('#add-count').value);
+  if (busy || run?.id !== addTargetId || run.status !== 'running') return;
+  if (!Number.isInteger(count) || count < 1 || count > maxAgents() - run.agents.length) {
+    toast(`Add between 1 and ${maxAgents() - run.agents.length} agents.`);
+    return;
+  }
+  const harness = $('#add-harness').value;
+  const model = $('#add-model').value.trim();
   busy = true;
+  $('#add-agents-submit').disabled = true;
   render();
   try {
-    if (!demo && viewedRun()?.status === 'running') {
-      await api('/api/message', {text: task, runId: viewedRun().id});
-      if (revision === navigationRevision) $('#task-input').value = '';
-      receiveState(await api('/api/state'));
-      return;
+    await api('/api/agents', {runId: addTargetId, count, ...(harness ? {harness, ...(model ? {model} : {})} : {})});
+    $('#add-agents-dialog').close();
+    receiveState(await api('/api/state'));
+    toast(`${count} ${count === 1 ? 'agent joined' : 'agents joined'} the shared work.`);
+  } catch (error) { toast(error.message); }
+  finally { busy = false; $('#add-agents-submit').disabled = false; render(); }
+}
+async function startRun(demo = false, sourceInput = $('#task-input')) {
+  const task = sourceInput.value.trim();
+  if (!demo && !task) { sourceInput.focus(); return; }
+  if (busy) return;
+  const revision = navigationRevision;
+  const submission = {revision};
+  let timeoutSeconds;
+  let durationError;
+  try { timeoutSeconds = runDuration(); } catch (error) { durationError = error; }
+  const toolsEnabled = $('#tools-toggle').checked;
+  const target = viewedRun();
+  let context = draftMode ? parentRun : target;
+  const configured = configuredTeam?.map((agent) => ({...agent}));
+  const clearSubmittedText = () => {
+    if (revision === navigationRevision && sourceInput.value.trim() === task) sourceInput.value = '';
+  };
+  busy = true;
+  pendingSubmission = submission;
+  render();
+  try {
+    if (!demo && target?.status === 'running') {
+      try {
+        await api('/api/message', {text: task, runId: target.id});
+        clearSubmittedText();
+        receiveState(await api('/api/state'));
+        return;
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        // The work period can end between a keystroke and the message request.
+        // Continue that exact chat, even if the user navigates while awaiting it.
+        const finished = await api(`/api/runs/${encodeURIComponent(target.id)}`);
+        if (!['complete', 'stopped', 'failed', 'interrupted'].includes(finished.status)) throw error;
+        context = finished;
+      }
     }
-    const context = draftMode ? parentRun : viewedRun();
-    const team = configuredTeam || (context ? context.agents : defaultTeam());
-    const body = demo ? { demo: true } : {
-      task,
-      agents: team.map(({ id, name, role, harness, model }) => ({ id, name, role, harness, model })),
-      timeoutSeconds: runDuration(),
-      toolsEnabled: $('#tools-toggle').checked,
+    if (!demo && durationError) throw durationError;
+    const team = configured || context?.agents || defaultTeam();
+    const agents = team.map(({id, name, role, harness, model}) => ({id, name, role, harness, model}));
+    const body = demo ? {demo: true, agents} : {
+      task, agents, timeoutSeconds, toolsEnabled,
       ...(context ? {parentId: context.id} : {}),
     };
     const response = await api('/api/run', body);
@@ -595,14 +818,23 @@ async function startRun(demo = false) {
       historicalRun = null;
       draftMode = false;
       parentRun = null;
+      configuredTeam = null;
       selectedId = null;
-      $('#task-input').value = '';
+      clearSubmittedText();
     }
-    if (response.run) receiveState(response);
+    // A late follow-up must not replace an existing chat the user selected.
+    while (revision !== navigationRevision && requestedChatId) {
+      const desired = requestedChatId;
+      const selectionRevision = navigationRevision;
+      await api('/api/select', {id: desired});
+      if (selectionRevision === navigationRevision) break;
+    }
+    if (response.run && revision === navigationRevision) receiveState(response);
     else receiveState(await api('/api/state'));
   } catch (error) { toast(error.message); }
-  finally { busy = false; render(); }
+  finally { if (pendingSubmission === submission) pendingSubmission = null; busy = false; render(); }
 }
+
 function renderHistory() {
   const runs = state.runs || [];
   const list = $('#history-list');
@@ -628,8 +860,9 @@ async function copyText(text) {
 $('#run-form').addEventListener('submit', (event) => { event.preventDefault(); startRun(); });
 $('#new-chat-button').addEventListener('click', () => newChat());
 $('#continue-chat-button').addEventListener('click', () => newChat(true));
-$('#return-chat-button').addEventListener('click', () => { draftMode = false; parentRun = null; render(); });
-$('#chat-view-button').addEventListener('click', () => setView(false));
+$('#return-chat-button').addEventListener('click', () => { requestedChatId = state.run?.id || null; draftMode = false; parentRun = null; render(); });
+$('#chat-view-button').addEventListener('click', () => showContent('chat'));
+$('#results-view-button').addEventListener('click', () => showContent('results'));
 $('#brain-view-button').addEventListener('click', () => setView(true));
 $('#agents-view-button').addEventListener('click', () => showInspector(!inspectorOpen));
 $('#agent-overview').addEventListener('click', () => showInspector(true));
@@ -643,7 +876,18 @@ for (const name of ['list', 'chat']) $(`#agent-${name}-tab`).addEventListener('c
 $('#demo-button').addEventListener('click', () => startRun(true));
 $('#empty-demo-button').addEventListener('click', () => startRun(true));
 $('#team-button').addEventListener('click', openTeam);
-$('#reset-team').addEventListener('click', () => { configuredTeam = null; $('#team-dialog').close(); openTeam(); render(); });
+$('#apply-team-count').addEventListener('click', () => applyTeamCount());
+$('#team-count').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); applyTeamCount(); } });
+$('#team-done').addEventListener('click', () => { if (applyTeamCount()) $('#team-dialog').close(); });
+for (const button of document.querySelectorAll('[data-team-step]')) button.addEventListener('click', () => applyTeamCount(editingTeam.length + Number(button.dataset.teamStep)));
+for (const button of document.querySelectorAll('[data-add-agents]')) button.addEventListener('click', openAddAgents);
+for (const button of document.querySelectorAll('[data-add-count]')) button.addEventListener('click', () => { $('#add-count').value = button.dataset.addCount; });
+$('#add-harness').addEventListener('change', () => {
+  $('#add-model-label').hidden = !$('#add-harness').value;
+  $('#add-model').value = harnessDefaultModel($('#add-harness').value);
+});
+$('#add-agents-form').addEventListener('submit', addAgents);
+$('#reset-team').addEventListener('click', () => { configuredTeam = defaultTeam(); $('#team-dialog').close(); openTeam(); render(); });
 $('#team-dialog').addEventListener('close', () => { $('#team-button').setAttribute('aria-expanded', 'false'); updateDurationLabel(); });
 $('#agent-dialog').addEventListener('close', () => { selectedId = null; renderCards(displayAgents(), viewedRun()); });
 $('#timeout-select').addEventListener('change', updateDurationLabel);
@@ -672,20 +916,7 @@ $('#stop-button').addEventListener('click', async () => {
   catch (error) { toast(error.message); }
   finally { busy = false; render(); }
 });
-$('#steering-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const text = $('#steering-input').value.trim();
-  if (!text || busy) return;
-  busy = true;
-  render();
-  try {
-    await api('/api/message', { text, runId: viewedRun()?.id });
-    $('#steering-input').value = '';
-    receiveState(await api('/api/state'));
-    toast('Guidance added to the shared context.');
-  } catch (error) { toast(error.message); }
-  finally { busy = false; render(); }
-});
+$('#steering-form').addEventListener('submit', (event) => { event.preventDefault(); startRun(false, $('#steering-input')); });
 document.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !document.querySelector('dialog[open]')) {
     event.preventDefault();
