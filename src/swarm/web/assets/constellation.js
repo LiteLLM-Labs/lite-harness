@@ -3,15 +3,17 @@
 // are retained. Decorative stars/workers never represent real agent counts.
 const TAU = Math.PI * 2;
 const HUB = { x: 963, y: 562 };
-const COLORS = ['#b6d8e5', '#c1b4e4', '#decba5', '#b6d4ca'];
-const SEEDS = Array.from({ length: 740 }, (_, index) => ({
+const COLORS = ['#8fd9e5', '#b0a6ee', '#b6d8e5', '#b6d4ca'];
+const makeSeeds = (count) => Array.from({ length: count }, (_, index) => ({
   index,
   angle: index * 2.39996323,
-  radius: Math.sqrt((index + 0.5) / 740),
+  radius: Math.sqrt((index + 0.5) / count),
   depth: 0.5 + 0.5 * Math.sin(index * 1.371),
   bright: index % 17 === 0,
   color: index % 19 === 0 ? '#f8d797' : index % 6 === 0 ? '#d4cbff' : '#d7f0ff',
 }));
+const SEEDS = makeSeeds(740);
+const BACKDROP = makeSeeds(880);
 
 export function layoutAgents(agents) {
   const points = [
@@ -92,16 +94,81 @@ export class Constellation {
     if (!context || !this.canvas.width || !this.canvas.height) return;
     context.setTransform(this.canvas.width / 1920, 0, 0, this.canvas.height / 1080, 0, 0);
     context.clearRect(0, 0, 1920, 1080);
-    const depth = context.createRadialGradient(970, 773, 0, 970, 773, 980);
-    depth.addColorStop(0, '#26466a33');
-    depth.addColorStop(1, '#07132100');
     context.globalAlpha = 1;
-    context.fillStyle = depth;
-    context.fillRect(0, 0, 1920, 1080);
+    this.drawDepth(970, 773, 980, 570, '#26466a38');
+    this.drawDepth(this.hub.x, this.hub.y, 240, 210, '#b7d4ff19');
+    this.drawBackdrop(frame);
     this.drawStars(frame);
+    this.drawHub(frame);
     this.agents.forEach((agent, index) => this.drawAgent(agent, index, frame));
     this.drawDependencies(frame);
     context.globalAlpha = 1;
+  }
+
+  drawDepth(x, y, width, height, color) {
+    const context = this.context;
+    context.save();
+    context.translate(x, y);
+    context.scale(width, height);
+    const gradient = context.createRadialGradient(0, 0, 0, 0, 0, 1);
+    gradient.addColorStop(0, color);
+    gradient.addColorStop(1, '#07132100');
+    context.fillStyle = gradient;
+    context.fillRect(-1, -1, 2, 2);
+    context.restore();
+  }
+
+  drawBackdrop(frame) {
+    const context = this.context;
+    BACKDROP.forEach(({ index, angle, radius, depth, bright, color }) => {
+      const theta = angle + frame * 0.0011;
+      const x = 960 + Math.cos(theta) * 1040 * radius + Math.sin(index * 0.21 + frame * 0.012) * (7 + depth * 8);
+      const y = 720 + Math.sin(theta) * 490 * radius + Math.cos(index * 0.17 + frame * 0.011) * 25;
+      const size = bright ? 2.8 + depth : 0.75 + depth * 1.35;
+      const flicker = 0.55 + 0.45 * Math.sin(frame / 24 + index) ** 2;
+      // Keep the product headline quiet; the original two fields retain their
+      // exact geometry and accumulate into the dense constellation below it.
+      const lowerField = Math.max(0, Math.min(1, (y - 245) / 240));
+      const opacity = (bright ? 0.9 : 0.25 + depth * 0.55) * flicker * lowerField * 0.58;
+      if (bright) {
+        context.globalAlpha = opacity;
+        const glint = context.createRadialGradient(x, y, 0, x, y, size * 13);
+        glint.addColorStop(0, '#d3e8ff61');
+        glint.addColorStop(0.3, '#b0d5ff13');
+        glint.addColorStop(1, '#d3e8ff00');
+        context.fillStyle = glint;
+        context.fillRect(x - size * 13, y - size * 13, size * 26, size * 26);
+        this.drawCross(x, y, size * 4, color, opacity * 0.3);
+      }
+      this.dot(x, y, size, color, opacity);
+    });
+  }
+
+  drawCross(x, y, radius, color, opacity) {
+    const context = this.context;
+    context.globalAlpha = opacity;
+    context.strokeStyle = color;
+    context.lineWidth = 0.65;
+    context.beginPath();
+    context.moveTo(x - radius, y);
+    context.lineTo(x + radius, y);
+    context.moveTo(x, y - radius);
+    context.lineTo(x, y + radius);
+    context.stroke();
+  }
+
+  drawHub(frame) {
+    const context = this.context;
+    const pulse = 1 + Math.sin(frame / 13) * 0.065;
+    context.globalAlpha = 1;
+    this.drawDepth(this.hub.x, this.hub.y, 152 * pulse, 152 * pulse, '#b7d4ff19');
+    // The actual logo, label and interaction belong to the DOM above this.
+    context.globalAlpha = 0.22;
+    context.strokeStyle = '#b4dce7';
+    context.lineWidth = 0.9;
+    context.beginPath();
+    context.roundRect(this.hub.x - 48, this.hub.y - 48, 96, 96, 18);
+    context.stroke();
   }
 
   drawStars(frame) {
@@ -112,7 +179,7 @@ export class Constellation {
       const y = 738 + Math.sin(theta) * 355 * radius + Math.cos(index * 0.17 + frame * 0.011) * 25;
       const size = bright ? 2.8 + depth : 0.75 + depth * 1.35;
       const flicker = 0.55 + 0.45 * Math.sin(frame / 24 + index) ** 2;
-      const opacity = (bright ? 0.9 : 0.25 + depth * 0.55) * flicker * 0.55;
+      const opacity = (bright ? 0.9 : 0.25 + depth * 0.55) * flicker;
       if (bright) {
         this.dot(x, y, size * 11, color, opacity * 0.017);
         this.dot(x, y, size * 4.5, color, opacity * 0.04);
@@ -134,50 +201,95 @@ export class Constellation {
     const context = this.context;
     const hub = this.hub;
     const working = this.active && agent.status === 'running';
-    const dimmed = this.selectedId && agent.id !== this.selectedId;
-    const opacity = dimmed ? 0.2 : working ? 0.8 : agent.status === 'queued' ? 0.32 : 0.5;
-    const color = working ? '#e2cda5' : agent.color;
+    const selected = agent.id === this.selectedId;
+    const dimmed = this.selectedId && !selected;
+    const opacity = dimmed ? 0.25 : working ? 0.95 : agent.status === 'queued' ? 0.45 : 0.62;
+    // Warm points stay sparse, even when all ten agents are working.
+    const color = working && (index % 4 === 0 || selected) ? '#ffdb94' : agent.color;
     const shift = {
       x: agent.x + Math.sin(frame / 38 + index * 2) * 8,
       y: agent.y + Math.cos(frame / 43 + index) * 7,
     };
     const bend = index % 2 ? 38 : -38;
-    context.globalAlpha = opacity * 0.4;
+    context.globalAlpha = opacity * 0.19;
     context.strokeStyle = color;
     context.lineWidth = 1;
     context.beginPath();
-    context.moveTo(agent.x, agent.y);
-    context.quadraticCurveTo((agent.x + hub.x) / 2 + bend, (agent.y + hub.y) / 2, hub.x, hub.y);
+    context.moveTo(shift.x, shift.y);
+    context.quadraticCurveTo((shift.x + hub.x) / 2 + bend, (shift.y + hub.y) / 2, hub.x, hub.y);
     context.stroke();
+
+    // Original Lens corner framing, now attached to the actual agent anchor.
+    context.globalAlpha = opacity * 0.14;
+    context.fillStyle = '#0a1c2b';
+    context.beginPath();
+    context.roundRect(shift.x - 82, shift.y - 65, 164, 129, 12);
+    context.fill();
+    context.globalAlpha = opacity * 0.12;
+    context.strokeStyle = color;
+    context.stroke();
+    context.globalAlpha = opacity * (selected ? 0.9 : 0.5);
+    context.beginPath();
+    context.moveTo(shift.x - 82, shift.y - 43);
+    context.lineTo(shift.x - 82, shift.y - 65);
+    context.lineTo(shift.x - 60, shift.y - 65);
+    context.moveTo(shift.x + 82, shift.y + 43);
+    context.lineTo(shift.x + 82, shift.y + 65);
+    context.lineTo(shift.x + 60, shift.y + 65);
+    context.stroke();
+
     for (let worker = 0; worker < 19; worker += 1) {
       const angle = worker * 2.39996 + Math.sin(frame / 45 + index) * 0.11;
-      const radius = 71 + Math.sqrt(worker) * 10;
+      // A small central clearance exposes the real harness mark in the DOM.
+      const radius = 35 + Math.sqrt(worker) * 12;
       const x = shift.x + Math.cos(angle) * radius;
       const y = shift.y + Math.sin(angle) * radius * 0.77;
       const processing = working && (Math.floor(frame / 6) + worker + index * 3) % 13 < 3;
       if (processing) {
         this.dot(x, y, 20, color, opacity * 0.035);
         this.dot(x, y, 10, color, opacity * 0.065);
+        context.globalAlpha = opacity * (0.55 + 0.45 * Math.sin(frame / 12 - index) ** 2) * 0.45;
+        context.strokeStyle = color;
+        context.lineWidth = 0.6;
+        context.beginPath();
+        context.moveTo(x - 9, y - 3);
+        context.lineTo(x - 9, y - 9);
+        context.lineTo(x - 3, y - 9);
+        context.moveTo(x + 9, y + 3);
+        context.lineTo(x + 9, y + 9);
+        context.lineTo(x + 3, y + 9);
+        context.stroke();
       }
-      this.dot(x, y, processing ? 3.5 : 2, processing ? '#fff5d5' : '#adc8e2', opacity * (processing ? 1 : 0.5));
+      this.dot(x, y, processing ? 4 : 2.4, processing ? '#fff5d5' : '#adc8e2', opacity * (processing ? 1 : 0.62));
     }
     if (!working) return;
     for (let packet = 0; packet < 4; packet += 1) {
-      const progress = (frame * 0.009 + packet * 0.25 + index * 0.17) % 1;
-      const position = between(agent, hub, progress, index % 2 ? 22 : -22);
+      const progress = (frame * 0.014 + packet * 0.25 + index * 0.17) % 1;
+      const position = between(shift, hub, progress, index % 2 ? 22 : -22);
       const alpha = Math.sin(progress * Math.PI) * opacity;
-      this.dot(position.x, position.y, 13, color, alpha * 0.08);
+      this.dot(position.x, position.y, 13, color, alpha * 0.075);
       context.globalAlpha = alpha;
       context.fillStyle = color;
-      context.fillRect(position.x - 3, position.y - 3, 6, 6);
+      context.beginPath();
+      context.roundRect(position.x - 3, position.y - 3, 6, 6, 1);
+      context.fill();
+      context.globalAlpha = alpha * 0.3;
+      context.strokeStyle = color;
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(position.x - 7, position.y + 11);
+      context.lineTo(position.x - 3, position.y + 5);
+      context.stroke();
     }
-    for (let packet = 0; packet < 8; packet += 1) {
+    for (let packet = 0; packet < 16; packet += 1) {
       const start = { x: index % 2 ? 2040 : -120, y: 460 + ((packet * 137 + index * 93) % 610) };
-      const progress = (frame * 0.002 + packet / 8 + index * 0.19) % 1;
+      const progress = (frame * 0.006 + packet / 16 + index * 0.19) % 1;
       const position = between(start, shift, progress, Math.sin(index) * 80);
-      context.globalAlpha = Math.sin(progress * Math.PI) * 0.3 * opacity;
+      context.globalAlpha = Math.sin(progress * Math.PI) * 0.46 * opacity;
       context.fillStyle = index % 2 ? '#8392bd' : '#7bb9c9';
-      context.fillRect(position.x, position.y, progress > 0.8 ? 4 : 9, 2);
+      context.beginPath();
+      context.roundRect(position.x, position.y, progress > 0.8 ? 4 : 9, 3, 1);
+      context.fill();
     }
   }
 
