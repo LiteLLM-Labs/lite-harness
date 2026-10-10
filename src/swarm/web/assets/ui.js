@@ -55,23 +55,44 @@ export function richText(container, text) {
   }
 }
 
-// Collaboration envelopes stream incrementally. Show their public text field,
-// including safely decoded partial JSON strings, rather than the wire format.
-export function publicOutput(value) {
-  const raw = String(value || '');
-  const candidate = raw.trimStart().replace(/^```(?:json)?\s*/i, '');
-  if (!candidate.startsWith('{')) return raw;
+const COLLABORATION_KEYS = ['text', 'contribution', 'result', 'identity', 'workstream', 'messages', 'assignments', 'proposal', 'votes'];
+
+function envelopeText(candidate, partial) {
+  if (!candidate.startsWith('{')) return null;
   try {
-    const parsed = JSON.parse(candidate.replace(/\s*```\s*$/, ''));
-    return typeof parsed.text === 'string' ? parsed.text : '';
+    const parsed = JSON.parse(candidate);
+    if (!parsed || !COLLABORATION_KEYS.some((key) => Object.hasOwn(parsed, key))) return null;
+    for (const value of [parsed.text, parsed.contribution, parsed.result, parsed.proposal?.text]) if (typeof value === 'string' && value) return value;
+    return Array.isArray(parsed.messages) ? parsed.messages.map((message) => typeof message?.text === 'string' ? message.text : '').filter(Boolean).join('\n\n') : '';
   } catch {
-    const match = candidate.match(/"text"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/);
+    if (!partial || !/^\{\s*"(?:text|contribution|result|identity|workstream|messages|assignments|proposal|votes)"\s*:/.test(candidate)) return null;
+    const match = candidate.match(/"(?:text|contribution|result)"\s*:\s*"((?:[^"\\]|\\[\s\S])*)/);
     if (!match) return '';
     let text = match[1];
     // Incomplete unicode escapes must wait for the next chunk.
     text = text.replace(/\\u[0-9a-f]{0,3}$/i, '');
     try { return JSON.parse(`"${text}"`); } catch { return ''; }
   }
+}
+
+// Unwrap only recognizable collaboration envelopes. Surrounding public prose
+// and ordinary JSON/code examples remain text, never executable markup.
+export function publicOutput(value) {
+  const raw = String(value || '');
+  let unwrapped = false;
+  const prose = raw.replace(/```(?:json)?\s*([\s\S]*?)(```|$)/gi, (block, content, closing) => {
+    const text = envelopeText(content.trim(), !closing);
+    if (text === null) return block;
+    unwrapped = true;
+    return text;
+  });
+  if (unwrapped) return prose.trim();
+  return envelopeText(raw.trimStart(), true) ?? raw;
+}
+
+export function publicTranscript(value) {
+  return String(value || '').replace(/(^|\n\n)(Cycle \d+(?: — [^\n]*)?\n)([\s\S]*?)(?=\n\nCycle \d+(?: — [^\n]*)?\n|$)/g,
+    (_, gap, heading, output) => `${gap}${heading}${publicOutput(output)}`);
 }
 
 export function currentWork(agent) {
