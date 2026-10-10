@@ -1,6 +1,6 @@
 import {agentPresence, publicOutput} from './ui.js';
 
-const CHAT_KINDS = new Set(['message', 'contribution', 'direction', 'election', 'proposal', 'vote', 'assignment', 'identity', 'membership', 'coordination']);
+const CHAT_KINDS = new Set(['message', 'contribution', 'direction', 'election', 'proposal', 'vote', 'assignment', 'identity', 'membership', 'coordination', 'workstream']);
 const timestamp = (value) => value == null ? Infinity : Number(new Date(value));
 
 function initialDirection(message, run, firstDirection) {
@@ -32,6 +32,7 @@ export function groupChatEntries(run) {
       from: agent.id, to: 'all', kind: 'contribution', text,
       at: agent.currentOutputAt ?? agent.cycleStartedAt ?? null,
       cycle: agent.cycle, streaming: live, partial: !live, pending: !text.trim(),
+      ...(agent.workstream?.id ? {workstreamId: agent.workstream.id} : {}),
     });
   }
   return messages.map((message, index) => ({message, index})).sort((a, b) => {
