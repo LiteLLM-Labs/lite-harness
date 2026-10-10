@@ -52,7 +52,7 @@
           <div class="composer-toolbar"><button type="button" class="quiet-button team-button" id="team-button" aria-expanded="false" aria-controls="team-editor"><span class="tiny-logo-stack"><img src="/assets/claude-code.svg" alt=""><img src="/assets/codex.svg" alt=""><img src="/assets/opencode.svg" alt=""><img src="/assets/pi.svg" alt=""></span><span id="team-button-label">10 agents</span><span aria-hidden="true">⌄</span></button><div class="composer-submit"><span class="key-hint mono">⌘ ENTER</span><button class="stop-button" id="stop-button" type="button" hidden aria-label="Stop this chat’s swarm">■</button><button class="primary-button" id="run-button" type="submit" aria-label="Send message">↑</button></div></div>
         </form>
         <div class="composer-note"><span id="gateway-label">LiteLLM gateway</span><span>·</span><span id="duration-label">10 minutes of work</span></div>
-        <button class="project-button" id="project-button" type="button" aria-haspopup="dialog"><span class="status-dot"></span><span id="actions-mode">Local actions</span><span class="project-divider">·</span><span id="workspace-label">Loading project…</span><span aria-hidden="true">⌄</span></button>
+        <button class="project-button" id="project-button" type="button" aria-haspopup="dialog"><span class="status-dot"></span><span id="actions-mode">Standard tools</span><span class="project-divider">·</span><span id="workspace-label">Loading project…</span><span aria-hidden="true">⌄</span></button>
       </div>
       <aside class="inspector" id="inspector" aria-label="Subagents and their conversation" hidden>
         <div class="inspector-heading"><div><span class="overline mono">WORKING TOGETHER</span><h2>Subagents <span id="inspector-count">10</span></h2></div><button class="icon-button" id="close-inspector" aria-label="Close subagents">×</button></div>
@@ -81,9 +81,10 @@
     <label class="project-path-label" for="workspace-path">Agents work in this folder</label>
     <div class="project-path-row"><textarea id="workspace-path" rows="3" readonly spellcheck="false"></textarea><button class="quiet-button" id="copy-workspace" type="button" aria-label="Copy project path">Copy ⧉</button></div>
     <p class="project-current" id="project-current"></p>
-    <label class="local-actions-control" for="tools-toggle"><span><strong>Local actions</strong><span>Run commands and edit files in this project</span></span><input id="tools-toggle" type="checkbox" role="switch" aria-describedby="actions-setting-note actions-capability"></label>
+    <label class="local-actions-control" for="tools-toggle"><span><strong>Standard tools</strong><span>Use each harness’s built-in file, command and web tools</span></span><input id="tools-toggle" type="checkbox" role="switch" aria-describedby="actions-setting-note"></label>
     <p id="actions-setting-note" class="dialog-intro"></p>
-    <p id="actions-capability" class="dialog-note" hidden></p>
+    <div id="live-access-control" class="live-access-control" hidden><button id="apply-access" class="primary-button" type="button">Apply to current swarm ↗</button><p id="live-access-note">New work cycles use the updated settings. Calls already in progress keep their previous access.</p></div>
+    <p id="access-feedback" class="access-feedback" role="status" hidden></p>
     <div class="dialog-footer"><span class="dialog-note">Tool activity appears in each agent’s Messages.</span><button class="primary-button" data-close="project-dialog">Done ↗</button></div>
   </dialog>
   <dialog id="election-dialog" aria-labelledby="election-title"><div class="dialog-heading"><div><span class="mono overline">CHOSEN BY THE TEAM</span><h2 id="election-title">Coordinator election.</h2></div><button class="icon-button" data-close="election-dialog" aria-label="Close election">×</button></div><p id="election-summary" class="dialog-intro"></p><div id="election-tally" class="election-tally"></div><div id="election-votes"></div></dialog>
