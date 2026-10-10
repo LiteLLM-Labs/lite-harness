@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaultTeam, defaultModel, validateTeam} from '../src/team.mjs';
+import {defaultTeam, defaultModel, validateTeam, validateAgentCount, DEFAULT_AGENT_COUNT, MAX_AGENTS} from '../src/team.mjs';
 
 test('default organization has ten concurrent peers across all four CLI harnesses', () => {
   const team = defaultTeam();
@@ -30,5 +30,24 @@ test('legacy serialized pipelines and invalid peers are rejected before inferenc
   assert.throws(() => validateTeam([...team, team[0]]), /Duplicate/);
   assert.throws(() => validateTeam(team.map((peer) => ({...peer, model: ''}))), /explicit model/);
   assert.throws(() => validateTeam(team.map((peer) => ({...peer, harness: 'pretend'}))), /Unknown harness/);
-  assert.throws(() => validateTeam([team[0]]), /2–12/);
+  assert.throws(() => validateTeam([team[0]]), /2–100/);
+});
+
+test('team sizes are configurable up to 100 and added neutral peers have unique IDs', () => {
+  assert.equal(DEFAULT_AGENT_COUNT, 10);
+  assert.equal(MAX_AGENTS, 100);
+  for (const count of [2, 24, 100]) {
+    const team = validateTeam(defaultTeam({count}));
+    assert.equal(team.length, count);
+    assert.equal(new Set(team.map(({id}) => id)).size, count);
+    assert.equal(new Set(team.map(({role}) => role)).size, 1);
+  }
+  const initial = defaultTeam({count: 24});
+  const added = defaultTeam({count: 3, existing: initial, harness: 'pi', model: 'gateway-alias'});
+  assert.deepEqual(added.map(({id}) => id), ['peer-25', 'peer-26', 'peer-27']);
+  assert(added.every(({harness, model}) => harness === 'pi' && model === 'gateway-alias'));
+  assert.equal(validateTeam([...initial, ...added]).length, 27);
+  for (const count of [0, 1, 101, 2.5, '20', NaN]) assert.throws(() => validateAgentCount(count), /2–100/);
+  assert.equal(validateAgentCount(1, {minimum: 1}), 1);
+  assert.throws(() => defaultTeam({count: 2, existing: defaultTeam({count: 99})}), /at most 100/);
 });
