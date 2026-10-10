@@ -1,0 +1,16 @@
+{
+  "name": "@litellm-labs/swarm",
+  "version": "0.1.0",
+  "description": "One command. A team of agents. Every conversation in view.",
+  "type": "module",
+  "bin": {"swarm": "bin/swarm.mjs"},
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "start": "node bin/swarm.mjs ui",
+    "demo": "node bin/swarm.mjs demo --open",
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "files": ["bin", "src", "web", "examples", "swarm", "README.md"],
+  "license": "MIT"
+}
