@@ -148,25 +148,33 @@ async function main() {
       else say(`\n  ◌ swarm  ·  ${server.url}\n`);
       if (values.open) openBrowser(server.url);
     }
-    runner.on('event', (event) => {
+    const activity = server?.conversations ?? runner;
+    activity.on('event', (event, activeRun = runner.run) => {
       if (values.json) return say(JSON.stringify(event));
-      const agent = runner.run.agents.find((item) => item.id === event.agentId);
-      const label = agent ? `${agent.name} · ${agent.harness} · ${agent.model}` : 'swarm';
+      const agent = activeRun.agents.find((item) => item.id === event.agentId);
+      const chat = server ? `[${activeRun.id.slice(0, 8)}] ` : '';
+      const label = chat + (agent ? `${agent.name} · ${agent.harness} · ${agent.model}` : 'swarm');
       if (event.type === 'status') say(`  ${agent?.status === 'complete' ? '✓' : '·'} ${label}  ${event.text}`);
       if (event.type === 'tool') say(`  ↳ ${label}  ${event.text}`);
       if (['message', 'handoff', 'result', 'election', 'coordination', 'consensus'].includes(event.type)) {
-        const recipient = runner.run.agents.find((item) => item.id === event.toAgentId);
+        const recipient = activeRun.agents.find((item) => item.id === event.toAgentId);
         say(`\n  ${event.type === 'result' ? 'Answer update · ' : ''}${label}${recipient ? ` → ${recipient.name}` : ''}\n${event.text}\n`);
       }
     });
-    runner.on('delta', (event) => {if (values.json) say(JSON.stringify({type: 'delta', ...event}));});
+    activity.on('delta', (event) => {if (values.json) say(JSON.stringify({type: 'delta', ...event}));});
     if (process.stdin.isTTY) {
       input = createInterface({input: process.stdin, output: process.stdout, terminal: true});
+      input.on('SIGINT', () => void shutdown());
       input.on('line', (line) => {
-        if (line.trim() === '/stop') return runner.stop();
         if (line.trim() === '/quit') return void shutdown();
         if (!line.trim()) return;
-        try {runner.steer(line);} catch (error) {say(error.message);}
+        try {
+          if (line.trim() === '/stop') {
+            if (server) void server.conversations.stop().catch((error) => say(error.message));
+            else runner.stop();
+          } else if (server) server.conversations.steer(line);
+          else runner.steer(line);
+        } catch (error) {say(error.message);}
       });
     }
     if (command !== 'ui') {
