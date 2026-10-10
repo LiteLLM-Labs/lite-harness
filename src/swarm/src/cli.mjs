@@ -29,7 +29,7 @@ const HELP = `
   --tools                         Allow file writes (default: read-only)
   --timeout SECONDS               Whole-swarm limit (default: 600)
   --data-dir DIRECTORY            Saved runs (default: .swarm/runs)
-  --port PORT                     Local view port (default: 4318)
+  --port PORT                     Local view port (default: auto-select)
   --follow-up RUN-ID              Include the previous task and answer
   --env-file FILE                 Read local gateway settings privately
   --json                          Newline-delimited events for scripts
@@ -115,7 +115,7 @@ async function main() {
   }
   options = {...options, task: positionals.join(' '), demo: command === 'demo', parentId: values['follow-up'], toolsEnabled: values.tools ?? options.toolsEnabled ?? false};
   if (values.timeout) options.timeoutSeconds = Number(values.timeout);
-  const port = Number(values.port || 4318);
+  const port = Number(values.port || 0);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0–65535.');
   const release = store.acquire();
   store.recover();
