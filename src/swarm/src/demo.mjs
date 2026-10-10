@@ -38,6 +38,7 @@ export async function runDemoAgent({id, signal, onEvent, phase, cycle = 1, team,
   const coordinator = id === coordinatorId;
   const payload = {
     text,
+    workstream: [{id: 'onboarding', name: 'Onboarding flow'}, {id: 'experience', name: 'Agent experience'}, {id: 'verification', name: 'Review and verification'}][Math.max(0, team.findIndex((peer) => peer.id === id)) % 3],
     messages: [{to: coordinator ? 'all' : coordinatorId || 'all', text: options[(cycle - 1) % options.length]}],
     votes: (board?.proposals || []).slice(-1).map((proposal) => ({proposalId: proposal.id, stance: 'agree', reason: 'This recommendation accounts for my review concern. Simulated vote.'})),
   };
