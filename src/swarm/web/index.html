@@ -12,56 +12,55 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <a class="wordmark" href="/" aria-label="Swarm home"><img src="/assets/swarm.svg" alt="" width="27" height="27">swarm<span class="wordmark-slash">/</span><span class="wordmark-caption">many minds, one shared context</span></a>
-    <div class="topbar-actions">
-      <span class="connection mono" id="connection"><span class="status-dot"></span>connecting</span>
-      <button class="quiet-button" id="history-button" aria-label="Show recent runs">Recent runs <span aria-hidden="true">↗</span></button>
-      <button class="demo-button" id="demo-button">Play demo <span aria-hidden="true">▷</span></button>
-    </div>
-  </header>
-  <main class="workspace">
-    <section class="mission" aria-label="Swarm brain view">
-      <div class="stage" id="stage">
+  <aside class="chat-sidebar" aria-label="Chats">
+    <a class="wordmark" href="/" aria-label="Swarm home"><img src="/assets/swarm.svg" alt="" width="27" height="27">swarm</a>
+    <button class="new-chat-button" id="new-chat-button"><span aria-hidden="true">＋</span> New chat</button>
+    <div class="sidebar-heading">Your chats</div>
+    <nav id="sidebar-chats" class="sidebar-chats" aria-label="Recent chats"><p class="sidebar-empty">Your conversations will appear here.</p></nav>
+    <div class="sidebar-bottom"><button class="quiet-button" id="history-button">All chats ↗</button><span class="connection mono" id="connection"><span class="status-dot"></span>connecting</span></div>
+  </aside>
+  <div class="app-main">
+    <header class="topbar">
+      <div class="chat-heading"><span class="chat-heading-icon" aria-hidden="true">◌</span><span id="chat-title">New chat</span><span id="demo-label" class="demo-label" hidden>DEMO · SIMULATED</span></div>
+      <div class="topbar-actions"><div class="view-switch" role="group" aria-label="Workspace view"><button id="chat-view-button" aria-pressed="true">Chat</button><button id="brain-view-button" aria-pressed="false">Brain</button></div><button class="subagents-toggle" id="agents-view-button" aria-expanded="false" aria-controls="inspector">Subagents <span id="agents-count">10</span></button><button class="demo-button" id="demo-button">Demo <span aria-hidden="true">▷</span></button></div>
+    </header>
+    <main class="workspace" id="workspace">
+      <section class="chat-scroll" id="chat-scroll" aria-label="Conversation" tabindex="0">
+        <div class="chat-content">
+          <div id="chat-welcome" class="chat-welcome"><img src="/assets/swarm.svg" alt="" width="43" height="43"><h1>What are we working on?</h1><p>One conversation. A team that finds its own way.</p><button class="welcome-demo" id="empty-demo-button">Watch a swarm work <span aria-hidden="true">↗</span></button></div>
+          <div class="chat-user-message" id="chat-user-message" hidden><span class="chat-author">You</span><div id="chat-task"></div></div>
+          <button class="agent-overview" id="agent-overview" hidden><span class="overview-logos" id="overview-logos"></span><span><strong id="overview-title">Your swarm</strong><span id="overview-detail">View their work</span></span><span aria-hidden="true">↗</span></button>
+          <div class="human-feed" id="human-feed" aria-label="Answers from the swarm"></div>
+          <div class="chat-run-status" id="chat-run-status" hidden></div>
+          <button class="continue-chat-button" id="continue-chat-button" hidden>Continue this conversation <span aria-hidden="true">↗</span></button>
+        </div>
+      </section>
+      <section class="stage brain-view" id="stage" aria-label="Spatial swarm brain" hidden>
         <canvas id="constellation" aria-hidden="true"></canvas>
-        <div class="hero">
-          <div class="eyebrow"><span class="status-dot" id="run-dot"></span><span id="run-state">INDEPENDENT MINDS. SHARED MOMENTUM.</span><span id="demo-label" class="demo-label" hidden>DEMO · SIMULATED</span></div>
-          <h1 id="headline">One task. <span>Ten perspectives.</span></h1>
-          <p id="hero-caption">The team elects its coordinator. Every agent keeps working.</p>
-        </div>
-        <div class="brain-toolbar">
-          <div><span class="mono overline">THE BRAIN</span><span id="progress-text">Loading your team…</span></div>
-          <button class="coordination-hub" id="election-button" aria-label="View coordinator election"><img src="/assets/swarm.svg" alt=""><span id="coordinator-label">Coordinator elected by the team</span><span aria-hidden="true">↗</span></button>
-        </div>
-        <div class="graph" id="graph" aria-label="Agent work cards"></div>
-        <div class="stage-footer"><span id="stage-hint">Open any agent to see its full work and conversation.</span><span class="mono" id="elapsed">READY WHEN YOU ARE</span></div>
-      </div>
+        <div class="hero"><div class="eyebrow"><span class="status-dot" id="run-dot"></span><span id="run-state">INDEPENDENT MINDS. SHARED MOMENTUM.</span></div><h1 id="headline">Many minds.<br><span>One shared direction.</span></h1><p id="hero-caption">Give the swarm a direction. Watch the work take shape.</p></div>
+        <div class="brain-toolbar"><span class="mono overline">THE LIVE CONSTELLATION</span><span id="progress-text">Loading your team…</span></div>
+        <button class="coordination-hub" id="election-button" aria-label="View coordinator election"><span class="hub-symbol"><img src="/assets/swarm.svg" alt=""></span><span class="hub-title">Shared context</span><span id="coordinator-label">Coordinator chosen by the team</span></button>
+        <div class="graph" id="graph" aria-label="Agent work nodes"></div>
+        <div class="stage-footer"><span id="stage-hint">Open an agent to see its full work.</span><span class="mono" id="elapsed">READY WHEN YOU ARE</span></div>
+      </section>
       <div class="composer-wrap">
         <form class="task-composer" id="run-form">
-          <label class="sr-only" for="task-input">What should the swarm work on?</label>
-          <textarea id="task-input" rows="1" placeholder="Give the swarm something worth working on…" required maxlength="16000"></textarea>
-          <div class="composer-toolbar">
-            <button type="button" class="quiet-button team-button" id="team-button" aria-expanded="false" aria-controls="team-editor"><span class="tiny-logo-stack"><img src="/assets/claude-code.svg" alt=""><img src="/assets/codex.svg" alt=""><img src="/assets/opencode.svg" alt=""><img src="/assets/pi.svg" alt=""></span><span id="team-button-label">Configure swarm</span><span aria-hidden="true">⌄</span></button>
-            <div class="composer-submit"><span class="key-hint mono">⌘ ENTER</span><button class="primary-button" id="run-button" type="submit">Run swarm <span aria-hidden="true">↗</span></button><button class="stop-button" id="stop-button" type="button" hidden><span aria-hidden="true">■</span> Stop</button></div>
-          </div>
+          <label class="sr-only" for="task-input">Message your swarm</label><textarea id="task-input" rows="2" placeholder="Give your swarm something to work on…" required maxlength="16000"></textarea>
+          <div class="draft-context" id="draft-context" hidden><span id="draft-context-text"></span><button type="button" id="return-chat-button">Return to chat ↗</button></div>
+          <div class="composer-toolbar"><button type="button" class="quiet-button team-button" id="team-button" aria-expanded="false" aria-controls="team-editor"><span class="tiny-logo-stack"><img src="/assets/claude-code.svg" alt=""><img src="/assets/codex.svg" alt=""><img src="/assets/opencode.svg" alt=""><img src="/assets/pi.svg" alt=""></span><span id="team-button-label">10 agents</span><span aria-hidden="true">⌄</span></button><div class="composer-submit"><span class="key-hint mono">⌘ ENTER</span><button class="stop-button" id="stop-button" type="button" hidden aria-label="Stop this chat’s swarm">■</button><button class="primary-button" id="run-button" type="submit" aria-label="Send message">↑</button></div></div>
         </form>
-        <div class="composer-note"><span class="status-dot"></span><span id="gateway-label">LiteLLM gateway</span><span>·</span><span id="duration-label">10 minutes of work</span><span>·</span><span>your local workspace</span></div>
+        <div class="composer-note"><span id="gateway-label">LiteLLM gateway</span><span>·</span><span id="duration-label">10 minutes of work</span><span>·</span><span>your local workspace</span></div>
       </div>
-    </section>
-
-    <aside class="right-panel" aria-label="Results and swarm conversation">
-      <section class="human-section" aria-labelledby="human-title">
-        <div class="panel-heading"><div><span class="mono overline">THE USEFUL PART</span><h2 id="human-title">For you.</h2></div><span class="stream-label mono" id="result-count">0 UPDATES</span></div>
-        <div class="human-feed feed-scroll" id="human-feed" tabindex="0" aria-label="Continuous result feed"><div class="empty-results"><span class="small-orbit" aria-hidden="true">✦</span><h3>Useful work, as it emerges.</h3><p>The elected coordinator shares results here while the whole team keeps working.</p></div></div>
-      </section>
-      <section class="conversation-section" aria-labelledby="conversation-title">
-        <div class="conversation-heading"><h2 id="conversation-title">Inside the swarm</h2><span class="stream-label mono" id="stream-label"><span class="status-dot"></span>STANDING BY</span></div>
-        <div class="feed-controls"><label class="sr-only" for="agent-filter">Filter conversation by agent</label><select id="agent-filter"><option value="">All agents</option></select><span class="mono" id="event-count">0 EVENTS</span></div>
-        <div id="conversation-panel" class="feed-scroll" tabindex="0" aria-label="Live swarm conversation"><div id="feed" class="feed"><div class="empty-feed"><p>Messages, votes, tool calls and public contributions appear here.</p><button class="text-button" id="empty-demo-button">See the swarm in motion <span aria-hidden="true">↗</span></button></div></div></div>
-      </section>
-      <form class="steering-form" id="steering-form"><label class="sr-only" for="steering-input">Send guidance to the swarm</label><div class="steering-input-wrap"><textarea rows="1" id="steering-input" placeholder="Add context or redirect the work…" maxlength="8000" disabled></textarea><button type="submit" id="steering-button" aria-label="Send guidance" disabled>↑</button></div><p id="steering-note">Your guidance joins the shared context.</p></form>
-    </aside>
-  </main>
+      <aside class="inspector" id="inspector" aria-label="Subagents and their conversation" hidden>
+        <div class="inspector-heading"><div><span class="overline mono">WORKING TOGETHER</span><h2>Subagents <span id="inspector-count">10</span></h2></div><button class="icon-button" id="close-inspector" aria-label="Close subagents">×</button></div>
+        <div class="inspector-tabs" role="group" aria-label="Subagent views"><button id="agent-list-tab" aria-pressed="true">Their work</button><button id="agent-chat-tab" aria-pressed="false">Conversation</button></div>
+        <div id="agent-list" class="agent-list"></div>
+        <section class="conversation-section" id="agent-conversation" hidden><div class="conversation-heading"><h2>Inside the swarm</h2><span class="stream-label mono" id="stream-label"><span class="status-dot"></span>STANDING BY</span></div><div class="feed-controls"><label class="sr-only" for="agent-filter">Filter conversation by agent</label><select id="agent-filter"><option value="">All agents</option></select><span class="mono" id="event-count">0 EVENTS</span></div><div id="conversation-panel" class="feed-scroll" tabindex="0" aria-label="Live swarm conversation"><div id="feed" class="feed"></div></div></section>
+        <form class="steering-form" id="steering-form"><label class="sr-only" for="steering-input">Send guidance to the swarm</label><div class="steering-input-wrap"><textarea rows="1" id="steering-input" placeholder="Guide the team…" maxlength="8000" disabled></textarea><button type="submit" id="steering-button" aria-label="Send guidance" disabled>↑</button></div><p id="steering-note">Your guidance joins the shared context.</p></form>
+      </aside>
+      <span id="result-count" class="sr-only">0 updates</span>
+    </main>
+  </div>
 
   <dialog class="agent-dialog" id="agent-dialog" aria-labelledby="agent-dialog-title">
     <div class="dialog-heading"><div id="agent-dialog-identity"></div><button class="icon-button" data-close="agent-dialog" aria-label="Close agent details">×</button></div>
