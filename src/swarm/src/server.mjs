@@ -6,6 +6,8 @@ import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {defaultModel, defaultTeam, validateTeam, HARNESSES, MAX_AGENTS} from './team.mjs';
 import {availableHarnesses} from './adapters.mjs';
 import {Conversations} from './conversations.mjs';
+import {commandCapability} from './workspace-command.mjs';
+import {getRunChanges} from './workspace-changes.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
 const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2'};
@@ -24,8 +26,10 @@ async function readJSON(request) {
   return body;
 }
 
-export async function startServer({runner, store, port = 4318, team, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
+export async function startServer({runner, store, port = 4318, team, toolsEnabled = true, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
   const initialTeam = validateTeam(team ?? defaultTeam());
+  if (typeof toolsEnabled !== 'boolean') throw new Error('toolsEnabled must be a boolean.');
+  const commands = commandCapability();
   const clients = new Set();
   const conversations = new Conversations({runner, store});
   const found = suppliedCapabilities ?? await availableHarnesses();
@@ -33,7 +37,7 @@ export async function startServer({runner, store, port = 4318, team, capabilitie
   const state = () => ({
     run: conversations.run,
     runs: conversations.summaries(),
-    defaults: {team: initialTeam, maxAgents: MAX_AGENTS, harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
+    defaults: {team: initialTeam, maxAgents: MAX_AGENTS, toolsEnabled, workspace: runner.workspace, localActions: {commands: commands.available, reason: commands.reason, network: false}, harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
     capabilities,
   });
   const broadcast = () => {
@@ -60,7 +64,8 @@ export async function startServer({runner, store, port = 4318, team, capabilitie
       if (!hosts.includes(request.headers.host) || request.headers['sec-fetch-site'] === 'cross-site') return json(403, {error: 'Local requests only.'});
       const origin = request.headers.origin;
       if (origin && origin !== `http://${request.headers.host}`) return json(403, {error: 'Origin does not match this workspace.'});
-      const path = new URL(request.url, 'http://localhost').pathname;
+      const url = new URL(request.url, 'http://localhost');
+      const path = url.pathname;
       if (path === '/session.js' && request.method === 'GET') {
         if (request.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(request.headers['sec-fetch-site'])) return json(403, {error: 'Open this workspace directly.'});
         response.writeHead(200, {'Content-Type': 'text/javascript; charset=utf-8'});
@@ -73,6 +78,18 @@ export async function startServer({runner, store, port = 4318, team, capabilitie
         if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return json(401, {error: 'Refresh the local view to reconnect.'});
       }
       if (request.method === 'GET' && path === '/api/state') return json(200, state());
+      if (request.method === 'GET' && path === '/api/changes') {
+        const id = url.searchParams.get('runId') || conversations.run?.id;
+        const live = conversations.getRunner(id);
+        const run = live?.run ?? (id ? store.get(id) : null);
+        if (!run) return json(404, {error: 'Run not found.'});
+        const pending = run.changes?.status === 'preparing' || (run.status !== 'running' && Boolean(live?.busy));
+        if (run.demo || pending || ['failed', 'unavailable'].includes(run.changes?.status)) {
+          return json(200, {workspace: run.workspace, runId: run.id, available: false, frozen: false, files: [], pending,
+            reason: run.demo ? 'This is a simulated demo. It does not change local files.' : pending ? 'Preparing the workspace change snapshot.' : run.changes.reason || 'Changes are unavailable for this run.'});
+        }
+        return json(200, await getRunChanges({workspace: run.workspace, runId: run.id, directory: store.directory, finished: run.status !== 'running'}));
+      }
       if (request.method === 'GET' && path === '/api/events') {
         response.writeHead(200, {'Content-Type': 'text/event-stream', Connection: 'keep-alive', 'Cache-Control': 'no-cache'});
         response.write(`event: state\ndata: ${JSON.stringify(state())}\n\n`);
@@ -88,7 +105,7 @@ export async function startServer({runner, store, port = 4318, team, capabilitie
       if (request.method === 'POST') {
         const body = await readJSON(request);
         if (path === '/api/run') {
-          return json(201, conversations.start(body));
+          return json(201, conversations.start({...body, toolsEnabled: body.toolsEnabled ?? toolsEnabled}));
         }
         if (path === '/api/select') return json(200, conversations.select(body.id));
         if (path === '/api/agents') return json(200, conversations.addAgents(body, body.runId));
