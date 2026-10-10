@@ -135,7 +135,7 @@ cd src/swarm
 ```
 
 The demo is simulated and needs no API key. Real runs use your configured model
-credentials. See [Swarm setup and usage](src/swarm/README.md).
+credentials. Follow task-specific workstreams, pause the conversation to review incoming work, and inspect file diffs in Changes. Real runs can edit the selected project and run local verification commands; `--read-only` opts out. See [Swarm setup and usage](src/swarm/README.md).
 
 ![Agent group chat in a simulated demo](docs/swarm/group-chat.jpg)
 
