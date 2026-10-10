@@ -12,6 +12,6 @@
     "check": "node scripts/check.mjs",
     "test": "node --test test/*.test.mjs"
   },
-  "files": ["bin", "src", "web", "examples", "swarm", "scripts/setup-harnesses.mjs", "README.md"],
+  "files": ["bin", "src", "web/index.html", "web/app.js", "web/style.css", "web/assets", "examples", "swarm", "scripts/setup-harnesses.mjs", "README.md"],
   "license": "MIT"
 }
