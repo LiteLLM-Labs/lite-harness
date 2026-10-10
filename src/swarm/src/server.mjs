@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {extname, resolve, sep} from 'node:path';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
-import {defaultModel, defaultTeam, HARNESSES} from './team.mjs';
+import {defaultModel, defaultTeam, validateTeam, HARNESSES, MAX_AGENTS} from './team.mjs';
 import {availableHarnesses} from './adapters.mjs';
 import {Conversations} from './conversations.mjs';
 
@@ -16,7 +16,7 @@ async function readJSON(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 64000) throw new Error('Request is too large.');
+    if (size > 2 * 1024 * 1024) throw new Error('Request is too large.');
     chunks.push(chunk);
   }
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
@@ -24,7 +24,8 @@ async function readJSON(request) {
   return body;
 }
 
-export async function startServer({runner, store, port = 4318, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
+export async function startServer({runner, store, port = 4318, team, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
+  const initialTeam = validateTeam(team ?? defaultTeam());
   const clients = new Set();
   const conversations = new Conversations({runner, store});
   const found = suppliedCapabilities ?? await availableHarnesses();
@@ -32,7 +33,7 @@ export async function startServer({runner, store, port = 4318, capabilities: sup
   const state = () => ({
     run: conversations.run,
     runs: conversations.summaries(),
-    defaults: {team: defaultTeam(), harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
+    defaults: {team: initialTeam, maxAgents: MAX_AGENTS, harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
     capabilities,
   });
   const broadcast = () => {
@@ -80,7 +81,8 @@ export async function startServer({runner, store, port = 4318, capabilities: sup
         return;
       }
       if (request.method === 'GET' && path.startsWith('/api/runs/')) {
-        const run = store.get(path.slice('/api/runs/'.length));
+        const id = path.slice('/api/runs/'.length);
+        const run = conversations.getRunner(id)?.run ?? store.get(id);
         return json(run ? 200 : 404, run || {error: 'Run not found.'});
       }
       if (request.method === 'POST') {
@@ -89,6 +91,7 @@ export async function startServer({runner, store, port = 4318, capabilities: sup
           return json(201, conversations.start(body));
         }
         if (path === '/api/select') return json(200, conversations.select(body.id));
+        if (path === '/api/agents') return json(200, conversations.addAgents(body, body.runId));
         if (path === '/api/message') return json(200, conversations.steer(body.text, body.runId));
         if (path === '/api/stop') return json(200, await conversations.stop(body.runId));
       }
