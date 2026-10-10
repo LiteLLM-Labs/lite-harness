@@ -119,6 +119,23 @@ for await (const message of query({
 
 ## Docs
 
+### Swarm CLI
+
+Run a small team across Codex, Claude Code, and LiteLLM, with a local constellation
+view of agent progress, tool activity, handoffs, and public conversations. Requires
+Node 22+, with no npm dependencies or build step:
+
+```sh
+cd src/swarm
+./swarm demo --open
+./swarm run "Review this project" --harness claude --cwd ../.. --open
+```
+
+The demo is simulated and needs no API key. Real runs use your configured model
+credentials. See [Swarm setup and usage](src/swarm/README.md).
+
+![Swarm live view showing a simulated multi-harness team](docs/swarm/demo-active.jpg)
+
 [SDK](src/sdk/README.md)
 
 ## License
