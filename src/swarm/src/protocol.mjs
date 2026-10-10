@@ -76,7 +76,11 @@ export function parseWorkReply(text, agentIds) {
 }
 
 export function countConsensus(proposal, agentIds) {
-  const eligible = agentIds.filter((id) => id !== proposal.from);
+  // Membership freezes when a proposal is created. Joining peers cannot change
+  // its threshold or cast retroactive votes; older saved proposals use the roster.
+  const electorate = proposal.electorate === undefined ? agentIds : proposal.electorate;
+  const eligible = [...new Set((Array.isArray(electorate) ? electorate : [])
+    .filter((id) => typeof id === 'string' && id.trim() && id === id.trim() && id !== proposal.from))];
   const votes = [...new Map(proposal.votes.filter((vote) => eligible.includes(vote.voterId) && ['agree', 'disagree', 'abstain'].includes(vote.stance)).map((vote) => [vote.voterId, vote])).values()];
   const count = (stance) => votes.filter((vote) => vote.stance === stance).length;
   const threshold = Math.floor(eligible.length / 2) + 1;
