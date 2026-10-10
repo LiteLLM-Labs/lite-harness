@@ -30,7 +30,7 @@ Additional Chromium verification:
 - Final mobile layout inspected at 390×844: no horizontal overflow, all ten subagents accessible in the scrolling panel, chat composer remains accessible. Brain expands into a vertically scrollable spatial view with every peer and output capsule visible.
 - Source syntax checks pass after the final edits. The shell's npm invocation encountered a broken Homebrew Node dylib; the same repository check passed with the bundled Node runtime.
 
-Final screenshots: `chat-new.jpg`, `chat-new-active.jpg`, `chat-subagents.jpg`, `brain-spatial.jpg`, `mobile.jpg`, `subagents-mobile.jpg`, `agent-detail-mobile.jpg`, `brain-mobile.jpg`. `before-spatial.jpg` preserves the preceding grid layout as the before image. Demo captures remain visibly labelled simulated.
+Final screenshots: `chat-new.jpg`, `chat-new-active.jpg`, `chat-subagents.jpg`, `brain-spatial.jpg`, `chat-mobile.jpg`, `subagents-mobile.jpg`, `agent-detail-mobile.jpg`, `brain-mobile.jpg`. `before-spatial.jpg` preserves the preceding grid layout as the before image. Demo captures remain visibly labelled simulated.
 
 ## Status-first Brain follow-up
 
@@ -39,4 +39,24 @@ Final screenshots: `chat-new.jpg`, `chat-new-active.jpg`, `chat-subagents.jpg`, 
 - Direct shared-helper checks covered mixed running/working/queued/complete/failed/stopped peers (2 active / 4 inactive), an inactive leader, absent run, coordinator replacement, and complete/failed/stopped/interrupted runs with stale running peers. All passed. Independent review found count/class/canvas consistency.
 - Mobile inspection at 390×844 found no horizontal overflow (document width 390). Labels and leader badge remain readable in the vertical constellation.
 - All JavaScript source syntax checks passed. No backend or public-server changes were made for this follow-up.
-- Captures: `brain-spatial.jpg`, `brain-inactive.jpg`, `brain-mobile.jpg`. All captures are the labelled simulated demo, with no invented mixed-state screenshot.
+- Captures: `brain-status-active.jpg`, `brain-status-finished.jpg`, `brain-status-mobile.jpg`. All captures are the labelled simulated demo, with no invented mixed-state screenshot.
+
+## Adjustable team size and live additions
+
+- New-chat team settings accept 2–100 peers (the upper bound comes from server defaults), with number/Apply/Done controls and −1/+1/+5/+10 shortcuts. Increasing a customized team from10 to20 preserved the existing custom model. Invalid101 was rejected without changing the10 configured rows. Reset from a stopped51-peer chat restored the default10-row setup.
+- Browser-created configured20-agent simulated run elected peer-08. Adding5 through Brain’s Add agents dialog produced25 active nodes and new running peers21–25. The run ID, coordinator ID and exact deadline timestamp were unchanged. Captures: `brain-20-agents.jpg`, `add-agents-dialog.jpg`, `brain-25-agents.jpg`.
+- A50-agent simulated run was checked at390×844. All50 Brain nodes fit their expanded stage without overlap/clipping, and document width equalled viewport width390. The last peer opened from both Brain and Subagents, with its actual simulated contribution visible. Capture: `brain-50-mobile.jpg`.
+- Adding one peer through Subagents with explicit Swarm native / openai/gpt-6-astra produced peer-51 with the requested harness/model and running status. Its output was visible in the detail dialog; capture `added-agent-mobile.jpg`. The isolated simulation was stopped afterward.
+- Draft geometry checks covered20/50/100 peers at widths262–1466, unique IDs and preserved configuration. Browser100-peer mobile check confirmed the last peer was selectable, no horizontal overflow, and canvas backing height capped4096 while DOM labels stayed sharp. Desktop50 and live25 had zero measured overlaps/clipped nodes.
+- All JavaScript syntax checks passed; independent review’s Reset and canvas-size findings were fixed. Only isolated QA port4332 was restarted; public4328 was untouched. All QA runs were explicitly simulated and made no inference calls.
+
+## Group conversation and uninterrupted continuation
+
+- Chat now shows canonical peer messages chronologically: contributions, directed messages, assignments, elections, votes, introductions, membership and user guidance. Authors, harness/model marks, recipients, current leader and activity are visible. Results is separate; Brain retains its leader/activity field.
+- Actual simulated captures: `group-chat-desktop.jpg`, `group-chat-mobile.jpg`, `group-results-desktop.jpg`, and `continue-chat-mobile.jpg`. Marks were decoded and visibly inspected. Mobile390px had no horizontal overflow. Clicking Peer09 opened its full public output; Escape closed details.
+- Guidance appeared as a You message without duplicating the initial task. Results displayed10 answer cards with Group Chat hidden. Live public prose appeared as Writing; raw collaboration envelope fields were not exposed.
+- A live reading-position check retained the exact committed message DOM node with0px vertical shift while new messages arrived (338 rows at measurement). Keyed reconciliation keeps unchanged author/logo nodes mounted.
+- Deadline-race browser regression: delayed an outgoing A message, stopped A on the QA server, and navigated to existing B. The409 created an explicit follow-up of A with its captured text,10-peer team,600-second budget and file-write setting. Both UI and server selection remained B.
+- Normal Send from the stopped main composer continued its exact parent. The terminal Subagents composer also continued its parent and cleared sent text. No Continue-button prerequisite remains. New chat during delayed409 preserved its draft; subsequent Send omitted parentId and used the neutral default team. After stop cleanup settled, input and Send were enabled.
+- Continuation QA recorded original normal UI payloads, then added demo:true at the browser transport boundary before forwarding. This exercised real selection/parent handling without inference calls. Screenshots contain actual labelled simulated runs, not injected conversation records. QA simulations were stopped; public4328 and63529 were untouched.
+- All source syntax checks and13 chat-feed regressions passed. Cases cover canonical/event deduplication, long and immediate task/guidance distinctions, recipients, partial JSON, retries, terminal output, truthful stream timestamps, and500 stored+100 pending entries. Independent review found no remaining source blocker.
