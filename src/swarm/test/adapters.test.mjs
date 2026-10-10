@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { availableHarnesses, buildCliCommand, executeWorkspaceTool, gatewayUrl, parseSse, runAgent } from '../src/adapters.mjs';
+import { prepareHarnessProfile } from '../src/harness-profiles.mjs';
 
 async function workspace(t) {
   const folder = await mkdtemp(join(tmpdir(), 'swarm-adapter-test-'));
@@ -114,6 +115,7 @@ test('CLI arguments keep native permissions and exclude bypass flags', () => {
   const codex = buildCliCommand({ harness: 'codex', cwd: '/tmp/project', toolsEnabled: true, model: 'test-model' });
   assert(codex.args.includes('workspace-write'));
   assert(codex.args.includes('--ignore-user-config'));
+  for (const feature of ['plugins', 'apps', 'hooks', 'skill_mcp_dependency_install']) assert(codex.args.includes(feature));
   assert(!codex.args.some(arg => arg.includes('bypass')));
   const claude = buildCliCommand({ harness: 'claude', cwd: '/tmp/project', toolsEnabled: false });
   assert(claude.args.includes('--restricted'));
@@ -179,13 +181,25 @@ const text = JSON.stringify({anthropic: Boolean(process.env.ANTHROPIC_API_KEY), 
 if (process.argv.includes('exec')) {
   process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',id:'answer',text}})+'\\n');
   process.stdout.write(JSON.stringify({type:'turn.completed'})+'\\n');
+} else if (process.argv.includes('--mode')) {
+  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text}]}}));
+  console.log(JSON.stringify({type:'agent_end'}));
+} else if (process.argv.includes('run')) {
+  console.log(JSON.stringify({type:'text',part:{id:'answer',text}}));
+  console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}}));
 } else process.stdout.write(JSON.stringify({type:'result',result:text})+'\\n');
 `);
-  const env = { SWARM_CLAUDE_BIN: binary, SWARM_CODEX_BIN: binary, ANTHROPIC_API_KEY: 'anthropic-test-secret', OPENAI_API_KEY: 'openai-test-secret', LITELLM_API_KEY: 'gateway-test-secret' };
+  const env = { SWARM_CLAUDE_BIN: binary, SWARM_CODEX_BIN: binary, SWARM_PI_BIN: binary, SWARM_OPENCODE_BIN: binary, ANTHROPIC_API_KEY: 'anthropic-test-secret', OPENAI_API_KEY: 'openai-test-secret', LITELLM_API_KEY: 'gateway-test-secret' };
   const claude = await runAgent({ harness: 'claude', cwd, prompt: 'hello', env });
   const codex = await runAgent({ harness: 'codex', cwd, prompt: 'hello', env });
+  const codexAccount = await runAgent({ harness: 'codex', cwd, prompt: 'hello', env: { ...env, LITELLM_API_KEY: '' } });
   assert.deepEqual(JSON.parse(claude.text), { anthropic: true, openai: false, litellm: false });
-  assert.deepEqual(JSON.parse(codex.text), { anthropic: false, openai: true, litellm: false });
+  assert.deepEqual(JSON.parse(codex.text), { anthropic: false, openai: false, litellm: true });
+  assert.deepEqual(JSON.parse(codexAccount.text), { anthropic: false, openai: true, litellm: false });
+  for (const harness of ['pi', 'opencode']) {
+    const result = await runAgent({ harness, cwd, prompt: 'hello', env });
+    assert.deepEqual(JSON.parse(result.text), { anthropic: false, openai: false, litellm: true });
+  }
 });
 
 test('timeout and caller cancellation stop a CLI without reporting completion', async t => {
@@ -215,7 +229,145 @@ setInterval(() => {}, 1000);
   assert.throws(() => process.kill(descendant, 0), { code: 'ESRCH' });
 });
 
+test('successful CLI completion also stops background descendants before profile cleanup', { skip: process.platform === 'win32' }, async t => {
+  const cwd = await workspace(t);
+  const binary = await fakeCli(t, cwd, `
+import {spawn} from 'node:child_process';
+import {writeFileSync} from 'node:fs';
+const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
+writeFileSync('background.pid',String(child.pid));
+console.log(JSON.stringify({type:'result',result:'Finished'}));
+child.unref();
+process.exit(0);
+`);
+  const result = await runAgent({ harness: 'claude', cwd, prompt: 'hello', env: { SWARM_CLAUDE_BIN: binary } });
+  assert.equal(result.text, 'Finished');
+  const background = Number(await readFile(join(cwd, 'background.pid'), 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.throws(() => process.kill(background, 0), { code: 'ESRCH' });
+});
+
 test('discovery checks executable availability without treating gateway env as verified access', async () => {
-  const result = await availableHarnesses({ PATH: '', SWARM_CLAUDE_BIN: process.execPath, LITELLM_API_KEY: 'unverified' });
-  assert.deepEqual(result, { native: { available: true, configured: true }, codex: { available: false }, claude: { available: true } });
+  const result = await availableHarnesses({ PATH: '', SWARM_CLAUDE_BIN: process.execPath, SWARM_PI_BIN: '/missing/swarm-pi', LITELLM_API_KEY: 'unverified' });
+  assert.deepEqual(result, { native: { available: true, configured: true }, codex: { available: false }, claude: { available: true }, pi: { available: false, configured: true }, opencode: { available: false, configured: true } });
+});
+
+test('workspace tools protect private configuration but allow example environment files', async t => {
+  const cwd = await workspace(t);
+  for (const name of ['.env', '.env.local', '.env.example', '.env.sample']) await writeFile(join(cwd, name), 'configuration');
+  for (const name of ['.ssh', '.aws', '.codex', '.agents']) await mkdir(join(cwd, name));
+  for (const path of ['.env', '.env.local', '.ENV', '.ENV.LOCAL', '.ssh/id_rsa', '.aws/credentials', '.codex/config.toml', '.agents/config']) {
+    await assert.rejects(executeWorkspaceTool(cwd, 'read_file', { path }), /protected/);
+    await assert.rejects(executeWorkspaceTool(cwd, 'write_file', { path, content: 'replace' }), /protected/);
+  }
+  const entries = JSON.parse(await executeWorkspaceTool(cwd, 'list_files', { path: '.' })).entries;
+  assert.deepEqual(entries.map(entry => entry.name), ['.env.example', '.env.sample']);
+  assert.equal(await executeWorkspaceTool(cwd, 'read_file', { path: '.env.example' }), 'configuration');
+});
+
+test('Pi and OpenCode disable ambient tools and use only the isolated gateway profile', async t => {
+  const cwd = await workspace(t);
+  const env = { LITELLM_API_KEY: 'gateway-private-test-key' };
+  const pi = buildCliCommand({ harness: 'pi', cwd, model: 'openai/gpt-6-astra', env });
+  for (const option of ['--no-mcp', '--no-builtin-tools', '--no-extensions', '--no-context-files', '--no-session']) assert(pi.args.includes(option));
+  assert(pi.args.includes('list_files,read_file'));
+  const piProfile = await prepareHarnessProfile({ harness: 'pi', cwd, model: 'openai/gpt-6-astra', env, baseUrl: 'https://example.com/v1' });
+  t.after(piProfile.cleanup);
+  const modelsText = await readFile(join(piProfile.environment.PI_CODING_AGENT_DIR, 'models.json'), 'utf8');
+  assert(!modelsText.includes(env.LITELLM_API_KEY));
+  assert.equal(JSON.parse(modelsText).providers.swarm.apiKey, '${LITELLM_API_KEY}');
+  assert.equal(piProfile.environment.SWARM_WORKSPACE_WRITE, '0');
+  const profile = await prepareHarnessProfile({ harness: 'opencode', cwd, model: 'openai/gpt-6-astra', env, baseUrl: 'https://example.com/v1' });
+  t.after(profile.cleanup);
+  assert.equal(profile.environment.OPENCODE_DISABLE_PROJECT_CONFIG, 'true');
+  const config = JSON.parse(profile.environment.OPENCODE_CONFIG_CONTENT);
+  assert(!profile.environment.OPENCODE_CONFIG_CONTENT.includes(env.LITELLM_API_KEY));
+  assert.deepEqual(config.permission, { '*': 'deny', 'workspace_*': 'allow' });
+  assert.deepEqual(config.agent.swarm.tools, { '*': false, 'workspace_*': true });
+  assert.equal(config.mcp.workspace.environment.LITELLM_API_KEY, '');
+  assert.equal(config.mcp.workspace.command.at(-1), 'read');
+});
+
+test('Codex gateway routing uses a validated Responses provider, scoped credentials and isolated config', async t => {
+  const cwd = await workspace(t);
+  const env = { LITELLM_API_KEY: 'gateway-private-test-key', LITELLM_BASE_URL: 'https://example.com/v1/' };
+  const command = buildCliCommand({ harness: 'codex', cwd, model: 'gpt-6.1-sol', env });
+  assert(command.args.includes('model_provider="swarm"'));
+  assert(command.args.includes('model_providers.swarm.base_url="https://example.com/v1"'));
+  assert(command.args.includes('model_providers.swarm.env_key="LITELLM_API_KEY"'));
+  assert(command.args.includes('model_providers.swarm.wire_api="responses"'));
+  assert(command.args.includes('openai/gpt-6.1-sol'));
+  assert(!JSON.stringify(command).includes(env.LITELLM_API_KEY));
+  assert.throws(() => buildCliCommand({ harness: 'codex', cwd, env: { ...env, LITELLM_BASE_URL: 'http://untrusted.example' } }), /HTTPS/);
+  const profile = await prepareHarnessProfile({ harness: 'codex', cwd, env });
+  assert.notEqual(profile.environment.CODEX_HOME, process.env.CODEX_HOME);
+  await profile.cleanup();
+  await assert.rejects(stat(profile.environment.CODEX_HOME), { code: 'ENOENT' });
+});
+
+test('Pi emits public streaming text, remembers tool paths and uses actual model identity', async t => {
+  const cwd = await workspace(t);
+  const binary = await fakeCli(t, cwd, `
+process.stdin.resume();
+process.stdin.on('end', () => {
+ for (const event of [
+ {type:'agent_start'},
+ {type:'message_start',message:{role:'assistant',model:'actual-model'}},
+ {type:'message_update',assistantMessageEvent:{type:'thinking_delta',delta:'private reasoning'}},
+ {type:'tool_execution_start',toolCallId:'tool1',toolName:'read_file',args:{path:'input.txt'}},
+ {type:'tool_execution_end',toolCallId:'tool1',toolName:'read_file'},
+ {type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Pi answer'}},
+ {type:'message_end',message:{role:'assistant',model:'actual-model',stopReason:'stop',content:[{type:'thinking',thinking:'private reasoning'},{type:'text',text:'Pi answer'}],usage:{input:10,output:2,totalTokens:12}}},
+ {type:'agent_end',messages:[]}
+ ]) console.log(JSON.stringify(event));
+});`);
+  const events = [];
+  const result = await runAgent({ harness: 'pi', cwd, prompt: 'hello', env: { SWARM_PI_BIN: binary, LITELLM_API_KEY: 'test-gateway-key' }, onEvent: event => events.push(event) });
+  assert.equal(result.text, 'Pi answer');
+  assert.equal(result.model, 'actual-model');
+  assert.equal(result.usage.totalTokens, 12);
+  assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), 'Pi answer');
+  assert(!JSON.stringify(events).includes('private reasoning'));
+  assert(events.some(event => event.type === 'tool' && event.status === 'completed' && event.path === 'input.txt'));
+});
+
+test('OpenCode parses cumulative public text and tool completion without exposing reasoning', async t => {
+  const cwd = await workspace(t);
+  const binary = await fakeCli(t, cwd, `
+process.stdin.resume();
+process.stdin.on('end', () => {
+ for (const event of [
+ {type:'step_start'},
+ {type:'reasoning',part:{text:'private reasoning'}},
+ {type:'tool_use',part:{id:'t1',tool:'workspace_read_file',state:{status:'completed',input:{path:'input.txt'}}}},
+ {type:'step_finish',part:{reason:'tool-calls',tokens:{input:10,output:1}}},
+ {type:'step_start'},
+ {type:'text',part:{id:'m1',text:'Final'}},
+ {type:'text',part:{id:'m1',text:'Final answer'}},
+ {type:'step_finish',part:{reason:'stop',tokens:{input:12,output:2}}}
+ ]) console.log(JSON.stringify(event));
+});`);
+  const events = [];
+  const result = await runAgent({ harness: 'opencode', model: 'openai/gpt-6-astra', cwd, prompt: 'hello', env: { SWARM_OPENCODE_BIN: binary, LITELLM_API_KEY: 'test-gateway-key' }, onEvent: event => events.push(event) });
+  assert.equal(result.text, 'Final answer');
+  assert.equal(result.model, 'openai/gpt-6-astra');
+  assert.equal(result.usage.input, 22);
+  assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), 'Final answer');
+  assert(!JSON.stringify(events).includes('private reasoning'));
+  assert(events.some(event => event.type === 'tool' && event.status === 'completed' && event.path === 'input.txt'));
+});
+
+test('new harnesses surface zero-exit upstream failures and clean profiles after cancellation', async t => {
+  const cwd = await workspace(t);
+  for (const harness of ['pi', 'opencode']) {
+    await assert.rejects(runAgent({ harness, cwd, prompt: 'hello', env: {} }), /LITELLM_API_KEY/);
+    const failure = harness === 'pi' ? [{type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'authentication failed'}},{type:'agent_end'}] : [{type:'error',error:{data:{message:'authentication failed'}}}];
+    const binary = await fakeCli(t, cwd, `for (const event of ${JSON.stringify(failure)}) console.log(JSON.stringify(event));`);
+    const env = { [`SWARM_${harness.toUpperCase()}_BIN`]: binary, LITELLM_API_KEY: 'test-gateway-key' };
+    await assert.rejects(runAgent({ harness, cwd, prompt: 'hello', env }), /authentication failed/);
+    await writeFile(binary, `#!${process.execPath}\nimport {writeFileSync} from 'node:fs'; writeFileSync('profile.txt', process.env.PI_CODING_AGENT_DIR || process.env.OPENCODE_TEST_HOME); process.stdin.resume(); setInterval(()=>{},1000);`);
+    await assert.rejects(runAgent({ harness, cwd, prompt: 'hello', env, timeoutMs: 500 }), /timed out/);
+    const profilePath = await readFile(join(cwd, 'profile.txt'), 'utf8');
+    await assert.rejects(stat(profilePath), { code: 'ENOENT' });
+  }
 });
