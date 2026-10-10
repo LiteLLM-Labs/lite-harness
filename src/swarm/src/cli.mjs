@@ -17,17 +17,17 @@ const HELP = `
   swarm demo --open               Try the simulated demo, no key needed
   swarm ui                        Open a local workspace
   swarm list                      List saved runs
-  swarm logs [run-id]              Read the full public conversation
+  swarm logs [run-id]              Read the saved public conversation
   swarm models                    List models on your LiteLLM gateway
   swarm doctor                    Check installed harnesses
   swarm init                      Write an editable swarm.json team
 
-  --harness native|codex|claude    Harness for the default team (native)
+  --harness NAME                  Override all peers: codex, claude, opencode, pi, native
   --model NAME                    Gateway alias or harness model
   --config FILE                   Team configuration (see swarm init)
   --cwd DIRECTORY                 Project the agents can inspect
   --tools                         Allow file writes (default: read-only)
-  --timeout SECONDS               Whole-swarm limit (default: 600)
+  --duration SECONDS              Work for this long (default: 600; --timeout also works)
   --data-dir DIRECTORY            Saved runs (default: .swarm/runs)
   --port PORT                     Local view port (default: auto-select)
   --follow-up RUN-ID              Include the previous task and answer
@@ -38,7 +38,8 @@ const HELP = `
   Default gateway: https://gateway-dev.litellm-sandbox.ai
 
   While running: type a direction + Enter; /stop to cancel.
-  Directions reach agents that have not started their contribution.
+  10 peers start by electing a coordinator, then work concurrently.
+  Directions reach every peer on its next work cycle.
 `;
 
 // Model output is untrusted terminal content; preserve line breaks, not escapes.
@@ -63,14 +64,14 @@ async function models() {
 async function main() {
   const {values, positionals} = parseArgs({allowPositionals: true, options: {
     help: {type: 'boolean', short: 'h'}, version: {type: 'boolean', short: 'v'}, open: {type: 'boolean'}, json: {type: 'boolean'}, tools: {type: 'boolean'},
-    model: {type: 'string'}, harness: {type: 'string'}, config: {type: 'string'}, cwd: {type: 'string'}, timeout: {type: 'string'}, port: {type: 'string'},
+    model: {type: 'string'}, harness: {type: 'string'}, config: {type: 'string'}, cwd: {type: 'string'}, timeout: {type: 'string'}, duration: {type: 'string'}, port: {type: 'string'},
     'data-dir': {type: 'string'}, 'follow-up': {type: 'string'}, 'env-file': {type: 'string'},
   }});
   if (values['env-file']) {
     const local = parseEnv(readFileSync(resolve(values['env-file']), 'utf8'));
     for (const name of ['LITELLM_API_KEY', 'LITELLM_BASE_URL', 'LITELLM_MODEL']) if (local[name] !== undefined) process.env[name] = local[name];
   }
-  if (values.version) return say('swarm 0.1.0');
+  if (values.version) return say('swarm 0.2.0');
   if (values.help || !positionals.length) return say(HELP);
   const commands = ['run', 'demo', 'ui', 'list', 'logs', 'models', 'doctor', 'init'];
   const command = commands.includes(positionals[0]) ? positionals.shift() : 'run';
@@ -103,7 +104,10 @@ async function main() {
       const label = event.agentId === 'user' ? 'You' : agent ? `${agent.name} · ${agent.harness}` : 'swarm';
       say(`\n${label} · ${event.type}\n${event.text}`);
     }
-    for (const agent of run.agents.filter((item) => item.status !== 'complete' && item.output)) say(`\n${agent.name} · partial output\n${agent.output}`);
+    for (const agent of run.agents) {
+      if (agent.transcript) say(`\n${agent.name} · saved public transcript\n${agent.transcript}`);
+      if (agent.currentOutput || (!agent.transcript && agent.output)) say(`\n${agent.name} · latest output\n${agent.currentOutput || agent.output}`);
+    }
     return;
   }
   let options = values.config ? JSON.parse(readFileSync(resolve(values.config), 'utf8')) : {};
@@ -114,7 +118,8 @@ async function main() {
     options = {...options, agents: defaultTeam({harness, model: values.model ?? defaultModel(harness)})};
   }
   options = {...options, task: positionals.join(' '), demo: command === 'demo', parentId: values['follow-up'], toolsEnabled: values.tools ?? options.toolsEnabled ?? false};
-  if (values.timeout) options.timeoutSeconds = Number(values.timeout);
+  if (values.duration && values.timeout) throw new Error('Use either --duration or --timeout, not both.');
+  if (values.duration || values.timeout) options.timeoutSeconds = Number(values.duration || values.timeout);
   const port = Number(values.port || 0);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be 0–65535.');
   const release = store.acquire();
@@ -146,10 +151,13 @@ async function main() {
     runner.on('event', (event) => {
       if (values.json) return say(JSON.stringify(event));
       const agent = runner.run.agents.find((item) => item.id === event.agentId);
-      const label = agent ? `${agent.name} · ${agent.harness}` : 'swarm';
+      const label = agent ? `${agent.name} · ${agent.harness} · ${agent.model}` : 'swarm';
       if (event.type === 'status') say(`  ${agent?.status === 'complete' ? '✓' : '·'} ${label}  ${event.text}`);
       if (event.type === 'tool') say(`  ↳ ${label}  ${event.text}`);
-      if (event.type === 'message' && agent) say(`\n  ${label}\n${event.text}\n`);
+      if (['message', 'handoff', 'result', 'election', 'coordination', 'consensus'].includes(event.type)) {
+        const recipient = runner.run.agents.find((item) => item.id === event.toAgentId);
+        say(`\n  ${event.type === 'result' ? 'Answer update · ' : ''}${label}${recipient ? ` → ${recipient.name}` : ''}\n${event.text}\n`);
+      }
     });
     runner.on('delta', (event) => {if (values.json) say(JSON.stringify({type: 'delta', ...event}));});
     if (process.stdin.isTTY) {
