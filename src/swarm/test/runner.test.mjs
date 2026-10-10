@@ -46,6 +46,93 @@ function setup(t, adapter = usefulAdapter) {
   return {runner, store, clock};
 }
 
+test('real work enables local actions by default, inspect mode opts out, and elections never act', async (t) => {
+  for (const toolsEnabled of [undefined, false, true]) await t.test(String(toolsEnabled), async (t) => {
+    const calls = [];
+    const {runner} = setup(t, async (args) => {
+      calls.push({phase: args.phase, toolsEnabled: args.toolsEnabled, prompt: args.prompt});
+      return usefulAdapter(args);
+    });
+    runner.start({task: 'Make and verify a change', agentCount: 2, timeoutSeconds: 5, ...(toolsEnabled === undefined ? {} : {toolsEnabled})});
+    await until(() => calls.some(({phase}) => phase === 'work'));
+    assert.equal(runner.run.toolsEnabled, toolsEnabled ?? true);
+    assert(calls.filter(({phase}) => phase === 'election').every((call) => call.toolsEnabled === false));
+    for (const call of calls.filter(({phase}) => phase === 'work')) {
+      assert.equal(call.toolsEnabled, toolsEnabled ?? true);
+      assert.match(call.prompt, toolsEnabled === false ? /Local actions are disabled/ : /make and verify the change/);
+    }
+  });
+});
+
+test('simulations cannot enable real local actions', (t) => {
+  const {runner} = setup(t);
+  runner.start({task: 'A simulated task', demo: true, toolsEnabled: true, agentCount: 2, timeoutSeconds: 5});
+  assert.equal(runner.run.toolsEnabled, false);
+});
+
+test('agents join shared workstreams themselves and historical records keep their original stream', async (t) => {
+  const {runner, store} = setup(t, async ({signal}) => {await delay(10000, undefined, {signal}); return ballot();});
+  runner.start({task: 'Build and verify useful work', agentCount: 2, timeoutSeconds: 5});
+  assert.deepEqual(runner.run.workstreams, []);
+  assert(runner.run.agents.every((agent) => agent.workstream === null));
+  const contribute = (id, cycle, workstream, text) => runner.acceptContribution(id, cycle, {text: JSON.stringify({text, workstream, agentId: 'peer-02'})});
+  contribute('peer-01', 1, {id: 'build', name: 'Implementation'}, 'First implementation');
+  assert.equal(runner.agent('peer-01').workstream.id, 'build');
+  assert.equal(runner.agent('peer-02').workstream, null);
+  contribute('peer-02', 1, {id: 'build', name: 'Attempted rename'}, 'Join implementation');
+  assert.deepEqual(runner.agent('peer-02').workstream, {id: 'build', name: 'Implementation'});
+  contribute('peer-02', 2, {id: 'duplicate', name: 'implementation'}, 'Same named stream');
+  assert.equal(runner.agent('peer-02').workstream.id, 'build');
+  contribute('peer-01', 2, {id: 'verify', name: 'Verification'}, 'Verify the result');
+  assert.equal(runner.run.workstreams.length, 2);
+  assert.equal(runner.run.messages.find(({text}) => text === 'First implementation').workstreamId, 'build');
+  assert.equal(runner.run.messages.find(({text}) => text === 'Verify the result').workstreamId, 'verify');
+  assert.equal(runner.run.events.find(({text}) => text === 'First implementation').workstreamId, 'build');
+  runner.steer('Keep my direction visible to all workstreams');
+  assert.equal(runner.run.messages.at(-1).workstreamId, null);
+  const board = runner.board();
+  assert.deepEqual(board.workstreams, runner.run.workstreams);
+  assert.equal(board.identities[0].workstreamId, 'verify');
+  assert.match(runner.prompt(runner.agent('peer-02')), /Join an existing shared-board workstream/);
+  runner.stop(); await runner.done;
+  const previous = store.get(runner.run.id);
+  assert.match(runner.prompt(runner.agent('peer-01'), previous), /Your previous workstream was.*verify/);
+  runner.start({task: 'A fresh task', agentCount: 2, timeoutSeconds: 5});
+  assert.deepEqual(runner.run.workstreams, []);
+});
+
+test('real command evidence is bounded and persisted without trusting tool-supplied identity', async (t) => {
+  const {runner, store} = setup(t, async (args) => {
+    if (args.phase === 'election') return ballot();
+    args.onEvent({type: 'tool', text: 'run_command completed', name: 'run_command', status: 'completed', command: 'node --test', stdout: 'ok\n', stderr: 'x'.repeat(9000), exitCode: 0, timedOut: false, agentId: 'forged', arbitrary: 'discard'});
+    await delay(10000, undefined, {signal: args.signal});
+    return {text: 'Unreachable'};
+  });
+  runner.start({task: 'Execute and verify', agentCount: 2, timeoutSeconds: 5});
+  await until(() => runner.run.events.some(({type}) => type === 'tool'));
+  runner.stop(); await runner.done;
+  const event = store.get(runner.run.id).events.find(({type}) => type === 'tool');
+  assert.equal(event.agentId, 'peer-01');
+  assert.equal(event.command, 'node --test');
+  assert.equal(event.stdout, 'ok\n');
+  assert.equal(event.exitCode, 0);
+  assert.equal(event.stderr.length, 8000);
+  assert.equal(event.truncated, true);
+  assert.equal(event.arbitrary, undefined);
+});
+
+test('agents joining while the change baseline is preparing do not enter the original election', async (t) => {
+  const calls = [];
+  const {runner} = setup(t, async (args) => {calls.push({id: args.id, phase: args.phase}); return usefulAdapter(args);});
+  runner.start({task: 'Capture first, then elect the original team', agentCount: 2, timeoutSeconds: 5});
+  assert.equal(runner.run.changes.status, 'preparing');
+  runner.addAgents({count: 3});
+  await until(() => new Set(calls.filter(({phase}) => phase === 'work').map(({id}) => id)).size === 5);
+  assert.deepEqual(calls.filter(({phase}) => phase === 'election').map(({id}) => id).sort(), ['peer-01', 'peer-02']);
+  assert.equal(runner.run.election.eligibleVoters, 2);
+  assert.equal(runner.run.election.votes.length, 2);
+});
+
 test('ten independent ballots overlap, then all ten peers work concurrently and elect by explicit plurality', async (t) => {
   const electionGate = deferred();
   const workGate = deferred();
