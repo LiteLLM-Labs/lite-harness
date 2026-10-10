@@ -4,6 +4,13 @@ import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, ela
 const $ = (selector) => document.querySelector(selector);
 let state = { run: null, runs: [], defaults: {}, capabilities: [] };
 let historicalRun = null;
+let draftMode = false;
+let parentRun = null;
+let brainView = false;
+let inspectorOpen = false;
+let sidebarSignature = '';
+let navigationRevision = 0;
+const agentRows = new Map();
 let configuredTeam = null;
 let editingTeam = [];
 let selectedId = null;
@@ -25,7 +32,7 @@ const field = new Constellation($('#constellation'));
 function defaultTeam() {
   return (state.defaults.team || []).map((agent) => ({ ...agent, status: 'queued' }));
 }
-function viewedRun() { return historicalRun || state.run; }
+function viewedRun() { return draftMode ? null : historicalRun || state.run; }
 function displayAgents() { return viewedRun()?.agents || configuredTeam || defaultTeam(); }
 function agentById(id) { return displayAgents().find((agent) => agent.id === id); }
 function agentName(id) { return id === 'all' ? 'everyone' : id === 'user' ? 'You' : agentById(id)?.name || id || 'Swarm'; }
@@ -73,7 +80,7 @@ function renderStatus(run, agents) {
   const cycles = agents.reduce((total, agent) => total + (Number(agent.cycles) || 0), 0);
   const completed = agents.filter((agent) => agent.status === 'complete').length;
   const statusLabels = { running: 'THE SWARM IS WORKING', complete: 'WORK PERIOD COMPLETE', failed: 'THIS RUN NEEDS ATTENTION', stopped: 'SWARM STOPPED', interrupted: 'RUN INTERRUPTED' };
-  $('#run-state').textContent = historicalRun ? 'FROM YOUR RECENT RUNS' : electing ? 'THE TEAM IS ELECTING ITS COORDINATOR' : statusLabels[run?.status] || 'INDEPENDENT MINDS. SHARED MOMENTUM.';
+  $('#run-state').textContent = draftMode ? parentRun ? 'CONTINUE THE CONVERSATION' : 'A NEW CONVERSATION' : historicalRun ? 'FROM YOUR RECENT RUNS' : electing ? 'THE TEAM IS ELECTING ITS COORDINATOR' : statusLabels[run?.status] || 'INDEPENDENT MINDS. SHARED MOMENTUM.';
   $('#demo-label').hidden = !run?.demo;
   $('#run-dot').style.background = running ? 'var(--gold)' : run?.status === 'failed' ? '#df9898' : '';
   if (run) {
@@ -82,7 +89,7 @@ function renderStatus(run, agents) {
     $('#headline').title = run.task;
   } else {
     $('#headline').classList.remove('run-headline');
-    $('#headline').replaceChildren(document.createTextNode('One task. '), element('span', '', agents.length === 10 ? 'Ten perspectives.' : 'Many perspectives.'));
+    $('#headline').replaceChildren(document.createTextNode('Many minds. '), element('span', '', 'One shared direction.'));
     $('#headline').removeAttribute('title');
   }
   const captions = {
@@ -92,7 +99,7 @@ function renderStatus(run, agents) {
     stopped: 'The swarm has stopped. Every contribution is still here.',
     interrupted: 'This run was interrupted. Its work has been preserved.',
   };
-  $('#hero-caption').textContent = captions[run?.status] || 'The team elects its coordinator. Every agent keeps working.';
+  $('#hero-caption').textContent = captions[run?.status] || (parentRun ? 'Same peers. Their previous result is part of the shared context.' : 'Give the swarm a direction. Watch the work take shape.');
   $('#progress-text').textContent = run ? running ? `${active}/${agents.length} working · ${cycles} contributions` : `${completed}/${agents.length} complete · ${cycles} contributions` : `${agents.length || '…'} agents · concurrent work`;
   const coordinator = agents.find((agent) => agent.id === run?.coordinatorId);
   const voteCount = run?.election?.votes?.length || 0;
@@ -101,21 +108,132 @@ function renderStatus(run, agents) {
   $('#election-button').classList.toggle('elected', Boolean(coordinator));
   $('#stage-hint').textContent = historicalRun ? 'Viewing a saved run. Use Recent runs to return.' : 'Open any agent to see its full work and conversation.';
   $('#stream-label').replaceChildren(element('span', 'status-dot'), document.createTextNode(running ? 'LIVE' : run ? run.status.toUpperCase() : 'STANDING BY'));
-  $('#run-button').hidden = currentRunning;
+  $('#run-button').hidden = false;
   $('#run-button').disabled = busy || !(configuredTeam || defaultTeam()).length;
-  $('#stop-button').hidden = !currentRunning;
+  $('#stop-button').hidden = !running;
   $('#stop-button').disabled = busy;
-  $('#task-input').disabled = currentRunning;
-  $('#demo-button').disabled = currentRunning || busy;
-  $('#team-button').disabled = currentRunning;
+  $('#task-input').disabled = busy;
+  $('#task-input').placeholder = running ? 'Add context or redirect this swarm…' : run || parentRun ? 'Continue the conversation…' : 'Give your swarm something to work on…';
+  $('#demo-button').disabled = busy;
+  $('#team-button').disabled = currentRunning && !draftMode;
+  $('#continue-chat-button').hidden = !run || running;
+  $('#draft-context').hidden = !draftMode || !parentRun;
+  $('#draft-context-text').textContent = parentRun ? `Following up on: ${parentRun.task}` : '';
+  $('#return-chat-button').hidden = !state.run && !parentRun;
+  $('#stop-button').title = draftMode && currentRunning ? 'Stop the swarm in your other chat' : 'Stop this swarm';
   $('#steering-input').disabled = !running || Boolean(historicalRun) || busy;
   $('#steering-button').disabled = !running || Boolean(historicalRun) || busy;
   $('#steering-note').textContent = running && !historicalRun ? 'Your guidance is shared with the team’s next work cycles.' : 'Your guidance joins the shared context.';
   $('#gateway-label').title = state.defaults.baseUrl || 'Gateway configured by your local CLI';
-  $('#team-button-label').textContent = `Configure ${(configuredTeam || defaultTeam()).length || 'your'} agents`;
+  $('#team-button-label').textContent = `${(configuredTeam || defaultTeam()).length || 'Your'} agents`;
   updateDurationLabel();
   if (running && run.deadlineAt) $('#duration-label').textContent = `${elapsed(run.startedAt, run.deadlineAt)} ${run.demo ? 'demo playback' : 'work budget'}`;
   updateClock();
+}
+
+function newChat(followUp = false) {
+  navigationRevision += 1;
+  const prior = followUp ? viewedRun() : null;
+  parentRun = prior;
+  configuredTeam = prior ? prior.agents.map(({id, name, role, harness, model}) => ({id, name, role, harness, model, status: 'queued'})) : null;
+  draftMode = true;
+  historicalRun = null;
+  selectedId = null;
+  $('#task-input').value = '';
+  setView(false);
+  showInspector(false);
+  for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+  lastRunId = null;
+  render();
+  $('#task-input').focus();
+  $('#task-input').scrollIntoView({block: 'nearest', behavior: 'smooth'});
+}
+
+function setView(spatial) {
+  brainView = spatial;
+  document.body.classList.toggle('brain-mode', spatial);
+  $('#stage').hidden = !spatial;
+  $('#brain-view-button').setAttribute('aria-pressed', String(spatial));
+  $('#chat-view-button').setAttribute('aria-pressed', String(!spatial));
+  if (spatial) showInspector(false);
+  scheduleFieldLayout();
+}
+
+function showInspector(open) {
+  if (open && brainView) setView(false);
+  inspectorOpen = open;
+  $('#inspector').hidden = !open;
+  $('#workspace').classList.toggle('with-inspector', open);
+  $('#agents-view-button').setAttribute('aria-expanded', String(open));
+}
+
+async function selectChat(id) {
+  const revision = ++navigationRevision;
+  try {
+    const next = await api('/api/select', {id});
+    if (revision !== navigationRevision) return;
+    const snapshot = next.run ? next : await api('/api/state');
+    if (revision !== navigationRevision) return;
+    draftMode = false;
+    parentRun = null;
+    configuredTeam = null;
+    historicalRun = null;
+    $('#task-input').value = '';
+    receiveState(snapshot);
+  } catch (error) { toast(error.message); }
+}
+
+function renderChat(run, agents) {
+  $('#chat-title').textContent = run?.task || (parentRun ? 'Follow-up' : 'New chat');
+  $('#chat-title').title = run?.task || 'New chat';
+  $('#chat-welcome').hidden = Boolean(run);
+  $('#chat-user-message').hidden = !run;
+  $('#chat-task').textContent = run?.task || '';
+  $('#agent-overview').hidden = !run;
+  $('#agents-count').textContent = agents.length;
+  $('#inspector-count').textContent = agents.length;
+  const working = agents.filter((agent) => agent.status === 'running').length;
+  const cycles = agents.reduce((sum, agent) => sum + (agent.cycles || 0), 0);
+  $('#overview-title').textContent = run?.phase === 'electing' ? 'The peers are choosing a coordinator' : run?.status === 'running' ? `${working} subagents working` : `${agents.length} subagents · ${run?.status || 'ready'}`;
+  $('#overview-detail').textContent = `${cycles} contributions · Open their work and conversations`;
+  $('#overview-logos').replaceChildren(...agents.map((agent) => logo(agent.harness)));
+  $('#chat-run-status').hidden = !run;
+  $('#chat-run-status').textContent = run?.status === 'running' ? 'The team is working. You can send more context below.' : run?.status === 'complete' ? 'Work period complete. Send a follow-up to keep working with these peers.' : run ? `This chat’s swarm is ${run.status}. Its work is preserved.` : '';
+  const signature = JSON.stringify([state.runs, run?.id, draftMode]);
+  if (signature !== sidebarSignature) {
+    sidebarSignature = signature;
+    const rows = (state.runs || []).map((item) => {
+      const button = element('button', `sidebar-chat${item.id === run?.id ? ' active' : ''}`);
+      button.dataset.runId = item.id;
+      button.append(element('span', 'sidebar-chat-title', item.task || 'Untitled chat'), element('span', `sidebar-status ${item.status}`, item.status === 'running' ? '◌' : ''));
+      button.title = `${item.task} · ${item.status}`;
+      button.addEventListener('click', () => selectChat(item.id));
+      return button;
+    });
+    $('#sidebar-chats').replaceChildren(...(rows.length ? rows : [element('p', 'sidebar-empty', 'Your conversations will appear here.')]));
+  }
+  const ids = new Set(agents.map((agent) => agent.id));
+  for (const [id, entry] of agentRows) if (!ids.has(id)) { entry.node.remove(); agentRows.delete(id); }
+  for (const agent of agents) {
+    let entry = agentRows.get(agent.id);
+    if (!entry) {
+      const node = element('button', 'agent-list-row');
+      node.addEventListener('click', () => openAgent(agent.id));
+      entry = {node, signature: ''};
+      agentRows.set(agent.id, entry);
+      $('#agent-list').append(node);
+    }
+    const output = currentWork(agent);
+    const signature = JSON.stringify([agent.name, agent.harness, agent.model, agent.status, agent.activity, agent.cycles, output]);
+    if (entry.signature === signature) continue;
+    entry.signature = signature;
+    entry.node.className = `agent-list-row ${agent.status}`;
+    const text = element('span', 'agent-list-text');
+    const heading = element('span', 'agent-list-heading');
+    heading.append(element('strong', '', agent.name), modelLogo(agent.model, agent.harness));
+    text.append(heading, element('span', 'agent-list-state', `${stageDescription(agent)} · ${agent.cycles || 0} cycles`), element('span', 'agent-list-preview', output || (run ? agent.assignment || agent.role : 'Chooses a role once you share your task.')));
+    entry.node.replaceChildren(logo(agent.harness), text, element('span', 'agent-list-arrow', '↗'));
+  }
 }
 
 function renderCards(agents, run) {
@@ -127,7 +245,7 @@ function renderCards(agents, run) {
     const coordinator = agent.id === run?.coordinatorId;
     const output = currentWork(agent);
     const vote = run?.election?.votes?.find((entry) => entry.voterId === agent.id);
-    const assignment = agent.assignment || agent.role || 'Waiting for an assignment.';
+    const assignment = run ? agent.assignment || agent.role || 'Choosing a contribution.' : 'Chooses a role from your task and the shared context.';
     const preview = output ? output.replace(/\s+/g, ' ').slice(-340) : vote ? `Voted for ${agentName(vote.candidateId)}. ${vote.reason || ''}` : run?.phase === 'electing' ? 'Considering the team and choosing a coordinator…' : run ? 'Waiting for a public contribution…' : 'Its actual work will appear here as it happens.';
     const replacement = coordinator && Boolean(run?.coordinatorChanges?.length || run?.election?.method?.includes('fallback'));
     const signature = JSON.stringify([agent.name, agent.harness, agent.model, agent.status, agent.cycles, agent.activity, assignment, preview, coordinator, replacement, selectedId]);
@@ -146,10 +264,12 @@ function renderCards(agents, run) {
     const button = entry.node;
     button.className = `agent-card ${agent.status || 'queued'}${coordinator ? ' coordinator' : ''}${selectedId === agent.id ? ' selected' : ''}`;
     button.setAttribute('aria-label', `Open ${agent.name}, ${HARNESS_NAMES[agent.harness] || agent.harness}, ${stageDescription(agent)}. Full output and transcript.`);
-    const header = element('span', 'agent-card-header');
+    const art = element('span', 'agent-node-art');
     const status = element('span', 'card-status');
     status.append(element('span', 'status-dot'));
-    header.append(logo(agent.harness), element('span', 'agent-card-name', agent.name), status);
+    art.append(logo(agent.harness), status);
+    const header = element('span', 'agent-card-header');
+    header.append(element('span', 'agent-card-name', agent.name), modelLogo(agent.model, agent.harness));
     const model = element('span', 'agent-card-model');
     model.append(modelLogo(agent.model, agent.harness), element('span', '', shortModel(agent.model, agent.harness)));
     model.title = `${HARNESS_NAMES[agent.harness] || agent.harness} · ${shortModel(agent.model, agent.harness)}`;
@@ -157,7 +277,10 @@ function renderCards(agents, run) {
     footer.append(element('span', '', `${Number(agent.cycles) || 0} cycles · ${stageDescription(agent)}`));
     if (coordinator) footer.append(element('span', 'coordinator-badge', replacement ? 'COORDINATOR' : 'ELECTED'));
     footer.append(element('span', 'open-detail', '↗'));
-    button.replaceChildren(header, model, element('span', 'agent-assignment', assignment), element('span', `agent-preview${output || vote ? '' : ' waiting'}`, preview), footer);
+    const work = element('span', 'node-work');
+    work.append(header, model, element('span', 'agent-assignment', assignment), element('span', `agent-preview${output || vote ? '' : ' waiting'}`, preview), footer);
+    button.title = `${agent.name} · ${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}\n${assignment}\n${stageDescription(agent)}`;
+    button.replaceChildren(art, work);
   }
   scheduleFieldLayout();
 }
@@ -169,12 +292,22 @@ function scheduleFieldLayout() {
     layoutPending = false;
     const stage = $('#stage').getBoundingClientRect();
     if (!stage.width || !stage.height) return;
+    const positions = [[.18,.44],[.35,.59],[.65,.56],[.86,.44],[.08,.68],[.245,.80],[.435,.77],[.61,.82],[.80,.78],[.93,.66]];
+    displayAgents().forEach((agent, index) => {
+      const node = cards.get(agent.id)?.node;
+      if (!node) return;
+      const point = stage.width < 650 ? [.26 + (index % 2) * .49, .29 + Math.floor(index / 2) * .135 + (index % 2) * .025] : positions[index] || [.14 + ((index - 10) % 2) * .7, .9];
+      node.style.left = `${Math.max(78, Math.min(stage.width - 78, point[0] * stage.width))}px`;
+      node.style.top = `${point[1] * stage.height}px`;
+    });
+    $('#election-button').style.left = '50%';
+    $('#election-button').style.top = `${stage.height * (stage.width < 650 ? .18 : .32)}px`;
     const position = (node) => {
       const rect = node.getBoundingClientRect();
       return { x: (rect.left + rect.width / 2 - stage.left) / stage.width * 1920, y: (rect.top + rect.height / 2 - stage.top) / stage.height * 1080 };
     };
-    const agents = displayAgents().map((agent) => ({ ...agent, ...position(cards.get(agent.id).node) }));
-    field.update(agents, selectedId, viewedRun()?.status === 'running', position($('#election-button')));
+    const agents = displayAgents().map((agent) => ({ ...agent, ...position(cards.get(agent.id).node.querySelector('.agent-node-art')) }));
+    field.update(agents, selectedId, viewedRun()?.status === 'running', position($('#election-button .hub-symbol')));
   });
 }
 new ResizeObserver(scheduleFieldLayout).observe($('#stage'));
@@ -263,14 +396,24 @@ function resultEntries(run) {
 }
 function renderResults(run) {
   const results = resultEntries(run);
+  const directions = (run?.messages || []).filter((message) => message.kind === 'direction' && message.from === 'user').filter((message) => {
+    const sinceStart = Number(new Date(message.at)) - Number(new Date(run.startedAt));
+    return !(sinceStart >= 0 && sinceStart < 1000 && run.task.startsWith(message.text));
+  });
+  const timeline = [...results, ...directions.map((message) => ({...message, userDirection: true}))].sort((a, b) => Number(new Date(a.at)) - Number(new Date(b.at)));
   $('#result-count').textContent = `${results.length} ${results.length === 1 ? 'UPDATE' : 'UPDATES'}`;
-  const signature = JSON.stringify([run?.id, results]);
-  if (signature === resultsSignature || !results.length) return;
+  const signature = JSON.stringify([run?.id, timeline]);
+  if (signature === resultsSignature || !timeline.length) return;
   resultsSignature = signature;
-  const panel = $('#human-feed');
+  const panel = $('#chat-scroll');
   const stick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 60;
   const position = panel.scrollTop;
-  panel.replaceChildren(...results.map((result) => {
+  $('#human-feed').replaceChildren(...timeline.map((result) => {
+    if (result.userDirection) {
+      const message = element('div', 'chat-user-message chat-direction');
+      message.append(element('span', 'chat-author', 'You'), element('div', '', result.text));
+      return message;
+    }
     const agent = agentById(result.agentId);
     const card = element('article', 'result-card');
     const header = element('div', 'event-header');
@@ -368,9 +511,8 @@ function renderElection() {
 }
 
 function clearHumanFeed() {
-  const empty = element('div', 'empty-results');
-  empty.append(element('span', 'small-orbit', '✦'), element('h3', '', 'Useful work, as it emerges.'), element('p', '', 'The elected coordinator shares results here while the whole team keeps working.'));
-  $('#human-feed').replaceChildren(empty);
+  $('#human-feed').replaceChildren();
+  $('#feed').replaceChildren(element('p', 'empty-feed', 'Peer messages and tool activity appear here once the work begins.'));
 }
 function render() {
   const run = viewedRun();
@@ -385,6 +527,7 @@ function render() {
     clearHumanFeed();
   }
   renderStatus(run, agents);
+  renderChat(run, agents);
   renderCards(agents, run);
   renderFeed(run, agents);
   renderResults(run);
@@ -448,22 +591,36 @@ function saveTeam() {
 async function startRun(demo = false) {
   const task = $('#task-input').value.trim();
   if (!demo && !task) { $('#task-input').focus(); return; }
-  if (busy || state.run?.status === 'running') return;
+  if (busy) return;
+  const revision = navigationRevision;
   busy = true;
   render();
   try {
+    if (!demo && viewedRun()?.status === 'running') {
+      await api('/api/message', {text: task, runId: viewedRun().id});
+      if (revision === navigationRevision) $('#task-input').value = '';
+      receiveState(await api('/api/state'));
+      return;
+    }
+    const context = draftMode ? parentRun : viewedRun();
+    const team = configuredTeam || (context ? context.agents : defaultTeam());
     const body = demo ? { demo: true } : {
       task,
-      agents: (configuredTeam || defaultTeam()).map(({ id, name, role, harness, model }) => ({ id, name, role, harness, model })),
+      agents: team.map(({ id, name, role, harness, model }) => ({ id, name, role, harness, model })),
       timeoutSeconds: runDuration(),
       toolsEnabled: $('#tools-toggle').checked,
+      ...(context ? {parentId: context.id} : {}),
     };
     const response = await api('/api/run', body);
-    historicalRun = null;
-    selectedId = null;
+    if (revision === navigationRevision) {
+      historicalRun = null;
+      draftMode = false;
+      parentRun = null;
+      selectedId = null;
+      $('#task-input').value = '';
+    }
     if (response.run) receiveState(response);
     else receiveState(await api('/api/state'));
-    if (demo) $('#task-input').value = '';
   } catch (error) { toast(error.message); }
   finally { busy = false; render(); }
 }
@@ -478,12 +635,8 @@ function renderHistory() {
     metadata.append(element('span', '', `${run.status}${run.demo ? ' · demo' : ''}`), element('span', '', Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
     row.append(element('span', 'history-title', run.task || 'Untitled run'), metadata);
     row.addEventListener('click', async () => {
-      try {
-        const result = await api(`/api/runs/${encodeURIComponent(run.id)}`);
-        historicalRun = result.run || result;
-        $('#history-dialog').close();
-        render();
-      } catch (error) { toast(error.message); }
+      await selectChat(run.id);
+      $('#history-dialog').close();
     });
     return row;
   }));
@@ -494,6 +647,20 @@ async function copyText(text) {
 }
 
 $('#run-form').addEventListener('submit', (event) => { event.preventDefault(); startRun(); });
+$('#new-chat-button').addEventListener('click', () => newChat());
+$('#continue-chat-button').addEventListener('click', () => newChat(true));
+$('#return-chat-button').addEventListener('click', () => { draftMode = false; parentRun = null; render(); });
+$('#chat-view-button').addEventListener('click', () => setView(false));
+$('#brain-view-button').addEventListener('click', () => setView(true));
+$('#agents-view-button').addEventListener('click', () => showInspector(!inspectorOpen));
+$('#agent-overview').addEventListener('click', () => showInspector(true));
+$('#close-inspector').addEventListener('click', () => showInspector(false));
+for (const name of ['list', 'chat']) $(`#agent-${name}-tab`).addEventListener('click', () => {
+  $('#agent-list').hidden = name !== 'list';
+  $('#agent-conversation').hidden = name !== 'chat';
+  $('#agent-list-tab').setAttribute('aria-pressed', String(name === 'list'));
+  $('#agent-chat-tab').setAttribute('aria-pressed', String(name === 'chat'));
+});
 $('#demo-button').addEventListener('click', () => startRun(true));
 $('#empty-demo-button').addEventListener('click', () => startRun(true));
 $('#team-button').addEventListener('click', openTeam);
@@ -504,7 +671,7 @@ $('#timeout-select').addEventListener('change', updateDurationLabel);
 $('#custom-duration').addEventListener('input', updateDurationLabel);
 for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => $(`#${button.dataset.close}`).close());
 $('#history-button').addEventListener('click', () => { renderHistory(); $('#history-dialog').showModal(); });
-$('#back-live').addEventListener('click', () => { historicalRun = null; $('#history-dialog').close(); render(); });
+$('#back-live').addEventListener('click', () => { historicalRun = null; draftMode = false; parentRun = null; $('#history-dialog').close(); render(); });
 $('#agent-filter').addEventListener('change', () => { filterId = $('#agent-filter').value; feedSignature = ''; renderFeed(viewedRun(), displayAgents()); });
 $('#election-button').addEventListener('click', () => { renderElection(); $('#election-dialog').showModal(); });
 for (const name of ['output', 'transcript', 'messages']) $(`#${name}-tab`).addEventListener('click', () => setAgentTab(name));
@@ -522,7 +689,7 @@ $('#copy-agent-output').addEventListener('click', () => copyText($('#transcript-
 $('#stop-button').addEventListener('click', async () => {
   busy = true;
   render();
-  try { await api('/api/stop', {}); receiveState(await api('/api/state')); }
+  try { await api('/api/stop', {runId: viewedRun()?.id}); receiveState(await api('/api/state')); }
   catch (error) { toast(error.message); }
   finally { busy = false; render(); }
 });
@@ -533,7 +700,7 @@ $('#steering-form').addEventListener('submit', async (event) => {
   busy = true;
   render();
   try {
-    await api('/api/message', { text });
+    await api('/api/message', { text, runId: viewedRun()?.id });
     $('#steering-input').value = '';
     receiveState(await api('/api/state'));
     toast('Guidance added to the shared context.');
