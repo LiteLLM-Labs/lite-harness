@@ -27,8 +27,19 @@ test('CLI generates a larger team and runs a count-configured simulation', async
   assert.equal(files.length, 1);
   const run = JSON.parse(readFileSync(join(data, files[0]), 'utf8'));
   assert.equal(run.demo, true);
+  assert.equal(run.toolsEnabled, false);
   assert.equal(run.status, 'complete');
   assert.equal(run.agents.length, 25);
   assert(run.agents.some(({cycles}) => cycles > 0));
   assert.equal(run.deadlineAt - run.startedAt, 5000);
+});
+
+test('CLI documents local actions and rejects contradictory action modes', async () => {
+  const {stdout} = await exec(process.execPath, [cli, '--help']);
+  assert.match(stdout, /--read-only/);
+  assert.match(stdout, /default for real runs/);
+  await assert.rejects(exec(process.execPath, [cli, 'run', 'A task', '--tools', '--read-only']), (error) => {
+    assert.match(error.stderr, /Choose either --tools or --read-only/);
+    return true;
+  });
 });
