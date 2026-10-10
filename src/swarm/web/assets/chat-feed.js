@@ -1,6 +1,6 @@
 import {agentPresence, publicOutput} from './ui.js';
 
-const CHAT_KINDS = new Set(['message', 'contribution', 'direction', 'election', 'proposal', 'vote', 'assignment', 'identity', 'membership', 'coordination', 'workstream']);
+const CHAT_KINDS = new Set(['message', 'contribution', 'direction', 'election', 'proposal', 'vote', 'assignment', 'identity', 'membership', 'coordination', 'workstream', 'access']);
 const timestamp = (value) => value == null ? Infinity : Number(new Date(value));
 
 function initialDirection(message, run, firstDirection) {
