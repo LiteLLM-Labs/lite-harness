@@ -13,7 +13,9 @@ The screenshots show a labeled simulated demo through the real runner and local 
 
 ## Automated checks
 
-`npm run check --prefix src/swarm` and `npm test --prefix src/swarm` pass: 45 tests cover the organization protocol, timed concurrency, actual ballot accounting, identity ownership, broadcasts, output retention, lifecycle cleanup, guarded tools, real CLI stream formats, persistence and authenticated HTTP/SSE.
+`npm run check --prefix src/swarm` and `npm test --prefix src/swarm` pass: 53 tests cover the organization protocol, timed concurrency, actual ballot accounting, identity ownership, broadcasts, output retention, lifecycle cleanup, guarded tools, real CLI stream formats, persistence and authenticated HTTP/SSE. Conversation tests cover simultaneous chats, isolated steering and cancellation, saved/live selection, history without subscribers, explicit follow-up context, the four-chat limit, terminal event attribution and shutdown of every active chat.
+
+A separate terminal smoke test started two simulated chats, selected the first through the browser API, and sent guidance and `/stop` from the terminal. Only the selected chat received the guidance and stopped; the other remained running until `/quit` shut down the workspace. A real PTY check also confirms Ctrl+C closes the server and releases its store lock.
 
 The package dry-run excludes `.env`, `.swarm`, installed CLI dependencies and run data. The source check includes browser helper modules and the constellation assets.
 
