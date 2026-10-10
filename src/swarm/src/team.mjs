@@ -1,4 +1,11 @@
 export const HARNESSES = ['native', 'codex', 'claude', 'opencode', 'pi'];
+export const DEFAULT_AGENT_COUNT = 10;
+export const MAX_AGENTS = 100;
+
+export function validateAgentCount(value, {minimum = 2} = {}) {
+  if (!Number.isInteger(value) || value < minimum || value > MAX_AGENTS) throw new Error(`Choose ${minimum}–${MAX_AGENTS} agents.`);
+  return value;
+}
 
 // Explicit current choices; Claude's opus alias follows its installed CLI catalog.
 export function defaultModel(harness, env = process.env) {
@@ -10,16 +17,25 @@ export function defaultModel(harness, env = process.env) {
 const DEFAULT_HARNESSES = ['claude', 'codex', 'opencode', 'claude', 'codex', 'pi', 'opencode', 'codex', 'claude', 'pi'];
 const PEER_ROLE = 'You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.';
 
-export function defaultTeam({harness, model} = {}) {
-  return DEFAULT_HARNESSES.map((preferredHarness, index) => {
+export function defaultTeam({count = DEFAULT_AGENT_COUNT, harness, model, existing = []} = {}) {
+  validateAgentCount(count, {minimum: 1});
+  if (!Array.isArray(existing) || existing.length + count > MAX_AGENTS) throw new Error(`A swarm supports at most ${MAX_AGENTS} agents.`);
+  if (harness != null && !HARNESSES.includes(harness)) throw new Error(`Unknown harness: ${harness}`);
+  const used = new Set(existing.map((peer) => typeof peer === 'string' ? peer : peer.id));
+  let next = 1;
+  return Array.from({length: count}, (_, index) => {
+    while (used.has(`peer-${String(next).padStart(2, '0')}`)) next++;
+    const preferredHarness = DEFAULT_HARNESSES[(existing.length + index) % DEFAULT_HARNESSES.length];
     const selected = harness || preferredHarness;
-    const number = String(index + 1).padStart(2, '0');
+    const number = String(next++).padStart(2, '0');
+    used.add(`peer-${number}`);
     return {id: `peer-${number}`, name: `Agent ${number}`, role: PEER_ROLE, harness: selected, model: model ?? defaultModel(selected)};
   });
 }
 
 export function validateTeam(input) {
-  if (!Array.isArray(input) || input.length < 2 || input.length > 12) throw new Error('A swarm needs 2–12 agents.');
+  if (!Array.isArray(input)) throw new Error(`A swarm needs 2–${MAX_AGENTS} agents.`);
+  validateAgentCount(input.length);
   const ids = new Set();
   return input.map((agent) => {
     if (!agent || typeof agent !== 'object' || !/^[a-z][a-z0-9-]{0,31}$/.test(agent.id)) throw new Error('Agent IDs must use lowercase letters, digits, and hyphens.');
