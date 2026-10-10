@@ -8,7 +8,6 @@ import {SwarmRunner} from './runner.mjs';
 import {startServer} from './server.mjs';
 import {defaultTeam, defaultModel, validateAgentCount, MAX_AGENTS, HARNESSES} from './team.mjs';
 import {availableHarnesses, gatewayUrl} from './adapters.mjs';
-import {commandCapability} from './workspace-command.mjs';
 
 const HELP = `
   ◌ swarm  ·  one task, a team of agents
@@ -85,8 +84,7 @@ async function main() {
     const harnesses = await availableHarnesses();
     say(`Node ${process.version}`);
     for (const [id, info] of Object.entries(harnesses)) say(`${info.available ? '✓' : '·'} ${id}${id === 'native' ? ` · gateway key ${info.configured ? 'present (not validated)' : 'missing'}` : info.available ? ' · installed' : ' · not installed'}`);
-    const commands = commandCapability();
-    say(`${commands.available ? '✓' : '·'} Shared local commands · ${commands.available ? `${commands.sandbox}, no command network access` : commands.reason}`);
+    say('Standard file, shell and network tools are supplied by each installed harness.');
     return;
   }
   const workspace = realpathSync(resolve(values.cwd || process.cwd()));
