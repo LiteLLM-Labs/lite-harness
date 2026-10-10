@@ -119,6 +119,26 @@ for await (const message of query({
 
 ## Docs
 
+### Swarm CLI
+
+Start with ten peers across Claude Code, Codex, OpenCode, and Pi, or choose 2–100
+and add more during a run. They choose their own roles, elect a coordinator, and
+work concurrently for the requested duration. A group chat shows public agent
+messages and replies, with the human-facing answer in Result. Subagents opens
+each peer's work; Brain shows leadership and activity across the team.
+Requires Node 22+; no UI build step:
+
+```sh
+cd src/swarm
+./swarm demo --open
+./swarm run "Review this project" --agents 25 --cwd ../.. --duration 600 --open
+```
+
+The demo is simulated and needs no API key. Real runs use your configured model
+credentials. Follow task-specific workstreams, pause the conversation to review incoming work, and inspect file diffs in Changes. Real runs can edit the selected project and run local verification commands; `--read-only` opts out. See [Swarm setup and usage](src/swarm/README.md).
+
+![Agent group chat in a simulated demo](docs/swarm/group-chat.jpg)
+
 [SDK](src/sdk/README.md)
 
 ## License

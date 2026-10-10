@@ -1,0 +1,118 @@
+# swarm
+
+One task. Your team. Every contribution in view.
+
+A small CLI for a team of **Claude Code, Codex, OpenCode, and Pi** agents. They start as equal peers without assigned names or specialties, choose roles from the task, briefly vote for a coordinator, then work concurrently for the requested duration. They exchange public findings and directed messages, review proposals, and produce a continuously updated answer. There is no fixed Lead or round-robin work queue.
+
+**Node 22+. No UI build step. Local files and a local browser view.**
+
+## Start
+
+```sh
+npm run setup:harnesses # installs the pinned Pi CLI locally
+./swarm doctor
+./swarm demo --open
+./swarm run "Review this project and propose the three most useful improvements" --duration 600 --open
+./swarm run "Review this project from more angles" --agents 25 --duration 600 --open
+```
+
+The default is ten peers: three Claude Code, three Codex, two OpenCode, and two Pi. Codex, Claude Code, and OpenCode use their installed executables. The setup command installs and verifies Pi 1.1.0 inside the ignored `.swarm/tools/pi` directory; it changes no global packages or user configuration. Authenticate the harnesses you use; `doctor` checks availability. A missing binary or failed call stays visible. The 30-second demo is explicitly simulated and makes no model calls or file changes.
+
+Choose **2–100 agents** in team settings or pass `--agents COUNT`. The mixed harness roster repeats as the team grows. During a run, use **Add agents** in the browser or type `/add 5` in the terminal. New peers receive the task and shared context, then work alongside the existing team for the remaining budget. The leader, deadline, and existing contributions stay in place. New peers added during the initial election begin work after those original ballots finish; they do not manufacture additional election votes. An existing proposal keeps its original voting membership, while new proposals include the expanded team.
+
+To use a single installed harness for all ten peers:
+
+```sh
+./swarm run "Explain this project" --harness codex --cwd /path/to/project --duration 120 --open
+```
+
+For a global `swarm` command, run `npm install --global .`. You can also run `node bin/swarm.mjs`. The local `./swarm` launcher prefers the bundled Codex Node runtime when available; `SWARM_NODE` overrides it.
+
+## Models and inference
+
+Defaults verified against the installed Codex and LiteLLM model catalogs on October 10, 2026:
+
+| Harness | Default model | Authentication |
+| --- | --- | --- |
+| Codex | `gpt-6.1-sol` → `openai/gpt-6.1-sol` on gateway | LiteLLM when configured; otherwise installed Codex account |
+| Claude Code | `opus` (current Opus alias) | Installed Claude Code account |
+| OpenCode | `openai/gpt-6-astra` | LiteLLM gateway key |
+| Pi | `openai/gpt-6-astra` | LiteLLM gateway key |
+| Built-in `native` (optional) | `openai/gpt-6-astra` | LiteLLM gateway key |
+
+Codex uses an explicit current coding model. Claude's alias follows its installed CLI. OpenCode and Pi use their real harness loops with a private OpenAI-compatible gateway profile. When the gateway key is configured, Codex also uses an isolated Responses provider with the explicit gateway model alias. Without a gateway key, its installed account must support the selected model; catalog presence alone does not prove account access. These are explicit defaults, not an automatic promise to track every future release; change a model in the team settings or JSON config. Resolved model names are shown when the harness reports them.
+
+```sh
+export LITELLM_BASE_URL=https://gateway-dev.litellm-sandbox.ai
+# Set LITELLM_API_KEY securely in your environment.
+./swarm models
+# Optional: export LITELLM_MODEL=your-gateway-alias
+```
+
+`LITELLM_MODEL` overrides the gateway model for OpenCode, Pi, and `native`; it does not alter Claude/Codex account models. `swarm models` lists the aliases accessible to your key. No model is silently substituted, and failed inference never becomes a simulated answer.
+
+`--env-file FILE` privately reads the three `LITELLM_*` settings above, overriding inherited values. The local launcher loads `.env` beside itself if present; keep it git-ignored and private (`chmod 600 .env`). Credentials never enter browser state or team JSON.
+
+## How the organization works
+
+1. Every peer receives the task, harness/model roster, and an explicit instruction to collaborate. Defaults begin as Agent 01–10 with the same neutral instructions; the models propose their own names and roles and may revise them later. Stable peer IDs preserve attribution. All vote requests start together; the election is bounded to a small part of the budget.
+2. Valid ballots select a coordinator by plurality. Ties use sorted agent IDs. Missing/invalid votes are abstentions; if none arrive, the deterministic fallback is labeled as such. The coordinator is a working peer, not a preassigned Lead.
+3. All peers start independent work loops. Each new cycle receives shared findings, directed messages, assignments, proposals, votes, and human directions. Faster peers keep working while other calls remain in flight.
+4. The coordinator coordinates the roles and work the peers propose, then publishes provisional human-facing answer updates. Peers can propose decisions and independently agree, disagree, or abstain. A proposal is accepted only after a strict majority of the *other* peers explicitly agrees; missing votes never count as agreement. This is a collaboration protocol, not a distributed fault-tolerance guarantee.
+5. Work continues until the requested duration expires. Peers review, verify, refine, and address gaps instead of ending after one answer. The deadline cancels remaining calls and preserves the latest answer plus partial contributions. A completed time budget does not imply every task claim was verified.
+
+Repeated call failures retire the affected peer and remain visible. If the coordinator fails, a replacement uses the original ballots restricted to surviving peers, with the method displayed. If every peer fails, the run fails honestly instead of pretending to work for the remaining time. Provider availability and rate limits can prevent productive work.
+
+The default live budget is ten minutes (`--duration 600`, or the older `--timeout` alias); up to 24 hours. Keep the process and computer running. Stop cancels immediately instead of using the remaining budget.
+
+## See and steer
+
+- The workspace opens as a group chat: each agent shares public contributions and directed messages in one conversation, with harness/model marks, the elected leader, and activity visible. Your task and follow-up directions appear alongside them. **Result** holds the evolving human-facing answer separately. **New chat** starts a fresh task without stopping other conversations; select a saved chat to return to it.
+- Choose a **workstream** to follow one area of work and its current members. Agents declare task-specific streams and join existing ones through their public collaboration replies. Earlier messages keep the stream they belonged to when sent; global user directions remain visible across streams. **All work** shows the full conversation. Older saved runs without stream declarations remain ungrouped.
+- Existing chats open in **Review** mode with the conversation held still. Scrolling back, expanding a contribution, or choosing **Pause updates** also pauses the displayed chat, including streaming text; the swarm continues working. The update count shows incoming work, and **Follow live** or **Show latest** resumes deliberately. The composer remains usable while reviewing.
+- **Changes** shows actual added, modified, and deleted text files compared with a snapshot taken before the work begins. Select a file to read its unified diff. The final snapshot is saved after worker cleanup. These are observed project changes; overlapping chats and your own edits can contribute, so no individual agent is credited without evidence. Earlier runs without a baseline cannot reconstruct it retroactively. Private configuration, generated directories, symlinks, binary files, and oversized content are excluded; bounded previews are labeled.
+- Open **Subagents** to see each peer's harness, model, assignment, live activity, and latest output. Select any peer for its public contribution and full retained transcript.
+- Open **Brain** for the Lens-inspired spatial view: connected harness logos, a prominent leader badge, and explicit Active/Inactive labels on every peer. Active means the peer is participating in a running swarm, including voting and brief retries; completed, stopped, failed, and waiting peers are inactive. Select a peer to inspect its work. The live feed shows harness and model marks alongside public messages, tool activity, votes, and status changes; answer updates remain separate.
+- Inspect the election and decision votes rather than inferring agreement from animation. Stars are decorative, not usage metrics or private model reasoning.
+- Send a direction from the terminal or browser. Every peer receives it on its next cycle; a model request already in flight is not interrupted. After a work period finishes, either browser composer accepts your next message as a follow-up with the prior task, result, recent directions, and each peer’s retained contribution. No separate Continue action is required.
+- Use `/add COUNT` to grow the selected running team. Use `/stop`, the Stop button, or Ctrl+C to cancel. `/quit` closes the local server. Successful and partial output is retained.
+- `./swarm logs` prints the latest public conversation; `./swarm list` lists saved runs. `logs RUN-ID` selects history; `--json` prints structured records/events.
+- `./swarm run "Refine the result" --follow-up RUN-ID` includes the previous task and answer.
+- `./swarm ui --open` starts the local workspace and restores the latest run. Refresh reconnects without restarting agents. Ports are chosen automatically; `--port 4328` uses a fixed address.
+
+## Configure a team
+
+```sh
+./swarm init
+# Edit names, roles, harnesses, and models in swarm.json.
+./swarm run "Solve this task" --config swarm.json --duration 300 --open
+```
+
+See [examples/mixed-team.json](examples/mixed-team.json). A team has 2–100 peers with unique IDs. Use `swarm init --agents 25` to generate a larger editable configuration. The default has no fixed identities or specialties; a custom config can supply your own instructions. Harness IDs are `claude`, `codex`, `opencode`, `pi`, and optional `native`. Every peer needs an explicit model or uses the current default for its harness. Old nonempty `dependsOn` pipelines are rejected with a migration message: remove dependencies to use peer collaboration.
+
+## Workspace and persistence
+
+Agents work in `--cwd` (current directory by default). **Standard tools are on for real runs:** Claude Code, Codex, OpenCode and Pi use their own file, shell and network tools to implement and verify the requested work. The swarm coordinates them and displays their public output. It does not replace their tools with a custom MCP server or extension. Gateway profiles supply the selected model and credentials without editing your installed configuration.
+
+The composer shows the project folder and current tool mode. In **Project & actions**, choose **Standard tools** or **Inspect only** and use **Apply to current swarm** to change a running chat. New cycles receive the change; calls already in progress retain their previous tools. The leader, history and deadline remain unchanged. `--read-only` defaults to inspection; `--tools` explicitly enables standard tools. Demos and election calls never enable actions. Give concurrent writers distinct files; the collaboration prompt asks them to coordinate ownership, but a proposal vote is not a filesystem lock.
+
+Each CLI retains its own execution and permission behavior. Codex uses its native workspace-write sandbox with network access for work. OpenCode returns a tool denial for external-directory permission requests, keeping noninteractive turns running. Native tool output, command results and errors appear in the feed when reported by the harness. Browser control, desktop automation and this assistant’s connected apps are not automatically inherited.
+
+The optional `native` gateway adapter has its own bounded file and command tools. Its commands require macOS, allow networking in standard mode, and limit writes to the project and private temporary files. This fallback is separate from the four installed CLIs.
+
+Runs are private JSON files in `.swarm/runs` (`--data-dir` changes this). One process owns a data directory and supports up to four active conversations. Each conversation has its own team, duration, messages, and answer; switching chats does not stop work. Directions and Stop apply only to the selected conversation. Explicit follow-ups include the earlier task and answer, recent directions, and each peer’s retained public work; a fresh chat starts without that context. A restart marks unfinished runs interrupted rather than silently replaying calls. Public messages and tool activity are retained within bounded history limits; hidden reasoning is not collected. Do not put secrets in prompts or files agents are asked to inspect.
+
+The server binds only to `127.0.0.1`, validates Host/Origin, and requires a session bearer token for every API route. The local page receives it automatically. This is a local tool; no public deployment, tunnel, or account service is included.
+
+## Development
+
+```sh
+npm run check
+npm test
+```
+
+Tests cover configurable concurrency and live additions through the 100-peer limit, frozen proposal membership, election and vote validation, continued work through the deadline, steering, failure/replacement behavior, cancellation and process cleanup, persistence/recovery, API authentication and origin checks, gateway streaming, workspace file boundaries, and real CLI stream formats. Fixture tests do not prove live provider access.
+
+Visual and logo provenance: [web/assets/PROVENANCE.md](web/assets/PROVENANCE.md). Harness and model marks identify the selected runtime/provider; they do not imply endorsement.
+
+Harness configuration references: [Codex](https://learn.chatgpt.com/docs/config-file/config-reference), [Claude Code](https://code.claude.com/docs/en/model-config), [OpenCode](https://opencode.ai/docs/providers/), and [Pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent). Model availability above was additionally checked with actual calls to the configured accounts/gateway.
