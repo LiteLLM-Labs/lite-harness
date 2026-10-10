@@ -78,6 +78,11 @@ export function currentWork(agent) {
   return publicOutput(agent.currentOutput) || publicOutput(agent.output) || publicOutput(agent.lastContribution);
 }
 
+export function agentPresence(agent, run) {
+  const active = run?.status === 'running' && ['running', 'working'].includes(agent.status);
+  return {active, label: active ? 'Active' : 'Inactive', leader: Boolean(run?.coordinatorId && agent.id === run.coordinatorId)};
+}
+
 export function stageDescription(agent) {
   if (agent.status === 'running' || agent.status === 'working') return agent.activity || 'Working';
   if (agent.status === 'complete') return 'Complete';
