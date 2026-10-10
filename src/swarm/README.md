@@ -88,6 +88,6 @@ npm test
 
 The checks use Node built-ins. Tests cover DAG handoffs and concurrency, steering, cancellation and descendant cleanup, failure propagation, persistence/recovery, HTTP authentication and origin checks, gateway streaming/tool calls, file boundaries, and real CLI stream fixtures. Gateway fixtures are tests, not evidence of live gateway access.
 
-`swarm doctor` checks executable availability and whether a gateway key is present; it does not validate that key. The server defaults to port 4318; choose `--port 4328` if it is already used.
+`swarm doctor` checks executable availability and whether a gateway key is present; it does not validate that key. The CLI selects an available local port automatically; use `--port 4328` when you want a fixed address.
 
 Visual provenance and harness logo sources are in [web/assets/PROVENANCE.md](web/assets/PROVENANCE.md). The constellation adapts the original Lens artwork; particles are decorative, not usage metrics. Harness marks identify runtimes, not endorsements.
