@@ -2,7 +2,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {defaultTeam} from './team.mjs';
 
 export const DEMO_TASK = 'Design a faster onboarding flow for a developer tool.';
-export function demoTeam() { return defaultTeam(); }
+export function demoTeam(options) { return defaultTeam(options); }
 
 const FINDINGS = {
   'peer-01': ['Start with a working example before asking for configuration.', 'Separate the first useful result from optional setup. Measure time to first result.'],
@@ -21,11 +21,12 @@ export async function runDemoAgent({id, signal, onEvent, phase, cycle = 1, team,
   if (phase === 'election') {
     onEvent({type: 'status', text: 'Choosing a coordinator · simulated vote'});
     await delay(600, undefined, {signal});
-    const identity = {name: `Peer ${id.slice(-2)}`, role: `I will ${FINDINGS[id]?.[0]?.charAt(0).toLowerCase()}${FINDINGS[id]?.[0]?.slice(1) || 'contribute to the task.'}`};
+    const finding = FINDINGS[id]?.[0] || 'Contribute an independent recommendation and review peer findings.';
+    const identity = {name: `Peer ${id.replace(/^peer-/, '')}`, role: `I will ${finding.charAt(0).toLowerCase()}${finding.slice(1)}`};
     return {text: JSON.stringify({identity, candidateId: team.find((peer) => peer.id === 'peer-08')?.id || team[0].id, reason: 'Integration fits this task; every peer continues its own work. Simulated vote.'})};
   }
   onEvent({type: 'status', text: cycle === 1 ? 'Inspecting the onboarding task · demo' : 'Reviewing new peer findings · demo'});
-  await delay(900 + team.findIndex((peer) => peer.id === id) * 95, undefined, {signal});
+  await delay(900 + (Math.max(0, team.findIndex((peer) => peer.id === id)) % 10) * 95, undefined, {signal});
   onEvent({type: 'tool', text: 'Comparing shared contributions · simulated activity'});
   const options = FINDINGS[id] || ['Share an independent recommendation and review peer findings.'];
   const text = `${options[(cycle - 1) % options.length]}\n\nDemo contribution ${cycle}. No model calls or file changes were made.`;
