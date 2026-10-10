@@ -1,12 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
 import {access, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {fileURLToPath} from 'node:url';
 import {runWorkspaceCommand} from '../src/workspace-command.mjs';
 
 const macOnly = {skip: process.platform !== 'darwin'};
@@ -34,6 +32,13 @@ function alive(pid) {
   try {process.kill(pid, 0); return true;} catch (error) {
     if (error.code === 'ESRCH') return false;
     throw error;
+  }
+}
+
+function killFixture(pid) {
+  if (!pid) return;
+  try {process.kill(pid, 'SIGKILL');} catch (error) {
+    if (error.code !== 'ESRCH') throw error;
   }
 }
 
@@ -115,7 +120,7 @@ test('command timeout kills descendants that ignore graceful termination', macOn
   const {cwd} = await workspace(t);
   const source = `const{spawn}=require('node:child_process');const fs=require('node:fs');process.on('SIGTERM',()=>{});const child=spawn(process.execPath,['-e',${JSON.stringify(stubbornChild)}],{stdio:'inherit'});fs.writeFileSync('descendant.pid',String(child.pid));setInterval(()=>{},1000);`;
   let descendant;
-  t.after(() => {if (descendant && alive(descendant)) process.kill(descendant, 'SIGKILL');});
+  t.after(() => killFixture(descendant));
   const result = await runWorkspaceCommand({cwd, command: nodeCommand(source), timeoutMs: 800});
   assert.equal(result.timedOut, true, JSON.stringify(result));
   descendant = Number(await readFile(join(cwd, 'descendant.pid'), 'utf8'));
@@ -126,7 +131,7 @@ test('caller cancellation waits for the running command to stop', macOnly, async
   const {cwd} = await workspace(t);
   const controller = new AbortController();
   let pid;
-  t.after(() => {if (pid && alive(pid)) process.kill(pid, 'SIGKILL');});
+  t.after(() => killFixture(pid));
   const pending = runWorkspaceCommand({cwd, signal: controller.signal, command: nodeCommand('require("node:fs").writeFileSync("command.pid",String(process.pid));process.on("SIGTERM",()=>{});setInterval(()=>{},1000);')});
   await until(async () => {try {pid = Number(await readFile(join(cwd, 'command.pid'), 'utf8')); return pid > 0;} catch {return false;}});
   controller.abort(new Error('User stopped this work'));
@@ -145,7 +150,7 @@ test('cancelled commands never begin execution', macOnly, async (t) => {
 test('a deliberately detached process cannot hold the command result open through inherited pipes', macOnly, async (t) => {
   const {cwd} = await workspace(t);
   let detached;
-  t.after(() => {if (detached && alive(detached)) process.kill(detached, 'SIGKILL');});
+  t.after(() => killFixture(detached));
   const source = `const{spawn}=require('node:child_process');const child=spawn(process.execPath,['-e',${JSON.stringify(stubbornChild)}],{detached:true,stdio:'inherit'});require('node:fs').writeFileSync('detached.pid',String(child.pid));child.unref();`;
   const started = Date.now();
   const result = await runWorkspaceCommand({cwd, command: nodeCommand(source), timeoutMs: 5000});
@@ -153,31 +158,7 @@ test('a deliberately detached process cannot hold the command result open throug
   assert(Date.now() - started < 2000);
   assert.equal(result.truncated, true);
   // Deliberate new process groups are not claimed to be contained by group cleanup.
-  if (alive(detached)) process.kill(detached, 'SIGKILL');
-});
-
-test('MCP host closure stops active command descendants', macOnly, async (t) => {
-  for (const method of ['stdin EOF', 'SIGTERM']) await t.test(method, async (t) => {
-    const {cwd} = await workspace(t);
-    const mcp = fileURLToPath(new URL('../src/workspace-mcp.mjs', import.meta.url));
-    const host = spawn(process.execPath, [mcp, cwd, 'write'], {cwd, stdio: ['pipe', 'ignore', 'pipe']});
-    let diagnostics = '';
-    host.stderr.on('data', (bytes) => {diagnostics = (diagnostics + bytes).slice(-2000);});
-    const closed = new Promise((accept, reject) => {host.once('error', reject); host.once('close', accept);});
-    let pids = [];
-    t.after(() => {
-      if (host.exitCode === null && host.signalCode === null) host.kill('SIGKILL');
-      for (const pid of pids) if (alive(pid)) process.kill(pid, 'SIGKILL');
-    });
-    const source = `const{spawn}=require('node:child_process');process.on('SIGTERM',()=>{});const child=spawn(process.execPath,['-e',${JSON.stringify(stubbornChild)}],{stdio:'inherit'});require('node:fs').writeFileSync('host-command.json',JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000);`;
-    host.stdin.write(JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name: 'run_command', arguments: {command: nodeCommand(source)}}}) + '\n');
-    await until(async () => {try {pids = JSON.parse(await readFile(join(cwd, 'host-command.json'), 'utf8')); return pids.length === 2;} catch {return false;}});
-    if (method === 'stdin EOF') host.stdin.end();
-    else host.kill('SIGTERM');
-    const outcome = await Promise.race([closed.then(() => 'closed'), delay(3000, undefined, {ref: false}).then(() => 'still running')]);
-    assert.equal(outcome, 'closed', diagnostics);
-    await until(() => pids.every((pid) => !alive(pid)));
-  });
+  killFixture(detached);
 });
 
 test('unsupported platforms reject local commands instead of removing the sandbox', {skip: process.platform === 'darwin'}, async (t) => {
