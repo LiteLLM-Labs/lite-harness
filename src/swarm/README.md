@@ -64,8 +64,9 @@ The default live budget is ten minutes (`--duration 600`, or the older `--timeou
 
 ## See and steer
 
-- The brain view shows every peer's harness, model, assignment, live activity, and latest output. Select a card for the full public contribution and transcript.
-- The live feed shows harness and model marks alongside public messages, tool activity, votes, and status changes. The separate **For you** feed keeps the evolving answer readable.
+- The workspace opens as a chat: saved conversations in the sidebar, the human-facing answer in the center, and a composer below. **New chat** starts a fresh task without stopping other conversations. Select a saved chat to return to it.
+- Open **Subagents** to see each peer's harness, model, assignment, live activity, and latest output. Select any peer for its public contribution and full retained transcript.
+- Open **Brain** for the Lens-inspired spatial view: connected harness logos, shared context, and work attached to each agent. The live feed shows harness and model marks alongside public messages, tool activity, votes, and status changes; answer updates remain separate.
 - Inspect the election and decision votes rather than inferring agreement from animation. Stars are decorative, not usage metrics or private model reasoning.
 - Send a direction from the terminal or browser. Every peer receives it on its next cycle; a model request already in flight is not interrupted.
 - Use `/stop`, the Stop button, or Ctrl+C to cancel. `/quit` closes the local server. Successful and partial output is retained.
@@ -89,7 +90,7 @@ Agents inspect `--cwd` (current directory by default). Writes are off unless you
 
 The built-in harness exposes bounded list/read/write tools with traversal and symlink checks. Pi and OpenCode use the same bounded workspace tools via isolated harness profiles; their shell, external plugins, and unrelated MCP servers are disabled. Codex uses its own read-only/workspace-write sandbox. Claude uses a restricted file-tool allowlist. These harness permissions are not equivalent OS isolation; use a disposable workspace for untrusted projects.
 
-Runs are private JSON files in `.swarm/runs` (`--data-dir` changes this). One process owns a data directory; one run is active per process. A restart marks unfinished runs interrupted rather than silently replaying calls. Public messages and tool activity are retained within bounded history limits; hidden reasoning is not collected. Do not put secrets in prompts or files agents are asked to inspect.
+Runs are private JSON files in `.swarm/runs` (`--data-dir` changes this). One process owns a data directory and supports up to four active conversations. Each conversation has its own team, duration, messages, and answer; switching chats does not stop work. Directions and Stop apply only to the selected conversation. Explicit follow-ups include the earlier task and answer; a fresh chat starts without that context. A restart marks unfinished runs interrupted rather than silently replaying calls. Public messages and tool activity are retained within bounded history limits; hidden reasoning is not collected. Do not put secrets in prompts or files agents are asked to inspect.
 
 The server binds only to `127.0.0.1`, validates Host/Origin, and requires a session bearer token for every API route. The local page receives it automatically. This is a local tool; no public deployment, tunnel, or account service is included.
 
