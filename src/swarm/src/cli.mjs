@@ -8,6 +8,7 @@ import {SwarmRunner} from './runner.mjs';
 import {startServer} from './server.mjs';
 import {defaultTeam, defaultModel, validateAgentCount, MAX_AGENTS, HARNESSES} from './team.mjs';
 import {availableHarnesses, gatewayUrl} from './adapters.mjs';
+import {commandCapability} from './workspace-command.mjs';
 
 const HELP = `
   ◌ swarm  ·  one task, a team of agents
@@ -26,8 +27,9 @@ const HELP = `
   --model NAME                    Gateway alias or harness model
   --config FILE                   Team configuration (see swarm init)
   --agents COUNT                  Starting team size, 2–${MAX_AGENTS} (default: 10)
-  --cwd DIRECTORY                 Project the agents can inspect
-  --tools                         Allow file writes (default: read-only)
+  --cwd DIRECTORY                 Project where agents work
+  --read-only                     Inspect without local commands or file changes
+  --tools                         Enable local actions (the default for real runs)
   --duration SECONDS              Work for this long (default: 600; --timeout also works)
   --data-dir DIRECTORY            Saved runs (default: .swarm/runs)
   --port PORT                     Local view port (default: auto-select)
@@ -64,7 +66,7 @@ async function models() {
 
 async function main() {
   const {values, positionals} = parseArgs({allowPositionals: true, options: {
-    help: {type: 'boolean', short: 'h'}, version: {type: 'boolean', short: 'v'}, open: {type: 'boolean'}, json: {type: 'boolean'}, tools: {type: 'boolean'},
+    help: {type: 'boolean', short: 'h'}, version: {type: 'boolean', short: 'v'}, open: {type: 'boolean'}, json: {type: 'boolean'}, tools: {type: 'boolean'}, 'read-only': {type: 'boolean'},
     model: {type: 'string'}, harness: {type: 'string'}, config: {type: 'string'}, cwd: {type: 'string'}, timeout: {type: 'string'}, duration: {type: 'string'}, port: {type: 'string'},
     'data-dir': {type: 'string'}, 'follow-up': {type: 'string'}, 'env-file': {type: 'string'}, agents: {type: 'string'},
   }});
@@ -77,11 +79,14 @@ async function main() {
   const commands = ['run', 'demo', 'ui', 'list', 'logs', 'models', 'doctor', 'init'];
   const command = commands.includes(positionals[0]) ? positionals.shift() : 'run';
   const agentCount = values.agents === undefined ? undefined : validateAgentCount(Number(values.agents));
+  if (values.tools && values['read-only']) throw new Error('Choose either --tools or --read-only.');
   if (command === 'models') return models();
   if (command === 'doctor') {
     const harnesses = await availableHarnesses();
     say(`Node ${process.version}`);
     for (const [id, info] of Object.entries(harnesses)) say(`${info.available ? '✓' : '·'} ${id}${id === 'native' ? ` · gateway key ${info.configured ? 'present (not validated)' : 'missing'}` : info.available ? ' · installed' : ' · not installed'}`);
+    const commands = commandCapability();
+    say(`${commands.available ? '✓' : '·'} Shared local commands · ${commands.available ? `${commands.sandbox}, no command network access` : commands.reason}`);
     return;
   }
   const workspace = realpathSync(resolve(values.cwd || process.cwd()));
@@ -121,7 +126,7 @@ async function main() {
     const harness = values.harness || 'native';
     options = {...options, agents: defaultTeam({count: options.agentCount ?? options.agents?.length, harness, model: values.model ?? defaultModel(harness)})};
   }
-  options = {...options, task: positionals.join(' '), demo: command === 'demo', parentId: values['follow-up'], toolsEnabled: values.tools ?? options.toolsEnabled ?? false};
+  options = {...options, task: positionals.join(' '), demo: command === 'demo', parentId: values['follow-up'], toolsEnabled: values['read-only'] ? false : values.tools ?? options.toolsEnabled ?? true};
   if (values.duration && values.timeout) throw new Error('Use either --duration or --timeout, not both.');
   if (values.duration || values.timeout) options.timeoutSeconds = Number(values.duration || values.timeout);
   const port = Number(values.port || 0);
@@ -147,7 +152,7 @@ async function main() {
   process.once('SIGINT', () => void shutdown());
   try {
     if (values.open || command === 'ui') {
-      server = await startServer({runner, store, port, team: options.agents ?? defaultTeam({count: options.agentCount})});
+      server = await startServer({runner, store, port, team: options.agents ?? defaultTeam({count: options.agentCount}), toolsEnabled: options.toolsEnabled});
       if (values.json) say(JSON.stringify({type: 'server', url: server.url}));
       else say(`\n  ◌ swarm  ·  ${server.url}\n`);
       if (values.open) openBrowser(server.url);
@@ -189,7 +194,7 @@ async function main() {
     }
     if (command !== 'ui') {
       runner.start(options);
-      if (!values.json) say(`  ${runner.run.demo ? 'DEMO · simulated · no inference' : `${runner.run.agents.length} agents · read${runner.run.toolsEnabled ? '/write' : '-only'} workspace`}\n`);
+      if (!values.json) say(`  ${runner.run.demo ? 'DEMO · simulated · no inference or local actions' : `${runner.run.agents.length} agents · ${runner.run.toolsEnabled ? 'local actions enabled' : 'inspect only'} · ${workspace}`}\n`);
       await runner.done;
       process.exitCode = runner.run.status === 'complete' ? 0 : 1;
       if (!values.json) say(`  Saved ${runner.run.id}${server ? '\n  The view stays open. Ctrl+C to exit.' : ''}`);
