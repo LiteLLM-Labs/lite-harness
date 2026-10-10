@@ -31,3 +31,12 @@ Additional Chromium verification:
 - Source syntax checks pass after the final edits. The shell's npm invocation encountered a broken Homebrew Node dylib; the same repository check passed with the bundled Node runtime.
 
 Final screenshots: `chat-new.jpg`, `chat-new-active.jpg`, `chat-subagents.jpg`, `brain-spatial.jpg`, `mobile.jpg`, `subagents-mobile.jpg`, `agent-detail-mobile.jpg`, `brain-mobile.jpg`. `before-spatial.jpg` preserves the preceding grid layout as the before image. Demo captures remain visibly labelled simulated.
+
+## Status-first Brain follow-up
+
+- Brain nodes show the agent name, harness/model marks, and explicit Active or Inactive. Output previews, tools and cycle footers were removed from this view; clicking the leader node still opens full output, transcript and messages.
+- Actual 30-second demo at 1440×1000: 10 active / 0 inactive after election; one literal LEADER badge on Peer 08 and matching full leader name in the hub. Completed demo: 0 active / 10 inactive, preserving the same leader independently of activity.
+- Direct shared-helper checks covered mixed running/working/queued/complete/failed/stopped peers (2 active / 4 inactive), an inactive leader, absent run, coordinator replacement, and complete/failed/stopped/interrupted runs with stale running peers. All passed. Independent review found count/class/canvas consistency.
+- Mobile inspection at 390×844 found no horizontal overflow (document width 390). Labels and leader badge remain readable in the vertical constellation.
+- All JavaScript source syntax checks passed. No backend or public-server changes were made for this follow-up.
+- Captures: `brain-spatial.jpg`, `brain-inactive.jpg`, `brain-mobile.jpg`. All captures are the labelled simulated demo, with no invented mixed-state screenshot.
