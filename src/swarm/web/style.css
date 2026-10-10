@@ -290,7 +290,11 @@ body { background:#17191d; }
 .local-actions-control input:checked { background:#8eac9f; border-color:#aacabc; }
 .local-actions-control input:checked::before { transform:translateX(16px); background:#f1f8f5; }
 #actions-setting-note { margin:15px 0 22px; font-size:12px; }
-#actions-capability { font-size:12px; }
+.live-access-control { margin:0 0 20px; padding-top:16px; border-top:1px solid var(--line); }
+.live-access-control .primary-button { min-height:38px; font-size:12px; }
+.live-access-control p,.access-feedback { font-size:11px; line-height:1.7; color:#94adbf; margin:12px 0 0; }
+.access-feedback { color:#c1d8c7; margin-bottom:20px; }
+.local-actions-control input:disabled { opacity:.45; cursor:default; }
 #project-dialog .dialog-footer .dialog-note { margin:0; max-width:280px; }
 .tool-details { margin-top:9px; }
 .tool-status,.tool-path,.tool-empty { font-size:10px; line-height:1.6; color:#8eacbe; overflow-wrap:anywhere; }
