@@ -66,7 +66,7 @@ The default live budget is ten minutes (`--duration 600`, or the older `--timeou
 
 - The workspace opens as a chat: saved conversations in the sidebar, the human-facing answer in the center, and a composer below. **New chat** starts a fresh task without stopping other conversations. Select a saved chat to return to it.
 - Open **Subagents** to see each peer's harness, model, assignment, live activity, and latest output. Select any peer for its public contribution and full retained transcript.
-- Open **Brain** for the Lens-inspired spatial view: connected harness logos, shared context, and work attached to each agent. The live feed shows harness and model marks alongside public messages, tool activity, votes, and status changes; answer updates remain separate.
+- Open **Brain** for the Lens-inspired spatial view: connected harness logos, a prominent leader badge, and explicit Active/Inactive labels on every peer. Active means the peer is participating in a running swarm, including voting and brief retries; completed, stopped, failed, and waiting peers are inactive. Select a peer to inspect its work. The live feed shows harness and model marks alongside public messages, tool activity, votes, and status changes; answer updates remain separate.
 - Inspect the election and decision votes rather than inferring agreement from animation. Stars are decorative, not usage metrics or private model reasoning.
 - Send a direction from the terminal or browser. Every peer receives it on its next cycle; a model request already in flight is not interrupted.
 - Use `/stop`, the Stop button, or Ctrl+C to cancel. `/quit` closes the local server. Successful and partial output is retained.
