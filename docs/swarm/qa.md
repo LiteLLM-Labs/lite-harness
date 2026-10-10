@@ -83,3 +83,14 @@ Final evidence:
 - `changes-fixture-desktop.jpg` — labeled no-inference fixture with real added/modified/deleted files.
 
 The first Changes loading check exposed a null-element scroll restoration guard; it was corrected and the successful initial fetch, file selection and stable refresh were rechecked. A four-pixel review toolbar shift was also corrected; the subsequent measured shift was zero. Baseline snapshots exclude unsupported/private files by backend policy; the UI does not attribute file changes to an agent or workstream.
+
+
+## Standard harness tools and live access — 2026-10-10
+
+The frontend has one Standard tools / Inspect only switch. Separate network controls and custom command-capability warnings were removed. Current access comes from the selected run; the switch also sets the next work period. Applying a change to a live swarm is explicit and sends only `runId` and `toolsEnabled`. Older servers without `defaults.liveAccess` show a pending-update explanation.
+
+An isolated local test on port 4332 used two scripted peers, labeled “Standard tools UI test (no inference)”; no model or machine actions were invoked. Browser checks verified Standard tools → Inspect only → Standard tools, the exact request body, unchanged run ID / leader / deadline, preserved message history, and later contributions reflecting both captured tool settings. Access changes appeared as four authored Tool access messages. A held Apply response followed by New chat and typing preserved the new draft and showed no stale success message.
+
+Desktop (1440×1000) and mobile (390×844) screenshots were opened and inspected: `standard-tools-desktop.jpg` and `standard-tools-mobile.jpg`. The mobile dialog is 358px wide and fits within the viewport without horizontal overflow. All JavaScript syntax checks and the 21 targeted access/feed/parser tests passed with loopback access enabled. Parser coverage includes prose-prefixed complete/partial collaboration envelopes, escaped text, ordinary code/JSON preservation, and per-cycle stored transcripts.
+
+The isolated QA server was stopped after verification. Public servers and the user’s active swarms were left untouched.
