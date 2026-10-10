@@ -6,7 +6,7 @@ import {spawn} from 'node:child_process';
 import {RunStore} from './store.mjs';
 import {SwarmRunner} from './runner.mjs';
 import {startServer} from './server.mjs';
-import {defaultTeam, defaultModel, HARNESSES} from './team.mjs';
+import {defaultTeam, defaultModel, validateAgentCount, MAX_AGENTS, HARNESSES} from './team.mjs';
 import {availableHarnesses, gatewayUrl} from './adapters.mjs';
 
 const HELP = `
@@ -25,6 +25,7 @@ const HELP = `
   --harness NAME                  Override all peers: codex, claude, opencode, pi, native
   --model NAME                    Gateway alias or harness model
   --config FILE                   Team configuration (see swarm init)
+  --agents COUNT                  Starting team size, 2–${MAX_AGENTS} (default: 10)
   --cwd DIRECTORY                 Project the agents can inspect
   --tools                         Allow file writes (default: read-only)
   --duration SECONDS              Work for this long (default: 600; --timeout also works)
@@ -37,8 +38,8 @@ const HELP = `
   LITELLM_API_KEY / LITELLM_MODEL / LITELLM_BASE_URL
   Default gateway: https://gateway-dev.litellm-sandbox.ai
 
-  While running: type a direction + Enter; /stop to cancel.
-  10 peers start by electing a coordinator, then work concurrently.
+  While running: type a direction + Enter; /add 5 adds five peers; /stop cancels.
+  Peers elect a coordinator, then work concurrently. Ten is the default, not a fixed team size.
   Directions reach every peer on its next work cycle.
 `;
 
@@ -65,7 +66,7 @@ async function main() {
   const {values, positionals} = parseArgs({allowPositionals: true, options: {
     help: {type: 'boolean', short: 'h'}, version: {type: 'boolean', short: 'v'}, open: {type: 'boolean'}, json: {type: 'boolean'}, tools: {type: 'boolean'},
     model: {type: 'string'}, harness: {type: 'string'}, config: {type: 'string'}, cwd: {type: 'string'}, timeout: {type: 'string'}, duration: {type: 'string'}, port: {type: 'string'},
-    'data-dir': {type: 'string'}, 'follow-up': {type: 'string'}, 'env-file': {type: 'string'},
+    'data-dir': {type: 'string'}, 'follow-up': {type: 'string'}, 'env-file': {type: 'string'}, agents: {type: 'string'},
   }});
   if (values['env-file']) {
     const local = parseEnv(readFileSync(resolve(values['env-file']), 'utf8'));
@@ -75,6 +76,7 @@ async function main() {
   if (values.help || !positionals.length) return say(HELP);
   const commands = ['run', 'demo', 'ui', 'list', 'logs', 'models', 'doctor', 'init'];
   const command = commands.includes(positionals[0]) ? positionals.shift() : 'run';
+  const agentCount = values.agents === undefined ? undefined : validateAgentCount(Number(values.agents));
   if (command === 'models') return models();
   if (command === 'doctor') {
     const harnesses = await availableHarnesses();
@@ -86,7 +88,7 @@ async function main() {
   if (command === 'init') {
     const destination = join(workspace, 'swarm.json');
     if (existsSync(destination)) throw new Error('swarm.json already exists. Edit it to configure your team.');
-    writeFileSync(destination, JSON.stringify({agents: defaultTeam(), timeoutSeconds: 600}, null, 2) + '\n', {flag: 'wx'});
+    writeFileSync(destination, JSON.stringify({agents: defaultTeam({count: agentCount}), timeoutSeconds: 600}, null, 2) + '\n', {flag: 'wx'});
     return say(`Created ${destination}`);
   }
   const store = new RunStore(resolve(values['data-dir'] || join(workspace, '.swarm', 'runs')));
@@ -112,10 +114,12 @@ async function main() {
   }
   let options = values.config ? JSON.parse(readFileSync(resolve(values.config), 'utf8')) : {};
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('Config must be a JSON object.');
+  if (agentCount !== undefined && options.agents && !values.harness && !values.model) throw new Error('Use --agents with a generated team, or resize the agents array in your config.');
+  if (agentCount !== undefined) options = {...options, agentCount};
   if (values.harness && !HARNESSES.includes(values.harness)) throw new Error(`Unknown harness: ${values.harness}`);
   if (values.harness || values.model) {
     const harness = values.harness || 'native';
-    options = {...options, agents: defaultTeam({harness, model: values.model ?? defaultModel(harness)})};
+    options = {...options, agents: defaultTeam({count: options.agentCount ?? options.agents?.length, harness, model: values.model ?? defaultModel(harness)})};
   }
   options = {...options, task: positionals.join(' '), demo: command === 'demo', parentId: values['follow-up'], toolsEnabled: values.tools ?? options.toolsEnabled ?? false};
   if (values.duration && values.timeout) throw new Error('Use either --duration or --timeout, not both.');
@@ -143,7 +147,7 @@ async function main() {
   process.once('SIGINT', () => void shutdown());
   try {
     if (values.open || command === 'ui') {
-      server = await startServer({runner, store, port});
+      server = await startServer({runner, store, port, team: options.agents ?? defaultTeam({count: options.agentCount})});
       if (values.json) say(JSON.stringify({type: 'server', url: server.url}));
       else say(`\n  ◌ swarm  ·  ${server.url}\n`);
       if (values.open) openBrowser(server.url);
@@ -169,7 +173,13 @@ async function main() {
         if (line.trim() === '/quit') return void shutdown();
         if (!line.trim()) return;
         try {
-          if (line.trim() === '/stop') {
+          if (/^\/add(?:\s|$)/.test(line.trim())) {
+            const match = line.trim().match(/^\/add(?:\s+(\d+))?$/);
+            if (!match) throw new Error('Use /add COUNT, for example /add 5.');
+            const count = validateAgentCount(Number(match[1] ?? 1), {minimum: 1});
+            const run = server ? server.conversations.addAgents({count}) : runner.addAgents({count});
+            say(`  Added ${count} peers · ${run.agents.length} agents now working together.`);
+          } else if (line.trim() === '/stop') {
             if (server) void server.conversations.stop().catch((error) => say(error.message));
             else runner.stop();
           } else if (server) server.conversations.steer(line);
