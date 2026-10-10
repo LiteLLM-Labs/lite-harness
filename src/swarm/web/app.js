@@ -1,60 +1,43 @@
-import { Constellation, layoutAgents } from './assets/constellation.js';
+import { Constellation } from './assets/constellation.js';
+import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, currentWork, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
 
 const $ = (selector) => document.querySelector(selector);
-const MARKS = { native: 'swarm', codex: 'codex', 'claude-code': 'claude-code', claude: 'claude-code', opencode: 'opencode' };
-const HARNESS_NAMES = { native: 'Swarm native', codex: 'Codex', 'claude-code': 'Claude Code', claude: 'Claude Code', opencode: 'OpenCode' };
-const ROLES = [
-  { id: 'scout', name: 'Scout', role: 'Explore the task and inspect relevant context. Find requirements, evidence, and constraints. Do not modify files.', dependsOn: [] },
-  { id: 'builder', name: 'Builder', role: 'Develop the solution. If file writes are enabled, implement the requested deliverable. Otherwise provide a concrete proposal. State what you verified.', dependsOn: [] },
-  { id: 'critic', name: 'Critic', role: 'Review the scout and builder contributions. Identify concrete defects, contradictions, and missing evidence. Do not modify files.', dependsOn: ['scout', 'builder'] },
-  { id: 'lead', name: 'Lead', role: 'Synthesize the team contributions into the final useful answer. Account for review findings and distinguish completed work from proposals. Do not modify files.', dependsOn: ['scout', 'builder', 'critic'] },
-];
 let state = { run: null, runs: [], defaults: {}, capabilities: [] };
-let selectedId = null;
 let historicalRun = null;
 let configuredTeam = null;
+let editingTeam = [];
+let selectedId = null;
+let filterId = '';
+let selectedResult = null;
 let busy = false;
-let feedSignature = '';
-let graphSignature = '';
+let defaultsApplied = false;
 let lastRunId = null;
+let feedSignature = '';
+let resultsSignature = '';
+let filterSignature = '';
+let messageSignature = '';
 let toastTimer;
+let layoutPending = false;
+const expandedEvents = new Set();
+const cards = new Map();
 const field = new Constellation($('#constellation'));
 
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = String(text);
-  return node;
-}
-
-function logo(harness, className = '') {
-  const image = element('img', className);
-  image.src = `/assets/${MARKS[harness] || 'swarm'}.svg`;
-  image.alt = '';
-  image.width = 24;
-  image.height = 24;
-  return image;
-}
-
 function defaultTeam() {
-  return ROLES.map((role) => ({ ...role, harness: 'native', model: state.defaults.model || '', status: 'queued' }));
+  return (state.defaults.team || []).map((agent) => ({ ...agent, status: 'queued' }));
 }
-
-function viewedRun() {
-  return historicalRun || state.run;
+function viewedRun() { return historicalRun || state.run; }
+function displayAgents() { return viewedRun()?.agents || configuredTeam || defaultTeam(); }
+function agentById(id) { return displayAgents().find((agent) => agent.id === id); }
+function agentName(id) { return id === 'all' ? 'everyone' : id === 'user' ? 'You' : agentById(id)?.name || id || 'Swarm'; }
+function harnessDefaultModel(harness) {
+  return state.defaults.harnessModels?.[harness] ?? state.defaults.team?.find((agent) => agent.harness === harness)?.model ?? (harness === 'native' ? state.defaults.model || '' : '');
 }
-
-function displayAgents() {
-  return viewedRun()?.agents || configuredTeam || defaultTeam();
-}
-
 function toast(message) {
   clearTimeout(toastTimer);
   $('#toast').textContent = message;
   $('#toast').hidden = false;
   toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6500);
 }
-
 async function api(path, body) {
   const response = await fetch(path, {
     method: body === undefined ? 'GET' : 'POST',
@@ -65,257 +48,377 @@ async function api(path, body) {
   if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
   return result;
 }
-
-function shortModel(model, harness) {
-  return model || `${HARNESS_NAMES[harness] || harness} default`;
+function runDuration() {
+  const seconds = $('#timeout-select').value === 'custom' ? Number($('#custom-duration').value) * 60 : Number($('#timeout-select').value);
+  if (!Number.isInteger(seconds) || seconds < 60 || seconds > 86400) throw new Error('Choose a work duration between 1 minute and 24 hours.');
+  return seconds;
 }
-
-function harnessDefaultModel(harness) {
-  if (harness === 'native') return state.defaults.model || '';
-  return harness === 'claude' ? 'sonnet' : '';
+function updateDurationLabel() {
+  $('#custom-duration-label').hidden = $('#timeout-select').value !== 'custom';
+  try { $('#duration-label').textContent = `${runDuration() / 60} minutes of work`; }
+  catch { $('#duration-label').textContent = 'Choose a duration'; }
 }
-
-function elapsed(start, end = Date.now()) {
-  if (!start) return '0s';
-  const seconds = Math.max(0, Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 1000));
-  if (!Number.isFinite(seconds)) return '0s';
-  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s` : `${seconds}s`;
-}
-
-function eventTime(at, run) {
-  return run?.startedAt ? `+${elapsed(run.startedAt, at)}` : '';
-}
-
-function stageDescription(agent) {
-  if (agent.status === 'running') return agent.activity || 'Working';
-  if (agent.status === 'complete') return 'Complete';
-  if (agent.status === 'failed') return 'Failed';
-  if (agent.status === 'stopped') return 'Stopped';
-  return agent.dependsOn?.length ? 'Waiting for context' : 'Ready';
-}
-
-function selectAgent(id) {
-  selectedId = selectedId === id ? null : id;
-  if (selectedId) setTab('conversation');
-  feedSignature = '';
-  render();
-}
-
-function renderGraph(agents, run) {
-  const signature = JSON.stringify(agents.map(({ id, name, harness, model, status, activity }) => ({ id, name, harness, model, status, activity }))) + selectedId;
-  field.update(agents, selectedId, run?.status === 'running');
-  if (signature === graphSignature) return;
-  graphSignature = signature;
-  const focusedKey = document.activeElement?.dataset.focusKey;
-  const fragment = document.createDocumentFragment();
-  const hub = element('button', 'hub');
-  hub.type = 'button';
-  hub.dataset.focusKey = 'hub';
-  hub.setAttribute('aria-label', 'Show all agents and the shared conversation');
-  hub.append(logo('native'), element('span', 'hub-label', 'SHARED CONTEXT'));
-  hub.addEventListener('click', () => { selectedId = null; feedSignature = ''; render(); });
-  fragment.append(hub);
-  layoutAgents(agents).forEach((agent) => {
-    const button = element('button', `agent-node ${agent.status || 'queued'}${selectedId === agent.id ? ' selected' : ''}`);
-    button.type = 'button';
-    button.dataset.focusKey = `node-${agent.id}`;
-    button.style.left = `${agent.x / 19.2}%`;
-    button.style.top = `${agent.y / 10.8}%`;
-    button.setAttribute('aria-label', `${agent.name}, ${HARNESS_NAMES[agent.harness] || agent.harness}, ${agent.status || 'ready'}. Show conversation.`);
-    button.setAttribute('aria-pressed', String(selectedId === agent.id));
-    const orb = element('span', 'agent-orb');
-    orb.append(logo(agent.harness), element('span', 'orb-status'));
-    button.append(orb, element('span', 'agent-node-name', agent.name), element('span', 'agent-node-model', shortModel(agent.model, agent.harness)), element('span', 'agent-node-status', stageDescription(agent)));
-    button.addEventListener('click', () => selectAgent(agent.id));
-    fragment.append(button);
-  });
-  $('#graph').replaceChildren(fragment);
-  const rows = agents.map((agent) => {
-    const row = element('button', `agent-row ${agent.status || 'queued'}${selectedId === agent.id ? ' selected' : ''}`);
-    row.type = 'button';
-    row.dataset.focusKey = `row-${agent.id}`;
-    row.setAttribute('aria-pressed', String(selectedId === agent.id));
-    row.setAttribute('aria-label', `Follow ${agent.name}: ${stageDescription(agent)}`);
-    const text = element('span', 'agent-text');
-    text.append(element('span', 'agent-name', agent.name), element('span', 'agent-meta', HARNESS_NAMES[agent.harness] || agent.harness));
-    row.append(logo(agent.harness), text, element('span', 'status-dot'));
-    row.addEventListener('click', () => selectAgent(agent.id));
-    return row;
-  });
-  $('#agent-list').replaceChildren(...rows);
-  $('#agent-list').style.gridTemplateColumns = agents.length > 4 ? 'repeat(4,minmax(0,1fr))' : '';
-  if (focusedKey) document.querySelector(`[data-focus-key="${CSS.escape(focusedKey)}"]`)?.focus({ preventScroll: true });
+function updateClock() {
+  const run = viewedRun();
+  if (!run) { $('#elapsed').textContent = 'READY WHEN YOU ARE'; return; }
+  const spent = `${elapsed(run.startedAt, run.endedAt || Date.now())} ELAPSED`;
+  $('#elapsed').textContent = run.status === 'running' && run.deadlineAt ? `${elapsed(Date.now(), run.deadlineAt)} LEFT · ${spent}` : spent;
 }
 
 function renderStatus(run, agents) {
   const running = run?.status === 'running';
   const currentRunning = state.run?.status === 'running';
-  const canSteer = running && !historicalRun && agents.some((agent) => agent.status === 'queued');
+  const electing = running && run.phase === 'electing';
+  const active = agents.filter((agent) => ['running', 'working'].includes(agent.status)).length;
+  const cycles = agents.reduce((total, agent) => total + (Number(agent.cycles) || 0), 0);
   const completed = agents.filter((agent) => agent.status === 'complete').length;
-  const active = agents.filter((agent) => agent.status === 'running').length;
-  const statusLabels = { running: 'YOUR SWARM IS WORKING', complete: 'THE WORK COMES TOGETHER', failed: 'THIS RUN NEEDS ATTENTION', stopped: 'SWARM STOPPED', interrupted: 'RUN INTERRUPTED' };
-  $('#run-state').textContent = historicalRun ? 'FROM YOUR RECENT RUNS' : statusLabels[run?.status] || 'A LITTLE COORDINATION. A LOT OF POSSIBILITY.';
+  const statusLabels = { running: 'THE SWARM IS WORKING', complete: 'WORK PERIOD COMPLETE', failed: 'THIS RUN NEEDS ATTENTION', stopped: 'SWARM STOPPED', interrupted: 'RUN INTERRUPTED' };
+  $('#run-state').textContent = historicalRun ? 'FROM YOUR RECENT RUNS' : electing ? 'THE TEAM IS ELECTING ITS COORDINATOR' : statusLabels[run?.status] || 'INDEPENDENT MINDS. SHARED MOMENTUM.';
   $('#demo-label').hidden = !run?.demo;
   $('#run-dot').style.background = running ? 'var(--gold)' : run?.status === 'failed' ? '#df9898' : '';
-  const headline = $('#headline');
   if (run) {
-    headline.classList.add('run-headline');
-    headline.textContent = run.task;
-    headline.title = run.task;
+    $('#headline').classList.add('run-headline');
+    $('#headline').textContent = run.task;
+    $('#headline').title = run.task;
   } else {
-    headline.classList.remove('run-headline');
-    headline.replaceChildren(document.createTextNode('One task. '), element('span', '', 'Many minds.'));
-    headline.removeAttribute('title');
+    $('#headline').classList.remove('run-headline');
+    $('#headline').replaceChildren(document.createTextNode('One task. '), element('span', '', agents.length === 10 ? 'Ten perspectives.' : 'Many perspectives.'));
+    $('#headline').removeAttribute('title');
   }
   const captions = {
-    running: `${active} ${active === 1 ? 'mind' : 'minds'} at work. Every conversation, in the open.`,
-    complete: 'Different perspectives. One considered answer.',
-    failed: 'Read the conversation for details, then start a fresh run.',
-    stopped: 'Progress is saved. Your conversations are still here.',
-    interrupted: 'This run was interrupted. Its conversation has been preserved.',
+    running: electing ? 'Each agent votes. The counted result decides who coordinates.' : `${active} agents at work. New findings keep arriving while they collaborate.`,
+    complete: 'The work period is complete. Explore every contribution and result.',
+    failed: 'Read the conversation for details. Completed work stays available.',
+    stopped: 'The swarm has stopped. Every contribution is still here.',
+    interrupted: 'This run was interrupted. Its work has been preserved.',
   };
-  $('#hero-caption').textContent = captions[run?.status] || 'Bring your favorite harnesses. Let them work together.';
-  $('#progress-text').textContent = run ? `${completed} of ${agents.length} complete${running ? ` · ${active} working` : ''}` : `${agents.length} agents · 3 stages`;
-  $('#elapsed').textContent = run ? `${elapsed(run.startedAt, run.endedAt || Date.now())} ELAPSED` : 'READY WHEN YOU ARE';
-  $('#stage-hint').textContent = historicalRun ? 'Viewing a saved run. Use Recent runs to return.' : 'Choose any agent to follow its conversation.';
+  $('#hero-caption').textContent = captions[run?.status] || 'The team elects its coordinator. Every agent keeps working.';
+  $('#progress-text').textContent = run ? running ? `${active}/${agents.length} working · ${cycles} contributions` : `${completed}/${agents.length} complete · ${cycles} contributions` : `${agents.length || '…'} agents · concurrent work`;
+  const coordinator = agents.find((agent) => agent.id === run?.coordinatorId);
+  const voteCount = run?.election?.votes?.length || 0;
+  const coordinatorKind = run?.coordinatorChanges?.length ? 'replacement' : run?.election?.method?.includes('fallback') ? 'fallback' : 'elected';
+  $('#coordinator-label').textContent = coordinator ? `${coordinator.name} · ${coordinatorKind} coordinator` : electing ? `Election · ${voteCount}/${run.election?.eligibleVoters || agents.length} votes` : 'Coordinator elected by the team';
+  $('#election-button').classList.toggle('elected', Boolean(coordinator));
+  $('#stage-hint').textContent = historicalRun ? 'Viewing a saved run. Use Recent runs to return.' : 'Open any agent to see its full work and conversation.';
   $('#stream-label').replaceChildren(element('span', 'status-dot'), document.createTextNode(running ? 'LIVE' : run ? run.status.toUpperCase() : 'STANDING BY'));
   $('#run-button').hidden = currentRunning;
-  $('#run-button').disabled = busy;
+  $('#run-button').disabled = busy || !(configuredTeam || defaultTeam()).length;
   $('#stop-button').hidden = !currentRunning;
   $('#stop-button').disabled = busy;
   $('#task-input').disabled = currentRunning;
   $('#demo-button').disabled = currentRunning || busy;
   $('#team-button').disabled = currentRunning;
-  $('#steering-input').disabled = !canSteer || busy;
-  $('#steering-button').disabled = !canSteer || busy;
-  $('#steering-note').textContent = canSteer ? 'Your guidance is shared with agents in the next stage.' : running && !historicalRun ? 'All agents have started. Add new guidance in your next run.' : 'Stay close. Step in whenever you need to.';
-  $('#gateway-label').textContent = 'LiteLLM gateway';
+  $('#steering-input').disabled = !running || Boolean(historicalRun) || busy;
+  $('#steering-button').disabled = !running || Boolean(historicalRun) || busy;
+  $('#steering-note').textContent = running && !historicalRun ? 'Your guidance is shared with the team’s next work cycles.' : 'Your guidance joins the shared context.';
   $('#gateway-label').title = state.defaults.baseUrl || 'Gateway configured by your local CLI';
+  $('#team-button-label').textContent = `Configure ${(configuredTeam || defaultTeam()).length || 'your'} agents`;
+  updateDurationLabel();
+  if (running && run.deadlineAt) $('#duration-label').textContent = `${elapsed(run.startedAt, run.deadlineAt)} ${run.demo ? 'demo playback' : 'work budget'}`;
+  updateClock();
 }
 
-// Render a deliberately small safe text subset: model text never becomes HTML.
-function richText(container, text) {
-  const parts = String(text || '').split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
-  parts.forEach((part) => {
-    if (part.startsWith('`') && part.endsWith('`')) container.append(element('code', '', part.slice(1, -1)));
-    else if (part.startsWith('**') && part.endsWith('**')) container.append(element('strong', '', part.slice(2, -2)));
-    else container.append(document.createTextNode(part));
+function renderCards(agents, run) {
+  const ids = new Set(agents.map((agent) => agent.id));
+  for (const [id, entry] of cards) {
+    if (!ids.has(id)) { entry.node.remove(); cards.delete(id); }
+  }
+  for (const agent of agents) {
+    const coordinator = agent.id === run?.coordinatorId;
+    const output = currentWork(agent);
+    const vote = run?.election?.votes?.find((entry) => entry.voterId === agent.id);
+    const assignment = agent.assignment || agent.role || 'Waiting for an assignment.';
+    const preview = output ? output.replace(/\s+/g, ' ').slice(-340) : vote ? `Voted for ${agentName(vote.candidateId)}. ${vote.reason || ''}` : run?.phase === 'electing' ? 'Considering the team and choosing a coordinator…' : run ? 'Waiting for a public contribution…' : 'Its actual work will appear here as it happens.';
+    const replacement = coordinator && Boolean(run?.coordinatorChanges?.length || run?.election?.method?.includes('fallback'));
+    const signature = JSON.stringify([agent.name, agent.harness, agent.model, agent.status, agent.cycles, agent.activity, assignment, preview, coordinator, replacement, selectedId]);
+    let entry = cards.get(agent.id);
+    if (!entry) {
+      const node = element('button', 'agent-card');
+      node.type = 'button';
+      node.dataset.agentId = agent.id;
+      node.addEventListener('click', () => openAgent(agent.id));
+      entry = { node, signature: '' };
+      cards.set(agent.id, entry);
+      $('#graph').append(node);
+    }
+    if (signature === entry.signature) continue;
+    entry.signature = signature;
+    const button = entry.node;
+    button.className = `agent-card ${agent.status || 'queued'}${coordinator ? ' coordinator' : ''}${selectedId === agent.id ? ' selected' : ''}`;
+    button.setAttribute('aria-label', `Open ${agent.name}, ${HARNESS_NAMES[agent.harness] || agent.harness}, ${stageDescription(agent)}. Full output and transcript.`);
+    const header = element('span', 'agent-card-header');
+    const status = element('span', 'card-status');
+    status.append(element('span', 'status-dot'));
+    header.append(logo(agent.harness), element('span', 'agent-card-name', agent.name), status);
+    const model = element('span', 'agent-card-model');
+    model.append(modelLogo(agent.model, agent.harness), element('span', '', shortModel(agent.model, agent.harness)));
+    model.title = `${HARNESS_NAMES[agent.harness] || agent.harness} · ${shortModel(agent.model, agent.harness)}`;
+    const footer = element('span', 'card-footer');
+    footer.append(element('span', '', `${Number(agent.cycles) || 0} cycles · ${stageDescription(agent)}`));
+    if (coordinator) footer.append(element('span', 'coordinator-badge', replacement ? 'COORDINATOR' : 'ELECTED'));
+    footer.append(element('span', 'open-detail', '↗'));
+    button.replaceChildren(header, model, element('span', 'agent-assignment', assignment), element('span', `agent-preview${output || vote ? '' : ' waiting'}`, preview), footer);
+  }
+  scheduleFieldLayout();
+}
+
+function scheduleFieldLayout() {
+  if (layoutPending) return;
+  layoutPending = true;
+  requestAnimationFrame(() => {
+    layoutPending = false;
+    const stage = $('#stage').getBoundingClientRect();
+    if (!stage.width || !stage.height) return;
+    const position = (node) => {
+      const rect = node.getBoundingClientRect();
+      return { x: (rect.left + rect.width / 2 - stage.left) / stage.width * 1920, y: (rect.top + rect.height / 2 - stage.top) / stage.height * 1080 };
+    };
+    const agents = displayAgents().map((agent) => ({ ...agent, ...position(cards.get(agent.id).node) }));
+    field.update(agents, selectedId, viewedRun()?.status === 'running', position($('#election-button')));
   });
 }
+new ResizeObserver(scheduleFieldLayout).observe($('#stage'));
 
-function eventElement(event, agents, run) {
-  const agent = agents.find((entry) => entry.id === event.agentId);
-  const isUser = event.agentId === 'user' || event.role === 'user' || (!event.agentId && event.type === 'message');
-  const card = element('article', `event ${event.type || 'message'}${isUser ? ' user' : ''}`);
+function allEvents(run) {
+  if (!run) return [];
+  const events = [...(run.events || [])];
+  const existing = new Set(events.map((event) => `${event.agentId || event.from}|${event.text}`));
+  for (const message of run.messages || []) {
+    if (existing.has(`${message.from}|${message.text}`)) continue;
+    events.push({ ...message, agentId: message.from, toAgentId: message.to, type: message.kind || 'message' });
+  }
+  return events.sort((a, b) => Number(new Date(a.at)) - Number(new Date(b.at)));
+}
+function eventElement(event, run, full = false) {
+  const agent = agentById(event.agentId || event.from);
+  const isUser = event.agentId === 'user' || event.from === 'user' || event.role === 'user';
+  const type = event.kind || event.type || 'message';
+  const card = element('article', `event ${type}${isUser ? ' user' : ''}`);
   const header = element('div', 'event-header');
-  header.append(logo(agent?.harness || 'native'), element('span', 'event-name', agent?.name || (isUser ? 'You' : 'Swarm')));
-  if (event.type && event.type !== 'message') header.append(element('span', 'event-type', event.type));
-  header.append(element('span', 'event-time', eventTime(event.at, run)));
-  const body = element('div', 'event-body');
-  richText(body, event.text || '');
-  card.append(header, body);
+  header.append(identityLogos(agent));
+  const name = agent ? element('button', 'event-name event-agent-link', agent.name) : element('span', 'event-name', isUser ? 'You' : 'Swarm');
+  if (agent) name.addEventListener('click', () => openAgent(agent.id));
+  header.append(name);
+  const recipient = event.toAgentId || event.to;
+  if (recipient && recipient !== 'all') header.append(element('span', 'event-recipient', `→ ${agentName(recipient)}`));
+  if (type !== 'message') header.append(element('span', 'event-type', type));
+  header.append(element('span', 'event-time', run?.startedAt ? `+${elapsed(run.startedAt, event.at)}` : ''));
+  card.append(header);
+  if (agent) card.append(element('div', 'event-model', `${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}`));
+  const text = event.text || '';
+  const expanded = full || expandedEvents.has(event.id);
+  const body = element('div', `event-body${expanded ? '' : ' preview'}`);
+  richText(body, text);
+  card.append(body);
+  if (event.proposalId) {
+    const proposal = run?.proposals?.find((item) => item.id === event.proposalId);
+    const consensus = proposal?.consensus || event.consensus;
+    const count = consensusLabel(consensus);
+    if (count) card.append(element('div', 'event-consensus', `${count} · ${Number(consensus.disagree) || 0} disagree · ${Number(consensus.abstain) || 0} abstain`));
+  }
+  if (text.length > 200 && !full) {
+    const more = element('button', 'event-read-more', expanded ? 'Show less' : 'Read full message ↗');
+    more.addEventListener('click', () => {
+      if (expandedEvents.has(event.id)) expandedEvents.delete(event.id); else expandedEvents.add(event.id);
+      feedSignature = '';
+      renderFeed(viewedRun(), displayAgents());
+    });
+    card.append(more);
+  }
   return card;
 }
-
+function renderFilter(agents) {
+  const signature = agents.map((agent) => `${agent.id}:${agent.name}`).join('|');
+  if (signature === filterSignature) return;
+  filterSignature = signature;
+  if (filterId && !agents.some((agent) => agent.id === filterId)) filterId = '';
+  const options = [element('option', '', 'All agents')];
+  options[0].value = '';
+  for (const agent of agents) {
+    const option = element('option', '', agent.name);
+    option.value = agent.id;
+    options.push(option);
+  }
+  $('#agent-filter').replaceChildren(...options);
+  $('#agent-filter').value = filterId;
+}
 function renderFeed(run, agents) {
-  const selectedAgent = agents.find((agent) => agent.id === selectedId);
-  const events = (run?.events || []).filter((event) => !selectedId || event.agentId === selectedId || event.toAgentId === selectedId || !event.agentId || event.agentId === 'user');
-  $('#filter-label').textContent = selectedAgent ? `${selectedAgent.name} · ${HARNESS_NAMES[selectedAgent.harness] || selectedAgent.harness}` : 'All agents';
-  $('#clear-filter').hidden = !selectedId;
-  $('#feed-info').hidden = Boolean(selectedId);
-  $('#event-count').textContent = String(events.length);
-  const visibleOutputs = selectedAgent ? [selectedAgent] : agents.filter((agent) => agent.status === 'running');
-  const signature = JSON.stringify([run?.id, selectedId, events, visibleOutputs.map(({ output, status }) => ({ output, status }))]);
-  if (signature === feedSignature) return;
+  renderFilter(agents);
+  const events = allEvents(run).filter((event) => !filterId || event.agentId === filterId || event.toAgentId === filterId || event.toAgentId === 'all' || event.agentId === 'user' || !event.agentId);
+  $('#event-count').textContent = `${events.length} EVENTS`;
+  const signature = `${run?.id}|${filterId}|${events.length}|${events.at(-1)?.id || ''}|${events.at(-1)?.text || ''}`;
+  if (signature === feedSignature || !run) return;
   feedSignature = signature;
-  if (!run) return;
   const panel = $('#conversation-panel');
-  const shouldStick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 70;
-  const scrollPosition = panel.scrollTop;
-  const cards = events.map((event) => eventElement(event, agents, run));
-  for (const agent of visibleOutputs) {
-    if (!agent.output || events.some((event) => event.type === 'message' && event.agentId === agent.id && event.text === agent.output)) continue;
-    const output = element('article', 'event agent-output');
+  const stick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 60;
+  const position = panel.scrollTop;
+  $('#feed').replaceChildren(...events.map((event) => eventElement(event, run)));
+  if (!events.length) $('#feed').append(element('p', 'dialog-intro', 'The team is preparing. Its first public messages will appear here.'));
+  panel.scrollTop = stick ? panel.scrollHeight : position;
+}
+
+function resultEntries(run) {
+  if (run?.results?.length) return run.results;
+  return run?.result ? [{ id: `${run.id}-result`, at: run.endedAt || run.startedAt, agentId: run.coordinatorId, text: run.result, cycle: null }] : [];
+}
+function renderResults(run) {
+  const results = resultEntries(run);
+  $('#result-count').textContent = `${results.length} ${results.length === 1 ? 'UPDATE' : 'UPDATES'}`;
+  const signature = JSON.stringify([run?.id, results]);
+  if (signature === resultsSignature || !results.length) return;
+  resultsSignature = signature;
+  const panel = $('#human-feed');
+  const stick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 60;
+  const position = panel.scrollTop;
+  panel.replaceChildren(...results.map((result) => {
+    const agent = agentById(result.agentId);
+    const card = element('article', 'result-card');
     const header = element('div', 'event-header');
-    header.append(logo(agent.harness), element('span', 'event-name', agent.name), element('span', 'event-type', agent.status === 'running' ? 'RESPONSE · STREAMING' : 'RESPONSE'));
-    const body = element('div', 'event-body');
-    richText(body, agent.output);
-    output.append(header, body);
-    cards.push(output);
-  }
-  if (!cards.length) {
-    const empty = element('div', 'empty-feed');
-    empty.append(element('h3', '', selectedAgent ? `${selectedAgent.name} is standing by.` : 'The team is getting started.'), element('p', '', 'Messages will appear here as work begins.'));
-    cards.push(empty);
-  }
-  $('#feed').replaceChildren(...cards);
-  panel.scrollTop = shouldStick ? panel.scrollHeight : scrollPosition;
+    header.append(identityLogos(agent), element('span', 'event-name', agent?.name || 'Swarm'), element('span', 'event-type', 'FOR YOU'), element('span', 'event-time', `+${elapsed(run.startedAt, result.at)}`));
+    const preview = element('div', 'result-preview');
+    richText(preview, publicOutput(result.text) || result.text);
+    const footer = element('div', 'result-card-footer');
+    const consensus = consensusLabel(result.consensus);
+    footer.append(element('span', consensus ? 'result-consensus' : 'result-cycle', consensus || `${result.cycle == null ? 'Shared result' : `Cycle ${result.cycle}`}${result.provisional ? ' · update' : ''}`));
+    const open = element('button', 'quiet-button', 'Full result ↗');
+    open.addEventListener('click', () => openResult(result));
+    footer.append(open);
+    card.append(header, preview, footer);
+    return card;
+  }));
+  panel.scrollTop = stick ? panel.scrollHeight : position;
+}
+function openResult(result) {
+  selectedResult = result;
+  $('#result-detail').replaceChildren();
+  richText($('#result-detail'), publicOutput(result.text) || result.text);
+  const consensus = consensusLabel(result.consensus);
+  $('#result-detail-meta').textContent = `${agentName(result.agentId)}${result.cycle == null ? '' : ` · cycle ${result.cycle}`}${consensus ? ` · ${consensus}` : ''}`;
+  if (!$('#result-dialog').open) $('#result-dialog').showModal();
 }
 
-function renderResult(run) {
-  const result = run?.result || '';
-  const container = $('#result-content');
-  if (container.dataset.value === result && container.dataset.status === String(run?.status)) return;
-  container.dataset.value = result;
-  container.dataset.status = String(run?.status);
-  container.replaceChildren();
-  if (result) {
-    container.append(element('h3', '', run.demo ? 'The demo’s final answer.' : 'The team’s final answer.'));
-    const body = element('div');
-    richText(body, result);
-    container.append(body);
-  } else {
-    container.append(element('h3', '', run?.status === 'running' ? 'A considered answer takes a few minds.' : 'Your result will appear here.'), element('p', '', 'The lead combines the team’s work after the review stage. Individual responses are available in each agent’s conversation.'));
+function openAgent(id) {
+  selectedId = id;
+  messageSignature = '';
+  setAgentTab('output');
+  renderAgentDetails();
+  if (!$('#agent-dialog').open) $('#agent-dialog').showModal();
+  renderCards(displayAgents(), viewedRun());
+}
+function setAgentTab(name) {
+  for (const tabName of ['output', 'transcript', 'messages']) {
+    const active = name === tabName;
+    $(`#${tabName}-tab`).setAttribute('aria-selected', String(active));
+    $(`#${tabName}-tab`).tabIndex = active ? 0 : -1;
+    $(`#${tabName}-panel`).hidden = !active;
   }
-  $('#copy-result').hidden = !result;
-  $('#result-mark').hidden = !result;
+}
+function renderAgentDetails() {
+  if (!selectedId) return;
+  const agent = agentById(selectedId);
+  if (!agent) return;
+  const run = viewedRun();
+  const identity = $('#agent-dialog-identity');
+  const name = element('h2', '', agent.name);
+  name.id = 'agent-dialog-title';
+  identity.replaceChildren(identityLogos(agent), name);
+  const coordinatorTitle = run?.coordinatorChanges?.length ? 'REPLACEMENT COORDINATOR' : run?.election?.method?.includes('fallback') ? 'FALLBACK COORDINATOR' : 'ELECTED COORDINATOR';
+  $('#agent-dialog-meta').replaceChildren(element('span', '', HARNESS_NAMES[agent.harness] || agent.harness), element('span', '', shortModel(agent.model, agent.harness)), element('span', '', `${Number(agent.cycles) || 0} completed cycles`), ...(agent.id === run?.coordinatorId ? [element('span', 'coordinator-badge', coordinatorTitle)] : []));
+  $('#agent-dialog-assignment').textContent = agent.assignment || agent.role || 'Waiting for an assignment.';
+  replaceText($('#output-panel'), currentWork(agent) || 'No public output yet. The agent’s contribution will stream here.');
+  replaceText($('#transcript-panel'), agent.transcript || currentWork(agent) || 'No public transcript yet.');
+  $('#output-panel').classList.add('rich-text');
+  $('#transcript-panel').classList.add('rich-text');
+  $('#agent-detail-status').textContent = stageDescription(agent);
+  const messages = allEvents(run).filter((event) => event.agentId === agent.id || event.toAgentId === agent.id || event.toAgentId === 'all' || event.agentId === 'user');
+  const signature = `${agent.id}:${messages.length}:${messages.at(-1)?.id || ''}`;
+  if (signature !== messageSignature) {
+    messageSignature = signature;
+    const position = $('#messages-panel').scrollTop;
+    $('#messages-panel').replaceChildren(...messages.map((event) => eventElement(event, run, true)));
+    if (!messages.length) $('#messages-panel').append(element('p', '', 'Messages to and from this agent will appear here.'));
+    $('#messages-panel').scrollTop = position;
+  }
+}
+function renderElection() {
+  const run = viewedRun();
+  const election = run?.election;
+  const coordinator = agentById(run?.coordinatorId);
+  const votes = election?.votes || [];
+  const replacement = run?.coordinatorChanges?.at(-1);
+  const methods = { plurality: 'The candidate with the most votes was elected.', 'plurality-lexical-tiebreak': 'The top candidates tied. Their IDs determined the tie-break.', 'no-votes-lexical-fallback': 'No valid votes arrived. The first eligible ID was selected as a fallback.' };
+  $('#election-summary').textContent = replacement ? `${coordinator?.name || agentName(replacement.to)} replaced ${agentName(replacement.from)} using the original ballots among available agents. No new vote was held. ${replacement.reason || ''}` : coordinator ? `${coordinator.name} coordinates this run. ${methods[election?.method] || ''} ${votes.length} votes were counted.` : election ? `${votes.length} of ${election.eligibleVoters || displayAgents().length} agents have voted. The coordinator has not been selected yet.` : 'Every run begins with a team election. There is no fixed leader; the counted vote selects the coordinator.';
+  const tally = Object.entries(replacement?.tally || election?.tally || {}).sort((a, b) => b[1] - a[1]);
+  $('#election-tally').replaceChildren(...tally.map(([id, count]) => {
+    const chip = element('span', `tally-chip${id === run?.coordinatorId ? ' winner' : ''}`, agentName(id));
+    chip.append(element('b', '', count));
+    return chip;
+  }));
+  const voteCards = votes.map((vote) => {
+    const card = element('article', 'vote-card');
+    card.append(element('div', 'vote-card-header', `${agentName(vote.voterId)} → ${agentName(vote.candidateId)}`), element('p', '', vote.reason || 'No reason supplied.'));
+    return card;
+  });
+  for (const vote of election?.abstentions || []) {
+    const card = element('article', 'vote-card');
+    card.append(element('div', 'vote-card-header', `${agentName(vote.voterId)} · no valid vote`), element('p', '', vote.reason || 'Abstained.'));
+    voteCards.push(card);
+  }
+  $('#election-votes').replaceChildren(...voteCards);
 }
 
+function clearHumanFeed() {
+  const empty = element('div', 'empty-results');
+  empty.append(element('span', 'small-orbit', '✦'), element('h3', '', 'Useful work, as it emerges.'), element('p', '', 'The elected coordinator shares results here while the whole team keeps working.'));
+  $('#human-feed').replaceChildren(empty);
+}
 function render() {
   const run = viewedRun();
   const agents = displayAgents();
   if (run?.id !== lastRunId) {
     lastRunId = run?.id;
     selectedId = null;
-    feedSignature = '';
-    graphSignature = '';
+    filterId = '';
+    feedSignature = resultsSignature = filterSignature = messageSignature = '';
+    expandedEvents.clear();
+    if ($('#agent-dialog').open) $('#agent-dialog').close();
+    clearHumanFeed();
   }
   renderStatus(run, agents);
-  renderGraph(agents, run);
+  renderCards(agents, run);
   renderFeed(run, agents);
-  renderResult(run);
+  renderResults(run);
+  if ($('#agent-dialog').open) renderAgentDetails();
+  if ($('#election-dialog').open) renderElection();
 }
-
 function receiveState(next) {
   state = { ...state, ...next };
+  if (!defaultsApplied && state.defaults.team?.length) {
+    defaultsApplied = true;
+    const duration = Number(state.defaults.duration) || 600;
+    const option = [...$('#timeout-select').options].find((item) => Number(item.value) === duration);
+    $('#timeout-select').value = option ? option.value : 'custom';
+    $('#custom-duration').value = String(duration / 60);
+    updateDurationLabel();
+  }
   render();
 }
 
-function setTab(name) {
-  const showConversation = name === 'conversation';
-  for (const tabName of ['conversation', 'result']) {
-    const active = name === tabName;
-    $(`#${tabName}-tab`).setAttribute('aria-selected', String(active));
-    $(`#${tabName}-tab`).tabIndex = active ? 0 : -1;
-    $(`#${tabName}-panel`).hidden = !active;
-  }
-  $('#agent-filter').hidden = !showConversation;
-}
-
 function openTeam() {
-  const team = configuredTeam || defaultTeam();
+  editingTeam = (configuredTeam || defaultTeam()).map((agent) => ({ ...agent }));
   const capabilityMap = new Map((state.capabilities || []).map((capability) => [capability.id, capability]));
-  $('#team-editor').replaceChildren(...team.map((agent, index) => {
+  const harnesses = [...new Set([...Object.keys(HARNESS_NAMES).filter((id) => id !== 'claude-code'), ...editingTeam.map((agent) => agent.harness)])];
+  $('#team-editor').replaceChildren(...editingTeam.map((agent) => {
     const row = element('div', 'team-config-row');
     const name = element('span', 'team-role', agent.name);
-    name.append(element('small', '', ['Explore', 'Create', 'Review', 'Synthesize'][index] || 'Contribute'));
+    name.append(element('small', '', 'Independent peer'));
     const harnessLabel = element('label', '', 'Harness');
     const select = element('select');
     select.id = `harness-${agent.id}`;
     select.setAttribute('aria-label', `${agent.name} harness`);
-    for (const id of ['native', 'codex', 'claude']) {
+    for (const id of harnesses) {
       const capability = capabilityMap.get(id);
-      const option = element('option', '', `${HARNESS_NAMES[id]}${capability?.available === false ? ' · unavailable' : ''}`);
+      const option = element('option', '', `${HARNESS_NAMES[id] || id}${capability?.available === false ? ' · unavailable' : ''}`);
       option.value = id;
       option.disabled = capability?.available === false;
       select.append(option);
@@ -328,10 +431,7 @@ function openTeam() {
     model.value = agent.model || '';
     model.placeholder = 'Harness default';
     model.setAttribute('aria-label', `${agent.name} model`);
-    select.addEventListener('change', () => {
-      model.value = harnessDefaultModel(select.value);
-      saveTeam();
-    });
+    select.addEventListener('change', () => { model.value = harnessDefaultModel(select.value); saveTeam(); });
     model.addEventListener('input', saveTeam);
     harnessLabel.append(select);
     modelLabel.append(model);
@@ -341,12 +441,10 @@ function openTeam() {
   $('#team-button').setAttribute('aria-expanded', 'true');
   $('#team-dialog').showModal();
 }
-
 function saveTeam() {
-  configuredTeam = ROLES.map((role) => ({ ...role, harness: $(`#harness-${role.id}`).value, model: $(`#model-${role.id}`).value.trim(), status: 'queued' }));
+  configuredTeam = editingTeam.map((agent) => ({ ...agent, harness: $(`#harness-${CSS.escape(agent.id)}`).value, model: $(`#model-${CSS.escape(agent.id)}`).value.trim(), status: 'queued' }));
   if (!viewedRun()) render();
 }
-
 async function startRun(demo = false) {
   const task = $('#task-input').value.trim();
   if (!demo && !task) { $('#task-input').focus(); return; }
@@ -354,23 +452,21 @@ async function startRun(demo = false) {
   busy = true;
   render();
   try {
-    const body = demo ? { demo: true, task: 'Design a faster onboarding flow for a developer tool.' } : {
+    const body = demo ? { demo: true } : {
       task,
-      agents: (configuredTeam || defaultTeam()).map(({ status, ...agent }) => agent),
-      timeoutSeconds: Number($('#timeout-select').value),
+      agents: (configuredTeam || defaultTeam()).map(({ id, name, role, harness, model }) => ({ id, name, role, harness, model })),
+      timeoutSeconds: runDuration(),
       toolsEnabled: $('#tools-toggle').checked,
     };
     const response = await api('/api/run', body);
     historicalRun = null;
     selectedId = null;
-    setTab('conversation');
     if (response.run) receiveState(response);
     else receiveState(await api('/api/state'));
     if (demo) $('#task-input').value = '';
   } catch (error) { toast(error.message); }
   finally { busy = false; render(); }
 }
-
 function renderHistory() {
   const runs = state.runs || [];
   const list = $('#history-list');
@@ -379,20 +475,22 @@ function renderHistory() {
     const row = element('button', 'history-row');
     const metadata = element('span', 'history-meta');
     const date = new Date(run.startedAt);
-    metadata.append(element('span', '', run.status), element('span', '', Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
+    metadata.append(element('span', '', `${run.status}${run.demo ? ' · demo' : ''}`), element('span', '', Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
     row.append(element('span', 'history-title', run.task || 'Untitled run'), metadata);
     row.addEventListener('click', async () => {
       try {
         const result = await api(`/api/runs/${encodeURIComponent(run.id)}`);
         historicalRun = result.run || result;
-        selectedId = null;
         $('#history-dialog').close();
-        setTab('conversation');
         render();
       } catch (error) { toast(error.message); }
     });
     return row;
   }));
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text || ''); toast('Copied.'); }
+  catch { toast('Your browser could not copy this. You can select and copy the text.'); }
 }
 
 $('#run-form').addEventListener('submit', (event) => { event.preventDefault(); startRun(); });
@@ -400,24 +498,27 @@ $('#demo-button').addEventListener('click', () => startRun(true));
 $('#empty-demo-button').addEventListener('click', () => startRun(true));
 $('#team-button').addEventListener('click', openTeam);
 $('#reset-team').addEventListener('click', () => { configuredTeam = null; $('#team-dialog').close(); openTeam(); render(); });
-$('#team-dialog').addEventListener('close', () => { $('#team-button').setAttribute('aria-expanded', 'false'); });
-document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
+$('#team-dialog').addEventListener('close', () => { $('#team-button').setAttribute('aria-expanded', 'false'); updateDurationLabel(); });
+$('#agent-dialog').addEventListener('close', () => { selectedId = null; renderCards(displayAgents(), viewedRun()); });
+$('#timeout-select').addEventListener('change', updateDurationLabel);
+$('#custom-duration').addEventListener('input', updateDurationLabel);
+for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => $(`#${button.dataset.close}`).close());
 $('#history-button').addEventListener('click', () => { renderHistory(); $('#history-dialog').showModal(); });
-$('#back-live').addEventListener('click', () => { historicalRun = null; selectedId = null; $('#history-dialog').close(); render(); });
-$('#clear-filter').addEventListener('click', () => { selectedId = null; feedSignature = ''; render(); });
-$('#conversation-tab').addEventListener('click', () => setTab('conversation'));
-$('#result-tab').addEventListener('click', () => setTab('result'));
+$('#back-live').addEventListener('click', () => { historicalRun = null; $('#history-dialog').close(); render(); });
+$('#agent-filter').addEventListener('change', () => { filterId = $('#agent-filter').value; feedSignature = ''; renderFeed(viewedRun(), displayAgents()); });
+$('#election-button').addEventListener('click', () => { renderElection(); $('#election-dialog').showModal(); });
+for (const name of ['output', 'transcript', 'messages']) $(`#${name}-tab`).addEventListener('click', () => setAgentTab(name));
 $('.view-tabs').addEventListener('keydown', (event) => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
   event.preventDefault();
-  const next = $('#conversation-tab').getAttribute('aria-selected') === 'true' ? 'result' : 'conversation';
-  setTab(next);
+  const names = ['output', 'transcript', 'messages'];
+  const current = names.findIndex((name) => $(`#${name}-tab`).getAttribute('aria-selected') === 'true');
+  const next = names[(current + (event.key === 'ArrowRight' ? 1 : 2)) % 3];
+  setAgentTab(next);
   $(`#${next}-tab`).focus();
 });
-$('#copy-result').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(viewedRun()?.result || ''); toast('Result copied.'); }
-  catch { toast('Your browser could not copy the result. You can select and copy the text.'); }
-});
+$('#copy-result').addEventListener('click', () => copyText(publicOutput(selectedResult?.text) || selectedResult?.text));
+$('#copy-agent-output').addEventListener('click', () => copyText($('#transcript-tab').getAttribute('aria-selected') === 'true' ? agentById(selectedId)?.transcript : currentWork(agentById(selectedId) || {})));
 $('#stop-button').addEventListener('click', async () => {
   busy = true;
   render();
@@ -435,7 +536,7 @@ $('#steering-form').addEventListener('submit', async (event) => {
     await api('/api/message', { text });
     $('#steering-input').value = '';
     receiveState(await api('/api/state'));
-    toast('Guidance shared for the next stage.');
+    toast('Guidance added to the shared context.');
   } catch (error) { toast(error.message); }
   finally { busy = false; render(); }
 });
@@ -450,24 +551,15 @@ document.addEventListener('keydown', (event) => {
 function connectionStatus(online) {
   $('#connection').replaceChildren(element('span', `status-dot${online ? '' : ' offline'}`), document.createTextNode(online ? 'connected locally' : 'reconnecting'));
 }
-
 let streamRetryDelay = 1000;
 let streamRetryTimer;
 let streamController;
 let pageClosing = false;
-
 async function connectUpdates() {
   streamController = new AbortController();
   try {
-    const response = await fetch('/api/events', {
-      headers: { Authorization: `Bearer ${globalThis.__SWARM_TOKEN}` },
-      signal: streamController.signal,
-    });
-    if (response.status === 401 || response.status === 403) {
-      connectionStatus(false);
-      toast('The local session changed. Reload this page to reconnect.');
-      return;
-    }
+    const response = await fetch('/api/events', { headers: { Authorization: `Bearer ${globalThis.__SWARM_TOKEN}` }, signal: streamController.signal });
+    if (response.status === 401 || response.status === 403) { connectionStatus(false); toast('The local session changed. Reload this page to reconnect.'); return; }
     if (!response.ok || !response.body) throw new Error('Live stream unavailable');
     connectionStatus(true);
     const reader = response.body.getReader();
@@ -489,6 +581,7 @@ async function connectUpdates() {
       }
     }
   } catch (error) {
+    streamController.abort();
     if (pageClosing || error.name === 'AbortError') return;
   }
   if (pageClosing) return;
@@ -496,16 +589,8 @@ async function connectUpdates() {
   streamRetryTimer = setTimeout(connectUpdates, streamRetryDelay);
   streamRetryDelay = Math.min(streamRetryDelay * 2, 30000);
 }
-
-window.addEventListener('pagehide', () => {
-  pageClosing = true;
-  clearTimeout(streamRetryTimer);
-  streamController?.abort();
-});
+window.addEventListener('pagehide', () => { pageClosing = true; clearTimeout(streamRetryTimer); streamController?.abort(); });
 render();
 api('/api/state').then(receiveState).catch((error) => toast(`Cannot connect to the local swarm: ${error.message}`));
 connectUpdates();
-setInterval(() => {
-  const run = viewedRun();
-  if (run?.status === 'running') $('#elapsed').textContent = `${elapsed(run.startedAt)} ELAPSED`;
-}, 1000);
+setInterval(updateClock, 1000);
