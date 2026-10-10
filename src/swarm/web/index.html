@@ -1,71 +1,82 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#03070c">
-    <title>Swarm — many minds, one workspace</title>
-    <link rel="icon" type="image/svg+xml" href="/assets/swarm.svg">
-    <link rel="preload" href="/assets/geist-variable.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="stylesheet" href="/style.css">
-    <script src="/session.js"></script>
-    <script type="module" src="/app.js"></script>
-  </head>
-  <body>
-    <header class="topbar">
-      <a class="wordmark" href="/" aria-label="Swarm home"><img src="/assets/swarm.svg" alt="" width="27" height="27">swarm<span class="wordmark-slash">/</span><span class="wordmark-caption">your work, in motion</span></a>
-      <div class="topbar-actions">
-        <span class="connection mono" id="connection"><span class="status-dot"></span>connecting</span>
-        <button class="quiet-button" id="history-button" aria-label="Show recent runs">Recent runs <span aria-hidden="true">↗</span></button>
-        <button class="demo-button" id="demo-button">Play demo <span aria-hidden="true">▷</span></button>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070c">
+  <title>Swarm — many minds, one workspace</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/swarm.svg">
+  <link rel="preload" href="/assets/geist-variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/session.js"></script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="Swarm home"><img src="/assets/swarm.svg" alt="" width="27" height="27">swarm<span class="wordmark-slash">/</span><span class="wordmark-caption">many minds, one shared context</span></a>
+    <div class="topbar-actions">
+      <span class="connection mono" id="connection"><span class="status-dot"></span>connecting</span>
+      <button class="quiet-button" id="history-button" aria-label="Show recent runs">Recent runs <span aria-hidden="true">↗</span></button>
+      <button class="demo-button" id="demo-button">Play demo <span aria-hidden="true">▷</span></button>
+    </div>
+  </header>
+  <main class="workspace">
+    <section class="mission" aria-label="Swarm brain view">
+      <div class="stage" id="stage">
+        <canvas id="constellation" aria-hidden="true"></canvas>
+        <div class="hero">
+          <div class="eyebrow"><span class="status-dot" id="run-dot"></span><span id="run-state">INDEPENDENT MINDS. SHARED MOMENTUM.</span><span id="demo-label" class="demo-label" hidden>DEMO · SIMULATED</span></div>
+          <h1 id="headline">One task. <span>Ten perspectives.</span></h1>
+          <p id="hero-caption">The team elects its coordinator. Every agent keeps working.</p>
+        </div>
+        <div class="brain-toolbar">
+          <div><span class="mono overline">THE BRAIN</span><span id="progress-text">Loading your team…</span></div>
+          <button class="coordination-hub" id="election-button" aria-label="View coordinator election"><img src="/assets/swarm.svg" alt=""><span id="coordinator-label">Coordinator elected by the team</span><span aria-hidden="true">↗</span></button>
+        </div>
+        <div class="graph" id="graph" aria-label="Agent work cards"></div>
+        <div class="stage-footer"><span id="stage-hint">Open any agent to see its full work and conversation.</span><span class="mono" id="elapsed">READY WHEN YOU ARE</span></div>
       </div>
-    </header>
-
-    <main class="workspace">
-      <section class="mission" aria-label="Swarm workspace">
-        <div class="stage" id="stage">
-          <canvas id="constellation" aria-hidden="true"></canvas>
-          <div class="hero">
-            <div class="eyebrow"><span class="status-dot" id="run-dot"></span><span id="run-state">A LITTLE COORDINATION. A LOT OF POSSIBILITY.</span><span id="demo-label" class="demo-label" hidden>DEMO · SIMULATED</span></div>
-            <h1 id="headline">One task. <span>Many minds.</span></h1>
-            <p id="hero-caption">Bring your favorite harnesses. Let them work together.</p>
+      <div class="composer-wrap">
+        <form class="task-composer" id="run-form">
+          <label class="sr-only" for="task-input">What should the swarm work on?</label>
+          <textarea id="task-input" rows="1" placeholder="Give the swarm something worth working on…" required maxlength="16000"></textarea>
+          <div class="composer-toolbar">
+            <button type="button" class="quiet-button team-button" id="team-button" aria-expanded="false" aria-controls="team-editor"><span class="tiny-logo-stack"><img src="/assets/claude-code.svg" alt=""><img src="/assets/codex.svg" alt=""><img src="/assets/opencode.svg" alt=""><img src="/assets/pi.svg" alt=""></span><span id="team-button-label">Configure swarm</span><span aria-hidden="true">⌄</span></button>
+            <div class="composer-submit"><span class="key-hint mono">⌘ ENTER</span><button class="primary-button" id="run-button" type="submit">Run swarm <span aria-hidden="true">↗</span></button><button class="stop-button" id="stop-button" type="button" hidden><span aria-hidden="true">■</span> Stop</button></div>
           </div>
-          <div class="graph" id="graph" aria-label="Agent constellation"></div>
-          <div class="stage-footer"><span id="stage-hint">Choose any agent to follow its conversation.</span><span class="mono" id="elapsed">READY WHEN YOU ARE</span></div>
-        </div>
+        </form>
+        <div class="composer-note"><span class="status-dot"></span><span id="gateway-label">LiteLLM gateway</span><span>·</span><span id="duration-label">10 minutes of work</span><span>·</span><span>your local workspace</span></div>
+      </div>
+    </section>
 
-        <div class="run-summary">
-          <div class="summary-title"><span class="mono">THE SWARM</span><span id="progress-text">4 agents · 3 stages</span></div>
-          <div class="agent-list" id="agent-list" aria-label="Select an agent"></div>
-        </div>
-
-        <div class="composer-wrap">
-          <form class="task-composer" id="run-form">
-            <label class="sr-only" for="task-input">What should the swarm work on?</label>
-            <textarea id="task-input" rows="2" placeholder="What should we work on?" required maxlength="16000"></textarea>
-            <div class="composer-toolbar">
-              <button type="button" class="quiet-button team-button" id="team-button" aria-expanded="false" aria-controls="team-editor"><span class="tiny-logo-stack"><img src="/assets/codex.svg" alt=""><img src="/assets/claude-code.svg" alt=""><img src="/assets/swarm.svg" alt=""></span>Configure swarm <span aria-hidden="true">⌄</span></button>
-              <div class="composer-submit"><span class="key-hint mono">⌘ ENTER</span><button class="primary-button" id="run-button" type="submit">Run swarm <span aria-hidden="true">↗</span></button><button class="stop-button" id="stop-button" type="button" hidden><span aria-hidden="true">■</span> Stop</button></div>
-            </div>
-          </form>
-          <div class="composer-note"><span class="status-dot"></span><span id="gateway-label">LiteLLM gateway</span><span class="note-divider">·</span><span>local workspace</span><span class="note-divider">·</span><span>live conversations</span></div>
-        </div>
+    <aside class="right-panel" aria-label="Results and swarm conversation">
+      <section class="human-section" aria-labelledby="human-title">
+        <div class="panel-heading"><div><span class="mono overline">THE USEFUL PART</span><h2 id="human-title">For you.</h2></div><span class="stream-label mono" id="result-count">0 UPDATES</span></div>
+        <div class="human-feed feed-scroll" id="human-feed" tabindex="0" aria-label="Continuous result feed"><div class="empty-results"><span class="small-orbit" aria-hidden="true">✦</span><h3>Useful work, as it emerges.</h3><p>The elected coordinator shares results here while the whole team keeps working.</p></div></div>
       </section>
+      <section class="conversation-section" aria-labelledby="conversation-title">
+        <div class="conversation-heading"><h2 id="conversation-title">Inside the swarm</h2><span class="stream-label mono" id="stream-label"><span class="status-dot"></span>STANDING BY</span></div>
+        <div class="feed-controls"><label class="sr-only" for="agent-filter">Filter conversation by agent</label><select id="agent-filter"><option value="">All agents</option></select><span class="mono" id="event-count">0 EVENTS</span></div>
+        <div id="conversation-panel" class="feed-scroll" tabindex="0" aria-label="Live swarm conversation"><div id="feed" class="feed"><div class="empty-feed"><p>Messages, votes, tool calls and public contributions appear here.</p><button class="text-button" id="empty-demo-button">See the swarm in motion <span aria-hidden="true">↗</span></button></div></div></div>
+      </section>
+      <form class="steering-form" id="steering-form"><label class="sr-only" for="steering-input">Send guidance to the swarm</label><div class="steering-input-wrap"><textarea rows="1" id="steering-input" placeholder="Add context or redirect the work…" maxlength="8000" disabled></textarea><button type="submit" id="steering-button" aria-label="Send guidance" disabled>↑</button></div><p id="steering-note">Your guidance joins the shared context.</p></form>
+    </aside>
+  </main>
 
-      <aside class="conversation" aria-label="Conversation and result">
-        <div class="conversation-header"><div><span class="mono overline">IN THE LOOP</span><h2>Conversation</h2></div><span class="stream-label mono" id="stream-label"><span class="status-dot"></span>STANDING BY</span></div>
-        <div class="view-tabs" role="tablist" aria-label="Run details"><button role="tab" aria-selected="true" id="conversation-tab" aria-controls="conversation-panel">Live feed <span id="event-count">0</span></button><button role="tab" aria-selected="false" id="result-tab" aria-controls="result-panel" tabindex="-1">Result <span id="result-mark" hidden>↗</span></button></div>
-        <div class="agent-filter" id="agent-filter"><span id="filter-label">All agents</span><button class="quiet-button" id="clear-filter" hidden>Show all <span aria-hidden="true">×</span></button><span class="mono" id="feed-info">SHARED CONTEXT</span></div>
-        <div id="conversation-panel" class="feed-scroll" role="tabpanel" aria-labelledby="conversation-tab" tabindex="0">
-          <div id="feed" class="feed"><div class="empty-feed"><div class="empty-orbit" aria-hidden="true"><img src="/assets/swarm.svg" alt=""></div><h3>Every mind. Every move.</h3><p>Messages, tool calls and handoffs arrive here as your swarm works.</p><button class="text-button" id="empty-demo-button">See a swarm in motion <span aria-hidden="true">↗</span></button></div></div>
-        </div>
-        <div id="result-panel" class="result-panel" role="tabpanel" aria-labelledby="result-tab" tabindex="0" hidden><div id="result-content" class="result-content"></div><button class="quiet-button copy-result" id="copy-result" hidden>Copy result <span aria-hidden="true">⧉</span></button></div>
-        <form class="steering-form" id="steering-form"><label class="sr-only" for="steering-input">Send guidance for the next stage</label><div class="steering-input-wrap"><textarea rows="1" id="steering-input" placeholder="Steer the next stage…" maxlength="8000" disabled></textarea><button type="submit" id="steering-button" aria-label="Send guidance" disabled>↑</button></div><p id="steering-note">Stay close. Step in whenever you need to.</p></form>
-      </aside>
-    </main>
-
-    <dialog id="team-dialog" aria-labelledby="team-title"><div class="dialog-heading"><div><span class="mono overline">A SMALL, CAPABLE TEAM</span><h2 id="team-title">Make it your swarm.</h2></div><button class="icon-button" data-close="team-dialog" aria-label="Close team settings">×</button></div><p class="dialog-intro">Two agents explore in parallel. A critic reviews their work. A lead brings it together.</p><div id="team-editor"></div><div class="run-options"><label class="checkbox-label"><input id="tools-toggle" type="checkbox"> Allow workspace file writes</label><label class="timeout-label">Time limit <select id="timeout-select"><option value="120">2 minutes</option><option value="300" selected>5 minutes</option><option value="900">15 minutes</option></select></label></div><p class="dialog-note">Native agents use the configured LiteLLM gateway. Other harnesses run through their locally installed CLI.</p><div class="dialog-footer"><button class="quiet-button" id="reset-team">Reset team</button><button class="primary-button" data-close="team-dialog">Done <span aria-hidden="true">↗</span></button></div></dialog>
-    <dialog id="history-dialog" aria-labelledby="history-title"><div class="dialog-heading"><div><span class="mono overline">PICK UP A THREAD</span><h2 id="history-title">Recent runs.</h2></div><button class="icon-button" data-close="history-dialog" aria-label="Close recent runs">×</button></div><div id="history-list"></div><div class="dialog-footer"><button class="quiet-button" id="back-live">Back to current run <span aria-hidden="true">↗</span></button></div></dialog>
-    <div id="toast" class="toast" role="status" hidden></div>
-  </body>
+  <dialog class="agent-dialog" id="agent-dialog" aria-labelledby="agent-dialog-title">
+    <div class="dialog-heading"><div id="agent-dialog-identity"></div><button class="icon-button" data-close="agent-dialog" aria-label="Close agent details">×</button></div>
+    <div id="agent-dialog-meta" class="agent-detail-meta"></div>
+    <div id="agent-dialog-assignment" class="agent-detail-assignment"></div>
+    <div class="view-tabs" role="tablist" aria-label="Agent details"><button role="tab" id="output-tab" aria-selected="true" aria-controls="output-panel">Current output</button><button role="tab" id="transcript-tab" aria-selected="false" aria-controls="transcript-panel" tabindex="-1">Full transcript</button><button role="tab" id="messages-tab" aria-selected="false" aria-controls="messages-panel" tabindex="-1">Messages</button></div>
+    <div class="agent-detail-panel" id="output-panel" role="tabpanel" aria-labelledby="output-tab" tabindex="0"></div>
+    <div class="agent-detail-panel" id="transcript-panel" role="tabpanel" aria-labelledby="transcript-tab" tabindex="0" hidden></div>
+    <div class="agent-detail-panel" id="messages-panel" role="tabpanel" aria-labelledby="messages-tab" tabindex="0" hidden></div>
+    <div class="dialog-footer"><span class="mono" id="agent-detail-status"></span><button class="quiet-button" id="copy-agent-output">Copy output <span aria-hidden="true">⧉</span></button></div>
+  </dialog>
+  <dialog id="election-dialog" aria-labelledby="election-title"><div class="dialog-heading"><div><span class="mono overline">CHOSEN BY THE TEAM</span><h2 id="election-title">Coordinator election.</h2></div><button class="icon-button" data-close="election-dialog" aria-label="Close election">×</button></div><p id="election-summary" class="dialog-intro"></p><div id="election-tally" class="election-tally"></div><div id="election-votes"></div></dialog>
+  <dialog id="team-dialog" aria-labelledby="team-title"><div class="dialog-heading"><div><span class="mono overline">INDEPENDENT BY DESIGN</span><h2 id="team-title">Make it your swarm.</h2></div><button class="icon-button" data-close="team-dialog" aria-label="Close team settings">×</button></div><p class="dialog-intro">All agents work concurrently. They elect a coordinator, share context, and keep contributing for the time you give them.</p><div class="run-options"><label class="checkbox-label"><input id="tools-toggle" type="checkbox"> Allow workspace file writes</label><label class="timeout-label">Work for <select id="timeout-select"><option value="120">2 minutes</option><option value="300">5 minutes</option><option value="600" selected>10 minutes</option><option value="900">15 minutes</option><option value="custom">Custom</option></select></label><label class="custom-duration" id="custom-duration-label" hidden>Minutes <input id="custom-duration" type="number" min="1" max="1440" step="1" value="10"></label></div><div id="team-editor"></div><p class="dialog-note">The budget includes the brief election; work continues until it expires. Codex, OpenCode, Pi and native use the gateway when configured. Claude uses its installed account.</p><div class="dialog-footer"><button class="quiet-button" id="reset-team">Reset team</button><button class="primary-button" data-close="team-dialog">Done <span aria-hidden="true">↗</span></button></div></dialog>
+  <dialog id="history-dialog" aria-labelledby="history-title"><div class="dialog-heading"><div><span class="mono overline">PICK UP A THREAD</span><h2 id="history-title">Recent runs.</h2></div><button class="icon-button" data-close="history-dialog" aria-label="Close recent runs">×</button></div><div id="history-list"></div><div class="dialog-footer"><button class="quiet-button" id="back-live">Back to current run <span aria-hidden="true">↗</span></button></div></dialog>
+  <dialog class="result-dialog" id="result-dialog" aria-labelledby="result-dialog-title"><div class="dialog-heading"><div><span class="mono overline">SHARED WITH YOU</span><h2 id="result-dialog-title">Swarm update.</h2></div><button class="icon-button" data-close="result-dialog" aria-label="Close result">×</button></div><div id="result-detail" class="agent-detail-panel"></div><div class="dialog-footer"><span id="result-detail-meta" class="mono"></span><button class="quiet-button" id="copy-result">Copy result <span aria-hidden="true">⧉</span></button></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
 </html>
