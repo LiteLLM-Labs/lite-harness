@@ -22,3 +22,5 @@ The package dry-run excludes `.env`, `.swarm`, installed CLI dependencies and ru
 ## Browser QA
 
 See [qa.md](qa.md) for desktop, tablet and mobile interaction checks. The UI was checked with a real 30-second simulated run, including ten peers, repeated answer updates, role changes, proposal tallies, guidance, stop, history, settings, transcript scroll preservation, keyboard access and narrow layouts.
+
+The Brain view now prioritizes leadership and activity. A shared presence rule drives the Active/Inactive labels, counts, and animation; terminal run status overrides stale peer status. Independent checks covered 42 run/peer-status combinations, absent leaders, and leader replacement. Leadership is read from the recorded coordinator ID, independently of whether that agent is active.
