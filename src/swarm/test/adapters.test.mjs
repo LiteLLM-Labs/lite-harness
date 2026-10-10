@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { availableHarnesses, buildCliCommand, executeWorkspaceTool, gatewayUrl, parseSse, runAgent } from '../src/adapters.mjs';
+import { availableHarnesses, buildCliCommand, executeWorkspaceTool, gatewayUrl, parseSse, runAgent, workspaceToolDefinitions } from '../src/adapters.mjs';
 import { prepareHarnessProfile } from '../src/harness-profiles.mjs';
 
 async function workspace(t) {
@@ -66,7 +66,7 @@ test('native consumes split tool arguments, executes real workspace writes, and 
     const request = JSON.parse(options.body);
     assert.equal(options.redirect, 'error');
     if (calls++ === 0) {
-      assert.equal(request.tools.length, 3);
+      assert.equal(request.tools.length, 4);
       return streamResponse([
         { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'write_file', arguments: '{"path":"result.txt",' } }] } }] },
         { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"content":"Done"}' } }] }, finish_reason: 'tool_calls' }] },
@@ -95,11 +95,49 @@ test('native defaults to read-only tools and rejects an unadvertised write', asy
     const request = JSON.parse(options.body);
     assert.deepEqual(request.tools.map(tool => tool.function.name), ['list_files', 'read_file']);
     if (calls++ === 0) return streamResponse([{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'write_file', arguments: '{"path":"unexpected.txt","content":"bad"}' } }] }, finish_reason: 'tool_calls' }] }]);
-    assert.match(request.messages.at(-1).content, /writes are disabled/);
+    assert.match(request.messages.at(-1).content, /Local actions are disabled/);
     return streamResponse([{ choices: [{ index: 0, delta: { content: 'Writes disabled.' }, finish_reason: 'stop' }] }]);
   });
   await runAgent({ prompt: 'Read only', cwd, env: { LITELLM_API_KEY: 'test-secret-key' } });
   await assert.rejects(readFile(join(cwd, 'unexpected.txt')), { code: 'ENOENT' });
+});
+
+test('local actions advertise bounded commands only when enabled and keep Claude native Bash unavailable', async t => {
+  const cwd = await workspace(t);
+  assert.deepEqual(workspaceToolDefinitions(false).map(tool => tool.name), ['list_files', 'read_file']);
+  assert(workspaceToolDefinitions(true).some(tool => tool.name === 'run_command'));
+  await assert.rejects(executeWorkspaceTool(cwd, 'run_command', {command: 'echo blocked'}), /Local actions are disabled/);
+  const enabled = buildCliCommand({harness: 'claude', cwd, toolsEnabled: true});
+  assert(!enabled.args.includes('--safe-mode'));
+  assert.equal(enabled.args[enabled.args.indexOf('--setting-sources') + 1], '');
+  const config = JSON.parse(enabled.args[enabled.args.indexOf('--mcp-config') + 1]);
+  assert.equal(config.mcpServers.swarm_actions.args.at(-1), 'command');
+  assert.equal(config.mcpServers.swarm_actions.alwaysLoad, true);
+  assert(enabled.args[enabled.args.indexOf('--allowedTools') + 1].includes('mcp__swarm_actions__run_command'));
+  assert(!enabled.args[enabled.args.indexOf('--tools') + 1].includes('Bash'));
+  const pi = buildCliCommand({harness: 'pi', cwd, toolsEnabled: true});
+  assert(pi.args[pi.args.indexOf('--tools') + 1].includes('run_command'));
+});
+
+test('native performs an actual sandboxed command and reports redacted public command results', {skip: process.platform !== 'darwin'}, async t => {
+  const cwd = await workspace(t);
+  const events = [];
+  const secret = 'synthetic-command-test-secret';
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (calls++ === 0) return streamResponse([{choices: [{index: 0, delta: {tool_calls: [{index: 0, id: 'command-1', function: {name: 'run_command', arguments: JSON.stringify({command: `printf actual > verified.txt; printf ${secret}`})}}]}, finish_reason: 'tool_calls'}]}]);
+    const result = JSON.parse(request.messages.at(-1).content);
+    assert.equal(result.stdout, '[redacted]');
+    assert.equal(result.exitCode, 0);
+    return streamResponse([{choices: [{index: 0, delta: {content: 'Created and verified.'}, finish_reason: 'stop'}]}]);
+  });
+  await runAgent({cwd, prompt: 'Create and verify a file', toolsEnabled: true, env: {LITELLM_API_KEY: secret}, onEvent: event => events.push(event)});
+  assert.equal(await readFile(join(cwd, 'verified.txt'), 'utf8'), 'actual');
+  const completed = events.find(event => event.name === 'run_command' && event.status === 'completed');
+  assert.equal(completed.exitCode, 0);
+  assert.equal(completed.stdout, '[redacted]');
+  assert(!JSON.stringify(events).includes(secret));
 });
 
 test('gateway authentication and incomplete streams fail transparently with no fallback', async t => {
@@ -355,6 +393,34 @@ process.stdin.on('end', () => {
   assert.equal(events.filter(event => event.type === 'delta').map(event => event.text).join(''), 'Final answer');
   assert(!JSON.stringify(events).includes('private reasoning'));
   assert(events.some(event => event.type === 'tool' && event.status === 'completed' && event.path === 'input.txt'));
+});
+
+test('CLI command events include exit and output details while redacting every public string field', async t => {
+  const cwd = await workspace(t);
+  const secret = 'synthetic-cli-event-secret';
+  const command = `printf ${secret}`;
+  const events = [
+    {type: 'tool_use', part: {id: 'command-1', tool: 'workspace_run_command', state: {status: 'running', input: {command}}}},
+    {type: 'tool_use', part: {id: 'command-1', tool: 'workspace_run_command', state: {status: 'completed', input: {command}, output: JSON.stringify({stdout: secret, stderr: 'Failure evidence', exitCode: 2, timedOut: false, truncated: false})}}},
+    {type: 'text', part: {id: 'answer-1', text: 'The command failed with a visible exit code.'}},
+    {type: 'step_finish', part: {reason: 'stop'}},
+  ];
+  const binary = await fakeCli(t, cwd, `process.stdin.resume(); process.stdin.on('end', () => {for (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));});`);
+  const emitted = [];
+  await runAgent({harness: 'opencode', cwd, prompt: 'Run the command', toolsEnabled: true, env: {LITELLM_API_KEY: secret, SWARM_OPENCODE_BIN: binary}, onEvent: event => emitted.push(event)});
+  const result = emitted.find(event => event.type === 'tool' && event.exitCode === 2);
+  assert.equal(result.status, 'error');
+  assert.equal(result.command, 'printf [redacted]');
+  assert.equal(result.stdout, '[redacted]');
+  assert.equal(result.stderr, 'Failure evidence');
+  assert(!JSON.stringify(emitted).includes(secret));
+});
+
+test('Claude reports an explicit local command server rejection instead of pretending action tools loaded', async t => {
+  const cwd = await workspace(t);
+  const events = [{type: 'system', subtype: 'init', model: 'claude-test', mcp_server_errors: [{name: 'swarm_actions', type: 'configuration', message: 'Local command server rejected'}]}, {type: 'result', result: 'I cannot execute commands'}];
+  const binary = await fakeCli(t, cwd, `process.stdin.resume(); process.stdin.on('end', () => {for (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));});`);
+  await assert.rejects(runAgent({harness: 'claude', cwd, prompt: 'Perform actions', toolsEnabled: true, env: {SWARM_CLAUDE_BIN: binary}}), /local command server did not load.*rejected/);
 });
 
 test('new harnesses surface zero-exit upstream failures and clean profiles after cancellation', async t => {
