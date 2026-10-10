@@ -107,6 +107,13 @@ export class Conversations extends EventEmitter {
     return runner.steer(text);
   }
 
+  addAgents(options, id = this.selectedId) {
+    if (this.closing) throw requestError('This workspace is shutting down.', 503);
+    const {runner} = this.target(id);
+    if (!runner || runner.run.status !== 'running') throw requestError('Add agents to a running chat, or start a new one.', 409);
+    return runner.addAgents(options);
+  }
+
   async stop(id = this.selectedId) {
     const record = this.target(id);
     if (!record.runner) return record.run;
