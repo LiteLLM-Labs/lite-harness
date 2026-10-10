@@ -8,17 +8,16 @@ import { StringDecoder } from 'node:string_decoder';
 const SANDBOX = '/usr/bin/sandbox-exec';
 export const MAX_COMMAND_OUTPUT = 64 * 1024;
 export const MAX_COMMAND_TIMEOUT = 120000;
-const active = new Set();
 
-export function commandCapability() {
+export function commandCapability({networkEnabled = false} = {}) {
   const available = process.platform === 'darwin' && existsSync(SANDBOX);
-  return { available, sandbox: available ? 'macOS Seatbelt' : null, network: false,
-    reason: available ? 'Local commands can read machine files except protected configuration, and write only the workspace and private temporary files. Network is disabled.' : 'Shared local commands require macOS sandbox-exec; no unsandboxed fallback is enabled.' };
+  return { available, sandbox: available ? 'macOS Seatbelt' : null, network: available && networkEnabled,
+    reason: available ? `Local commands can read machine files except protected configuration, and write only the workspace and private temporary files. Outbound network is ${networkEnabled ? 'enabled for authorized tasks' : 'disabled'}.` : 'Shared local commands require macOS sandbox-exec; no unsandboxed fallback is enabled.' };
 }
 
 function quote(value) { return JSON.stringify(value); }
 function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-function profile(root, temporary) {
+function profile(root, temporary, networkEnabled) {
   const prefix = regexEscape(root) + '/(.*/)?';
   const privatePaths = '/(\\.env($|\\..*)|\\.(ssh|aws|agents|swarm)(/.*)?$)';
   const workspaceConfig = `${prefix}\\.codex(/.*)?$`;
@@ -34,6 +33,7 @@ function profile(root, temporary) {
 (allow process-fork)
 (allow sysctl-read)
 (allow mach-lookup)
+${networkEnabled ? '(allow network-outbound)' : ''}
 (allow file-read*)
 (allow file-write* (subpath ${quote(root)}) (subpath ${quote(temporary)}) (literal "/dev/null"))
 (deny file-read* file-write* (regex ${quote(privatePaths)}) (regex ${quote(workspaceConfig)}) ${privateHome.join(' ')})
@@ -47,26 +47,13 @@ function redact(text, env) {
   return text.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]');
 }
 
-export async function stopWorkspaceCommands(reason = new Error('Workspace command host stopped.')) {
-  await Promise.allSettled([...active].map(command => { command.controller.abort(reason); return command.done; }));
-}
-
-// Extension/MCP hosts receive TERM before their parent harness escalates to KILL.
-let supervised = false;
-export function superviseWorkspaceCommands() {
-  if (supervised) return;
-  supervised = true;
-  for (const name of ['SIGTERM', 'SIGINT']) process.once(name, () => {
-    stopWorkspaceCommands(new Error(`Workspace command host received ${name}.`)).finally(() => process.exit(0));
-  });
-}
-
-/** A real local command with OS-enforced workspace writes, no network, and no auth environment. */
-export async function runWorkspaceCommand({ cwd, command, timeoutMs = 30000, signal, env = process.env }) {
+/** A real local command with OS-enforced workspace writes, explicit networking, and no auth environment. */
+export async function runWorkspaceCommand({ cwd, command, timeoutMs = 30000, signal, env = process.env, networkEnabled = false }) {
   if (typeof command !== 'string' || !command.trim() || command.includes('\0') || Buffer.byteLength(command) > 16000) throw new Error('command must be nonempty text of at most 16 KiB.');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_COMMAND_TIMEOUT) throw new Error('timeoutMs must be an integer from 1 to 120000.');
+  if (typeof networkEnabled !== 'boolean') throw new Error('networkEnabled must be a boolean.');
   signal?.throwIfAborted();
-  const capability = commandCapability();
+  const capability = commandCapability({networkEnabled});
   if (!capability.available) throw new Error(capability.reason);
   const root = await realpath(cwd);
   const temporary = await realpath(await mkdtemp(join(tmpdir(), 'swarm-command-')));
@@ -108,13 +95,10 @@ export async function runWorkspaceCommand({ cwd, command, timeoutMs = 30000, sig
     kill('SIGTERM');
     killTimer = setTimeout(forceStop, 250);
   };
-  let resolveDone;
-  const state = {controller, done: new Promise(accept => { resolveDone = accept; })};
-  active.add(state);
   try {
     controller.signal.throwIfAborted();
     return await new Promise((accept, reject) => {
-      child = spawn(SANDBOX, ['-p', profile(root, temporary), '/bin/sh', '-c', command], {
+      child = spawn(SANDBOX, ['-p', profile(root, temporary, networkEnabled), '/bin/sh', '-c', command], {
         cwd: root, env: childEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
       controller.signal.addEventListener('abort', terminate, { once: true });
@@ -135,7 +119,7 @@ export async function runWorkspaceCommand({ cwd, command, timeoutMs = 30000, sig
       child.once('close', (exitCode, exitSignal) => {
         if (controller.signal.aborted) reject(controller.signal.reason || new Error('Command cancelled.'));
         else accept({ stdout: redact(new StringDecoder('utf8').write(Buffer.concat(stdout)), env), stderr: redact(new StringDecoder('utf8').write(Buffer.concat(stderr)), env), exitCode, signal: exitSignal,
-          timedOut, truncated, sandbox: capability.sandbox });
+          timedOut, truncated, sandbox: capability.sandbox, networkEnabled });
       });
     });
   } finally {
@@ -146,8 +130,6 @@ export async function runWorkspaceCommand({ cwd, command, timeoutMs = 30000, sig
     kill('SIGKILL');
     controller.signal.removeEventListener('abort', terminate);
     signal?.removeEventListener('abort', abort);
-    active.delete(state);
     await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
-    resolveDone();
   }
 }
