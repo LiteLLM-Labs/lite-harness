@@ -60,3 +60,26 @@ Final screenshots: `chat-new.jpg`, `chat-new-active.jpg`, `chat-subagents.jpg`, 
 - Normal Send from the stopped main composer continued its exact parent. The terminal Subagents composer also continued its parent and cleared sent text. No Continue-button prerequisite remains. New chat during delayed409 preserved its draft; subsequent Send omitted parentId and used the neutral default team. After stop cleanup settled, input and Send were enabled.
 - Continuation QA recorded original normal UI payloads, then added demo:true at the browser transport boundary before forwarding. This exercised real selection/parent handling without inference calls. Screenshots contain actual labelled simulated runs, not injected conversation records. QA simulations were stopped; public4328 and63529 were untouched.
 - All source syntax checks and13 chat-feed regressions passed. Cases cover canonical/event deduplication, long and immediate task/guidance distinctions, recipients, partial JSON, retries, terminal output, truthful stream timestamps, and500 stored+100 pending entries. Independent review found no remaining source blocker.
+
+## Local actions, workstreams, file review and stable reading — 2026-10-10
+
+Verified the canonical UI on an isolated loopback server at 4332 with the browser skill, at 1440×1000 and 390×844. Public servers on 4328 and 63529 were not restarted or changed by UI QA.
+
+- Local actions initializes from the server default, displays the actual project path, and keeps a chat's actual `toolsEnabled` mode independent of the next-period switch. Turning the switch off leaves completed enabled work labeled correctly; a fresh draft then shows Inspect only. Demo runs display Simulation. The project path is selectable and copyable.
+- A simulated 20-peer run declared three scripted workstreams. Selecting Onboarding showed its seven current members and only messages stamped with that stream, while shared human guidance remains visible. Pure helper checks confirmed that a peer moving streams does not reclassify its historical messages, and that Ungrouped is truthful.
+- Review mode kept exactly the same message DOM, HTML and feed height while 84 updates arrived: both scroll and height deltas were zero. Composer stayed enabled. Explicit resume caught up and moved to the newest message. An upward wheel event entered Review. Opening a saved run started in Review. Expanding a message updates only that message in place and pauses live reconciliation. The pending-update toolbar has constant height to prevent a counter appearing from moving the page.
+- A clearly labeled no-inference fixture used scripted peers with actual disposable file edits and a real verification command. Changes showed an added README (+3), deleted note (−1), and modified function (+2/−1). Refreshing an unchanged report preserved the exact diff DOM node. Initial loading, pending baselines, frozen reports and unavailable legacy baselines were inspected. Truncated unknown line counts render as unavailable, not zero. A literal script-like diff stayed inert text.
+- Read the completed real four-harness evidence from `/private/tmp/swarm-integrated-actions-msRTuw` in a separate copied QA store. The real run's two declared streams, four frozen added files and actual command output were rendered. Pi's command detail showed Completed / Exit 0 and `VERIFIED_peer-04`. No extra inference was triggered by this UI review.
+- Desktop/mobile screenshots were visually inspected for clipping and horizontal overflow. Mobile file selection, diff reading, workstream control and review/resume controls fit the viewport. JavaScript syntax checks and all 13 chat-feed regressions passed; workstream membership/history helper assertions also passed.
+
+Final evidence:
+
+- `workstreams-real-desktop.jpg` — actual completed Codex/Pi verification stream and matching members.
+- `changes-real-desktop.jpg`, `changes-real-mobile.jpg` — actual four-harness frozen file changes.
+- `local-command-real.jpg` — actual successful Pi command and stdout.
+- `workstreams-desktop.jpg`, `workstreams-mobile.jpg` — explicitly simulated 20-peer swarm.
+- `review-paused-desktop.jpg`, `review-paused-mobile.jpg` — explicitly simulated incoming activity held behind Review.
+- `local-actions-desktop.jpg`, `local-actions-mobile.jpg` — project and next-period action controls.
+- `changes-fixture-desktop.jpg` — labeled no-inference fixture with real added/modified/deleted files.
+
+The first Changes loading check exposed a null-element scroll restoration guard; it was corrected and the successful initial fetch, file selection and stable refresh were rechecked. A four-pixel review toolbar shift was also corrected; the subsequent measured shift was zero. Baseline snapshots exclude unsupported/private files by backend policy; the UI does not attribute file changes to an agent or workstream.
