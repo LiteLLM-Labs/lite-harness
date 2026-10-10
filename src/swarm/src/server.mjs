@@ -6,7 +6,6 @@ import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {defaultModel, defaultTeam, validateTeam, HARNESSES, MAX_AGENTS} from './team.mjs';
 import {availableHarnesses} from './adapters.mjs';
 import {Conversations} from './conversations.mjs';
-import {commandCapability} from './workspace-command.mjs';
 import {getRunChanges} from './workspace-changes.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
@@ -29,7 +28,6 @@ async function readJSON(request) {
 export async function startServer({runner, store, port = 4318, team, toolsEnabled = true, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
   const initialTeam = validateTeam(team ?? defaultTeam());
   if (typeof toolsEnabled !== 'boolean') throw new Error('toolsEnabled must be a boolean.');
-  const commands = commandCapability();
   const clients = new Set();
   const conversations = new Conversations({runner, store});
   const found = suppliedCapabilities ?? await availableHarnesses();
@@ -37,7 +35,7 @@ export async function startServer({runner, store, port = 4318, team, toolsEnable
   const state = () => ({
     run: conversations.run,
     runs: conversations.summaries(),
-    defaults: {team: initialTeam, maxAgents: MAX_AGENTS, toolsEnabled, workspace: runner.workspace, localActions: {commands: commands.available, reason: commands.reason, network: false}, harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
+    defaults: {team: initialTeam, maxAgents: MAX_AGENTS, toolsEnabled, liveAccess: true, workspace: runner.workspace, harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
     capabilities,
   });
   const broadcast = () => {
@@ -108,6 +106,7 @@ export async function startServer({runner, store, port = 4318, team, toolsEnable
           return json(201, conversations.start({...body, toolsEnabled: body.toolsEnabled ?? toolsEnabled}));
         }
         if (path === '/api/select') return json(200, conversations.select(body.id));
+        if (path === '/api/access') return json(200, conversations.setAccess(body, body.runId));
         if (path === '/api/agents') return json(200, conversations.addAgents(body, body.runId));
         if (path === '/api/message') return json(200, conversations.steer(body.text, body.runId));
         if (path === '/api/stop') return json(200, await conversations.stop(body.runId));
