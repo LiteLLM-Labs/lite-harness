@@ -1,5 +1,5 @@
 import { Constellation } from './assets/constellation.js';
-import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, currentWork, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
+import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, currentWork, agentPresence, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
 
 const $ = (selector) => document.querySelector(selector);
 let state = { run: null, runs: [], defaults: {}, capabilities: [] };
@@ -76,9 +76,7 @@ function renderStatus(run, agents) {
   const running = run?.status === 'running';
   const currentRunning = state.run?.status === 'running';
   const electing = running && run.phase === 'electing';
-  const active = agents.filter((agent) => ['running', 'working'].includes(agent.status)).length;
-  const cycles = agents.reduce((total, agent) => total + (Number(agent.cycles) || 0), 0);
-  const completed = agents.filter((agent) => agent.status === 'complete').length;
+  const active = agents.filter((agent) => agentPresence(agent, run).active).length;
   const statusLabels = { running: 'THE SWARM IS WORKING', complete: 'WORK PERIOD COMPLETE', failed: 'THIS RUN NEEDS ATTENTION', stopped: 'SWARM STOPPED', interrupted: 'RUN INTERRUPTED' };
   $('#run-state').textContent = draftMode ? parentRun ? 'CONTINUE THE CONVERSATION' : 'A NEW CONVERSATION' : historicalRun ? 'FROM YOUR RECENT RUNS' : electing ? 'THE TEAM IS ELECTING ITS COORDINATOR' : statusLabels[run?.status] || 'INDEPENDENT MINDS. SHARED MOMENTUM.';
   $('#demo-label').hidden = !run?.demo;
@@ -92,19 +90,10 @@ function renderStatus(run, agents) {
     $('#headline').replaceChildren(document.createTextNode('Many minds. '), element('span', '', 'One shared direction.'));
     $('#headline').removeAttribute('title');
   }
-  const captions = {
-    running: electing ? 'Each agent votes. The counted result decides who coordinates.' : `${active} agents at work. New findings keep arriving while they collaborate.`,
-    complete: 'The work period is complete. Explore every contribution and result.',
-    failed: 'Read the conversation for details. Completed work stays available.',
-    stopped: 'The swarm has stopped. Every contribution is still here.',
-    interrupted: 'This run was interrupted. Its work has been preserved.',
-  };
-  $('#hero-caption').textContent = captions[run?.status] || (parentRun ? 'Same peers. Their previous result is part of the shared context.' : 'Give the swarm a direction. Watch the work take shape.');
-  $('#progress-text').textContent = run ? running ? `${active}/${agents.length} working · ${cycles} contributions` : `${completed}/${agents.length} complete · ${cycles} contributions` : `${agents.length || '…'} agents · concurrent work`;
+  $('#hero-caption').textContent = electing ? 'The peers are choosing their leader.' : running ? 'Your swarm is active.' : run ? 'This swarm is inactive.' : 'Start a conversation to bring the swarm online.';
+  $('#progress-text').textContent = `${active} active · ${agents.length - active} inactive`;
   const coordinator = agents.find((agent) => agent.id === run?.coordinatorId);
-  const voteCount = run?.election?.votes?.length || 0;
-  const coordinatorKind = run?.coordinatorChanges?.length ? 'replacement' : run?.election?.method?.includes('fallback') ? 'fallback' : 'elected';
-  $('#coordinator-label').textContent = coordinator ? `${coordinator.name} · ${coordinatorKind} coordinator` : electing ? `Election · ${voteCount}/${run.election?.eligibleVoters || agents.length} votes` : 'Coordinator elected by the team';
+  $('#coordinator-label').textContent = coordinator ? `Leader: ${coordinator.name}` : electing ? 'Choosing leader' : 'No leader';
   $('#election-button').classList.toggle('elected', Boolean(coordinator));
   $('#stage-hint').textContent = historicalRun ? 'Viewing a saved run. Use Recent runs to return.' : 'Open any agent to see its full work and conversation.';
   $('#stream-label').replaceChildren(element('span', 'status-dot'), document.createTextNode(running ? 'LIVE' : run ? run.status.toUpperCase() : 'STANDING BY'));
@@ -242,13 +231,8 @@ function renderCards(agents, run) {
     if (!ids.has(id)) { entry.node.remove(); cards.delete(id); }
   }
   for (const agent of agents) {
-    const coordinator = agent.id === run?.coordinatorId;
-    const output = currentWork(agent);
-    const vote = run?.election?.votes?.find((entry) => entry.voterId === agent.id);
-    const assignment = run ? agent.assignment || agent.role || 'Choosing a contribution.' : 'Chooses a role from your task and the shared context.';
-    const preview = output ? output.replace(/\s+/g, ' ').slice(-340) : vote ? `Voted for ${agentName(vote.candidateId)}. ${vote.reason || ''}` : run?.phase === 'electing' ? 'Considering the team and choosing a coordinator…' : run ? 'Waiting for a public contribution…' : 'Its actual work will appear here as it happens.';
-    const replacement = coordinator && Boolean(run?.coordinatorChanges?.length || run?.election?.method?.includes('fallback'));
-    const signature = JSON.stringify([agent.name, agent.harness, agent.model, agent.status, agent.cycles, agent.activity, assignment, preview, coordinator, replacement, selectedId]);
+    const presence = agentPresence(agent, run);
+    const signature = JSON.stringify([agent.name, agent.harness, agent.model, presence, selectedId]);
     let entry = cards.get(agent.id);
     if (!entry) {
       const node = element('button', 'agent-card');
@@ -262,25 +246,20 @@ function renderCards(agents, run) {
     if (signature === entry.signature) continue;
     entry.signature = signature;
     const button = entry.node;
-    button.className = `agent-card ${agent.status || 'queued'}${coordinator ? ' coordinator' : ''}${selectedId === agent.id ? ' selected' : ''}`;
-    button.setAttribute('aria-label', `Open ${agent.name}, ${HARNESS_NAMES[agent.harness] || agent.harness}, ${stageDescription(agent)}. Full output and transcript.`);
+    button.className = `agent-card presence-${presence.active ? 'active' : 'inactive'}${presence.leader ? ' coordinator' : ''}${selectedId === agent.id ? ' selected' : ''}`;
+    button.setAttribute('aria-label', `Open ${agent.name}${presence.leader ? ', leader' : ''}, ${presence.label}. Full output and transcript.`);
     const art = element('span', 'agent-node-art');
     const status = element('span', 'card-status');
     status.append(element('span', 'status-dot'));
     art.append(logo(agent.harness), status);
     const header = element('span', 'agent-card-header');
     header.append(element('span', 'agent-card-name', agent.name), modelLogo(agent.model, agent.harness));
-    const model = element('span', 'agent-card-model');
-    model.append(modelLogo(agent.model, agent.harness), element('span', '', shortModel(agent.model, agent.harness)));
-    model.title = `${HARNESS_NAMES[agent.harness] || agent.harness} · ${shortModel(agent.model, agent.harness)}`;
-    const footer = element('span', 'card-footer');
-    footer.append(element('span', '', `${Number(agent.cycles) || 0} cycles · ${stageDescription(agent)}`));
-    if (coordinator) footer.append(element('span', 'coordinator-badge', replacement ? 'COORDINATOR' : 'ELECTED'));
-    footer.append(element('span', 'open-detail', '↗'));
+    const activity = element('span', 'node-presence');
+    activity.append(element('span', 'status-dot'), document.createTextNode(presence.label));
     const work = element('span', 'node-work');
-    work.append(header, model, element('span', 'agent-assignment', assignment), element('span', `agent-preview${output || vote ? '' : ' waiting'}`, preview), footer);
-    button.title = `${agent.name} · ${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}\n${assignment}\n${stageDescription(agent)}`;
-    button.replaceChildren(art, work);
+    work.append(header, activity);
+    button.title = `${agent.name}${presence.leader ? ' · Leader' : ''} · ${presence.label}\n${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}\nClick for full work and conversation.`;
+    button.replaceChildren(...(presence.leader ? [element('span', 'node-leader-tag', 'LEADER')] : []), art, work);
   }
   scheduleFieldLayout();
 }
@@ -306,7 +285,7 @@ function scheduleFieldLayout() {
       const rect = node.getBoundingClientRect();
       return { x: (rect.left + rect.width / 2 - stage.left) / stage.width * 1920, y: (rect.top + rect.height / 2 - stage.top) / stage.height * 1080 };
     };
-    const agents = displayAgents().map((agent) => ({ ...agent, ...position(cards.get(agent.id).node.querySelector('.agent-node-art')) }));
+    const agents = displayAgents().map((agent) => ({ ...agent, status: agentPresence(agent, viewedRun()).active ? 'running' : 'queued', ...position(cards.get(agent.id).node.querySelector('.agent-node-art')) }));
     field.update(agents, selectedId, viewedRun()?.status === 'running', position($('#election-button .hub-symbol')));
   });
 }
