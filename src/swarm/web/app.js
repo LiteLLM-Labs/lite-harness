@@ -1,6 +1,8 @@
 import { Constellation } from './assets/constellation.js';
 import { brainLayout, resizeTeam } from './assets/team-layout.js';
 import { groupChatEntries } from './assets/chat-feed.js';
+import { UNGROUPED, workstreamsForRun, workstreamMembers, inWorkstream } from './assets/workstreams.js';
+import { ChangesView } from './assets/changes-view.js';
 import { HARNESS_NAMES, element, logo, modelLogo, identityLogos, shortModel, elapsed, richText, publicOutput, currentWork, agentPresence, stageDescription, consensusLabel, replaceText } from './assets/ui.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -10,11 +12,17 @@ let draftMode = false;
 let parentRun = null;
 let brainView = false;
 let contentView = 'chat';
-const contentScroll = {chat: 0, results: 0};
+const contentScroll = {chat: 0, results: 0, changes: 0};
+let selectedWorkstream = '';
+let workstreamSignature = '';
 const groupRows = new Map();
 const expandedMessages = new Set();
+const displayedMessages = new Map();
+let reviewing = false;
+let reviewRendered = false;
 let inspectorOpen = false;
 let sidebarSignature = '';
+let overviewSignature = '';
 let navigationRevision = 0;
 let requestedChatId = null;
 let pendingSubmission = null;
@@ -37,6 +45,7 @@ let layoutPending = false;
 const expandedEvents = new Set();
 const cards = new Map();
 const field = new Constellation($('#constellation'));
+const changesView = new ChangesView($('#changes-panel'), api);
 
 function defaultTeam() {
   return (state.defaults.team || []).map((agent) => ({ ...agent, status: 'queued' }));
@@ -46,6 +55,7 @@ function viewedRun() { return draftMode ? null : historicalRun || state.run; }
 function displayAgents() { return viewedRun()?.agents || configuredTeam || defaultTeam(); }
 function agentById(id) { return displayAgents().find((agent) => agent.id === id); }
 function agentName(id) { return id === 'all' ? 'everyone' : id === 'user' ? 'You' : agentById(id)?.name || id || 'Swarm'; }
+function workstreamName(id) { return id === UNGROUPED ? 'Ungrouped' : workstreamsForRun(viewedRun()).find((stream) => stream.id === id)?.name || id; }
 function harnessDefaultModel(harness) {
   return state.defaults.harnessModels?.[harness] ?? state.defaults.team?.find((agent) => agent.harness === harness)?.model ?? (harness === 'native' ? state.defaults.model || '' : '');
 }
@@ -84,6 +94,82 @@ function updateClock() {
   if (!run) { $('#elapsed').textContent = 'READY WHEN YOU ARE'; return; }
   const spent = `${elapsed(run.startedAt, run.endedAt || Date.now())} ELAPSED`;
   $('#elapsed').textContent = run.status === 'running' && run.deadlineAt ? `${elapsed(Date.now(), run.deadlineAt)} LEFT · ${spent}` : spent;
+}
+
+function renderProject(run = viewedRun()) {
+  const workspace = run?.workspace || state.defaults.workspace || '';
+  const enabled = run ? Boolean(run.toolsEnabled) && !run.demo : $('#tools-toggle').checked;
+  const mode = run?.demo ? 'Simulation' : enabled ? 'Local actions on' : 'Inspect only';
+  const folder = workspace.split(/[\\/]/).filter(Boolean).at(-1) || 'Project';
+  $('#actions-mode').textContent = mode;
+  $('#workspace-label').textContent = folder;
+  $('#project-button').classList.toggle('actions-enabled', enabled);
+  $('#project-button').title = `${mode}${workspace ? ` · ${workspace}` : ''}`;
+  $('#project-button').setAttribute('aria-label', `${mode}. Project: ${workspace || 'loading'}. Open project and action settings.`);
+  if ($('#workspace-path').value !== workspace) $('#workspace-path').value = workspace;
+  $('#copy-workspace').disabled = !workspace;
+  $('#project-current').hidden = !run;
+  $('#project-current').textContent = run?.demo ? 'This is a simulated demo. It does not run local actions.' : `${run?.status === 'running' ? 'Current work period' : 'This work period'}: ${mode.toLowerCase()}.`;
+  $('#actions-setting-note').textContent = `${$('#tools-toggle').checked ? 'Enabled for the next work period.' : 'Inspect only for the next work period: agents can read project files.'}${run?.status === 'running' ? ' The current swarm keeps its existing access.' : ''}`;
+  const capability = state.defaults.localActions;
+  $('#actions-capability').hidden = capability?.commands !== false;
+  $('#actions-capability').textContent = capability?.commands === false ? `Some agents can edit files but cannot run commands on this server. ${capability.reason || ''}` : '';
+}
+
+function openProject() {
+  renderProject();
+  if (!$('#project-dialog').open) $('#project-dialog').showModal();
+}
+
+function renderWorkstreams(run) {
+  const streams = workstreamsForRun(run);
+  if (selectedWorkstream && selectedWorkstream !== UNGROUPED && !streams.some((stream) => stream.id === selectedWorkstream)) selectedWorkstream = '';
+  const options = [{id: '', name: 'All work'}, ...streams, {id: UNGROUPED, name: 'Ungrouped'}];
+  const signature = JSON.stringify(options);
+  if (signature !== workstreamSignature) {
+    workstreamSignature = signature;
+    $('#workstream-filter').replaceChildren(...options.map((stream) => {
+      const option = element('option', '', stream.name);
+      option.value = stream.id;
+      return option;
+    }));
+  }
+  $('#workstream-filter').value = selectedWorkstream;
+  $('#workstream-summary').textContent = streams.length ? `${streams.length} ${streams.length === 1 ? 'stream' : 'streams'}` : 'Peers choose their focus';
+  $('#inspector-workstream').hidden = !selectedWorkstream;
+  $('#inspector-stream-name').textContent = workstreamName(selectedWorkstream);
+}
+
+function selectWorkstream(id) {
+  selectedWorkstream = id;
+  reviewRendered = false;
+  feedSignature = '';
+  render();
+  $('#chat-scroll').scrollTop = 0;
+}
+
+function pauseConversation() {
+  if (reviewing || !viewedRun() || brainView || contentView !== 'chat') return;
+  reviewing = true;
+  reviewRendered = true;
+  updateReviewControls(viewedRun(), groupChatEntries(viewedRun()).filter((message) => inWorkstream(message, selectedWorkstream)));
+}
+
+function followConversation() {
+  reviewing = false;
+  reviewRendered = false;
+  renderGroupChat(viewedRun());
+  $('#chat-scroll').scrollTop = $('#chat-scroll').scrollHeight;
+}
+
+function updateReviewControls(run, messages) {
+  const count = reviewing ? messages.filter((message) => displayedMessages.get(message.id) !== JSON.stringify(message)).length : 0;
+  $('#review-status').textContent = reviewing ? 'Reviewing · paused' : run?.status === 'running' ? 'Following live' : 'Latest conversation';
+  $('#review-toggle').textContent = reviewing ? run?.status === 'running' ? 'Follow live' : 'Show latest' : 'Pause updates';
+  $('#review-toggle').setAttribute('aria-pressed', String(reviewing));
+  $('#review-updates').hidden = !count;
+  $('#review-updates').textContent = `${count} ${count === 1 ? 'update' : 'updates'} ↓`;
+  $('#review-toolbar').classList.toggle('reviewing', reviewing);
 }
 
 function renderStatus(run, agents) {
@@ -138,6 +224,7 @@ function renderStatus(run, agents) {
   if ($('#add-agents-dialog').open && (!running || run.id !== addTargetId)) $('#add-agents-dialog').close();
   updateDurationLabel();
   if (running && run.deadlineAt) $('#duration-label').textContent = `${elapsed(run.startedAt, run.deadlineAt)} ${run.demo ? 'demo playback' : 'work budget'}`;
+  renderProject(run);
   updateClock();
 }
 
@@ -147,6 +234,8 @@ function newChat(followUp = false) {
   const prior = followUp ? viewedRun() : null;
   parentRun = prior;
   configuredTeam = prior ? prior.agents.map(({id, name, role, harness, model}) => ({id, name, role, harness, model, status: 'queued'})) : null;
+  reviewing = false;
+  reviewRendered = false;
   draftMode = true;
   historicalRun = null;
   selectedId = null;
@@ -169,6 +258,7 @@ function setView(spatial) {
   $('#brain-view-button').setAttribute('aria-pressed', String(spatial));
   $('#chat-view-button').setAttribute('aria-pressed', String(!spatial && contentView === 'chat'));
   $('#results-view-button').setAttribute('aria-pressed', String(!spatial && contentView === 'results'));
+  $('#changes-view-button').setAttribute('aria-pressed', String(!spatial && contentView === 'changes'));
   updateContentVisibility();
   if (spatial) showInspector(false);
   scheduleFieldLayout();
@@ -176,11 +266,20 @@ function setView(spatial) {
 
 function updateContentVisibility() {
   const results = brainView || contentView === 'results';
-  $('#group-feed').hidden = results;
+  const changes = !brainView && contentView === 'changes';
+  $('#group-feed').hidden = results || changes;
   $('#human-feed').hidden = !results;
+  $('#changes-panel').hidden = !changes;
+  changesView.update(viewedRun(), changes);
+  $('.conversation-tools').hidden = changes;
+  $('#chat-user-message').hidden = !viewedRun() || changes;
+  $('#chat-welcome').hidden = Boolean(viewedRun()) || changes;
+  $('#chat-run-status').hidden = !viewedRun() || changes;
+  $('#workstream-bar').hidden = !viewedRun() || brainView || contentView !== 'chat';
+  $('#review-toolbar').hidden = !viewedRun() || brainView || contentView !== 'chat';
   $('#conversation-label').textContent = results ? 'Results for you' : 'Group conversation';
-  $('#conversation-label').hidden = !viewedRun();
-  $('#chat-scroll').setAttribute('aria-label', results ? 'Results from the swarm' : 'Group conversation');
+  $('#conversation-label').hidden = !viewedRun() || changes;
+  $('#chat-scroll').setAttribute('aria-label', changes ? 'Project changes' : results ? 'Results from the swarm' : 'Group conversation');
 }
 function showContent(view) {
   if (!brainView) contentScroll[contentView] = $('#chat-scroll').scrollTop;
@@ -210,12 +309,15 @@ async function selectChat(id) {
     parentRun = null;
     configuredTeam = null;
     historicalRun = null;
+    reviewing = true;
+    reviewRendered = false;
     $('#task-input').value = '';
     receiveState(snapshot);
   } catch (error) { toast(error.message); }
 }
 
 function renderChat(run, agents) {
+  const members = run ? workstreamMembers(run, selectedWorkstream) : agents;
   $('#chat-title').textContent = run?.task || (parentRun ? 'Follow-up' : 'New chat');
   $('#chat-title').title = run?.task || 'New chat';
   $('#chat-welcome').hidden = Boolean(run);
@@ -223,12 +325,16 @@ function renderChat(run, agents) {
   $('#chat-task').textContent = run?.task || '';
   $('#agent-overview').hidden = !run;
   $('#agents-count').textContent = agents.length;
-  $('#inspector-count').textContent = agents.length;
-  const working = agents.filter((agent) => agentPresence(agent, run).active).length;
+  $('#inspector-count').textContent = members.length;
+  const working = members.filter((agent) => agentPresence(agent, run).active).length;
   const leader = agents.find((agent) => agent.id === run?.coordinatorId);
-  $('#overview-title').textContent = `${agents.length} agents in this conversation`;
+  $('#overview-title').textContent = selectedWorkstream ? `${workstreamName(selectedWorkstream)} · ${members.length} agents` : `${agents.length} agents in this conversation`;
   $('#overview-detail').textContent = `${working} active · ${leader ? `Leader: ${leader.name}` : run?.phase === 'electing' ? 'Choosing a leader' : 'No leader'} · View their work`;
-  $('#overview-logos').replaceChildren(...agents.map((agent) => logo(agent.harness)));
+  const overview = members.slice(0, 5).map((agent) => agent.harness).join('|');
+  if (overview !== overviewSignature) {
+    overviewSignature = overview;
+    $('#overview-logos').replaceChildren(...members.slice(0, 5).map((agent) => logo(agent.harness)));
+  }
   $('#chat-run-status').hidden = !run;
   updateContentVisibility();
   $('#chat-run-status').textContent = run?.status === 'running' ? 'The team is working. You can send more context below.' : run?.status === 'complete' ? 'Work period complete. Message your swarm to continue with its context.' : run ? `This swarm is ${run.status}. Send a message to continue with its context.` : '';
@@ -245,9 +351,9 @@ function renderChat(run, agents) {
     });
     $('#sidebar-chats').replaceChildren(...(rows.length ? rows : [element('p', 'sidebar-empty', 'Your conversations will appear here.')]));
   }
-  const ids = new Set(agents.map((agent) => agent.id));
+  const ids = new Set(members.map((agent) => agent.id));
   for (const [id, entry] of agentRows) if (!ids.has(id)) { entry.node.remove(); agentRows.delete(id); }
-  for (const agent of agents) {
+  for (const agent of members) {
     let entry = agentRows.get(agent.id);
     if (!entry) {
       const node = element('button', 'agent-list-row');
@@ -257,14 +363,14 @@ function renderChat(run, agents) {
       $('#agent-list').append(node);
     }
     const output = currentWork(agent);
-    const signature = JSON.stringify([agent.name, agent.harness, agent.model, agent.status, agent.activity, agent.cycles, output]);
+    const signature = JSON.stringify([agent.name, agent.harness, agent.model, agent.status, agent.activity, agent.cycles, output, agent.workstream]);
     if (entry.signature === signature) continue;
     entry.signature = signature;
     entry.node.className = `agent-list-row ${agent.status}`;
     const text = element('span', 'agent-list-text');
     const heading = element('span', 'agent-list-heading');
     heading.append(element('strong', '', agent.name), modelLogo(agent.model, agent.harness));
-    text.append(heading, element('span', 'agent-list-state', `${stageDescription(agent)} · ${agent.cycles || 0} cycles`), element('span', 'agent-list-preview', output || (run ? agent.assignment || agent.role : 'Chooses a role once you share your task.')));
+    text.append(heading, element('span', 'agent-list-state', `${agent.workstream?.name ? `${agent.workstream.name} · ` : ''}${stageDescription(agent)} · ${agent.cycles || 0} cycles`), element('span', 'agent-list-preview', output || (run ? agent.assignment || agent.role : 'Chooses a role once you share your task.')));
     entry.node.replaceChildren(logo(agent.harness), text, element('span', 'agent-list-arrow', '↗'));
   }
 }
@@ -374,6 +480,7 @@ function eventElement(event, run, full = false) {
   const body = element('div', `event-body${expanded ? '' : ' preview'}`);
   richText(body, text);
   card.append(body);
+  if (event.type === 'tool') card.append(toolDetails(event, full));
   if (event.proposalId) {
     const proposal = run?.proposals?.find((item) => item.id === event.proposalId);
     const consensus = proposal?.consensus || event.consensus;
@@ -390,6 +497,33 @@ function eventElement(event, run, full = false) {
     card.append(more);
   }
   return card;
+}
+
+function toolDetails(event, full) {
+  const panel = element('div', 'tool-details');
+  const metadata = [];
+  if (event.status) metadata.push({running: 'Running', completed: 'Completed', error: 'Failed'}[event.status] || event.status);
+  if (Number.isInteger(event.exitCode)) metadata.push(`Exit ${event.exitCode}`);
+  if (event.timedOut) metadata.push('Timed out');
+  if (event.truncated) metadata.push('Output truncated');
+  if (metadata.length) panel.append(element('div', `tool-status${event.status === 'error' || event.timedOut ? ' failed' : ''}`, metadata.join(' · ')));
+  if (event.command) panel.append(element('pre', 'tool-command', event.command));
+  if (event.path) panel.append(element('div', 'tool-path', event.path));
+  const stdout = typeof event.stdout === 'string' ? event.stdout : '';
+  const stderr = typeof event.stderr === 'string' ? event.stderr : '';
+  if (stdout || stderr) {
+    const output = element('details', 'tool-output');
+    output.open = full && stdout.length + stderr.length < 3000;
+    output.append(element('summary', '', 'Command output'));
+    for (const [label, value] of [['Output', stdout], ['Diagnostics', stderr]]) {
+      if (!value) continue;
+      output.append(element('span', 'tool-output-label', label), element('pre', '', value));
+    }
+    panel.append(output);
+  } else if (Number.isInteger(event.exitCode) && event.status !== 'running') {
+    panel.append(element('div', 'tool-empty', 'The command returned no output.'));
+  }
+  return panel;
 }
 function renderFilter(agents) {
   const signature = agents.map((agent) => `${agent.id}:${agent.name}`).join('|');
@@ -408,7 +542,7 @@ function renderFilter(agents) {
 }
 function renderFeed(run, agents) {
   renderFilter(agents);
-  const events = allEvents(run).filter((event) => !filterId || event.agentId === filterId || event.toAgentId === filterId || event.toAgentId === 'all' || event.agentId === 'user' || !event.agentId);
+  const events = allEvents(run).filter((event) => inWorkstream(event, selectedWorkstream) && (!filterId || event.agentId === filterId || event.toAgentId === filterId || event.toAgentId === 'all' || event.agentId === 'user' || !event.agentId));
   $('#event-count').textContent = `${events.length} EVENTS`;
   const signature = `${run?.id}|${filterId}|${events.length}|${events.at(-1)?.id || ''}|${events.at(-1)?.text || ''}`;
   if (signature === feedSignature || !run) return;
@@ -421,7 +555,7 @@ function renderFeed(run, agents) {
   panel.scrollTop = stick ? panel.scrollHeight : position;
 }
 
-const MESSAGE_LABELS = {contribution: 'Contribution', election: 'Leader vote', proposal: 'Proposal', vote: 'Vote', assignment: 'Assignment', identity: 'Introduction', membership: 'Team change', coordination: 'Coordination'};
+const MESSAGE_LABELS = {contribution: 'Contribution', election: 'Leader vote', proposal: 'Proposal', vote: 'Vote', assignment: 'Assignment', identity: 'Introduction', membership: 'Team change', coordination: 'Coordination', workstream: 'Workstream'};
 function groupMessage(message, run) {
   const agent = agentById(message.from);
   const isUser = message.from === 'user';
@@ -448,6 +582,11 @@ function groupMessage(message, run) {
   if (message.at != null) header.append(element('span', 'group-time', `+${elapsed(run.startedAt, message.at)}`));
   main.append(header);
   if (agent) main.append(element('div', 'group-model', `${HARNESS_NAMES[agent.harness]} · ${shortModel(agent.model, agent.harness)}`));
+  if (message.workstreamId && !selectedWorkstream) {
+    const stream = element('button', 'group-workstream', workstreamName(message.workstreamId));
+    stream.addEventListener('click', () => selectWorkstream(message.workstreamId));
+    main.append(stream);
+  }
   const bubble = element('div', 'group-bubble');
   const label = message.streaming ? 'Writing…' : message.partial ? 'Partial contribution' : MESSAGE_LABELS[message.kind];
   if (label) bubble.append(element('div', 'group-kind', label));
@@ -464,9 +603,10 @@ function groupMessage(message, run) {
   if (collapsible) {
     const expand = element('button', 'group-expand', expandedMessages.has(message.id) ? 'Show less' : 'Read full message');
     expand.addEventListener('click', () => {
+      pauseConversation();
       if (expandedMessages.has(message.id)) expandedMessages.delete(message.id); else expandedMessages.add(message.id);
-      groupRows.get(message.id).signature = '';
-      renderGroupChat(viewedRun());
+      body.classList.toggle('collapsed', !expandedMessages.has(message.id));
+      expand.textContent = expandedMessages.has(message.id) ? 'Show less' : 'Read full message';
     });
     bubble.append(expand);
   }
@@ -475,7 +615,9 @@ function groupMessage(message, run) {
   return row;
 }
 function renderGroupChat(run) {
-  const messages = groupChatEntries(run);
+  const messages = groupChatEntries(run).filter((message) => inWorkstream(message, selectedWorkstream));
+  updateReviewControls(run, messages);
+  if (reviewing && reviewRendered) return;
   const panel = $('#chat-scroll');
   const stick = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 70;
   const position = panel.scrollTop;
@@ -486,7 +628,7 @@ function renderGroupChat(run) {
   const rows = messages.map((message) => {
     const agent = agentById(message.from);
     const consensus = run?.proposals?.find((proposal) => proposal.id === message.proposalId)?.consensus;
-    const signature = JSON.stringify([message, agent?.name, agent?.harness, agent?.model, agent && agentPresence(agent, run), consensus]);
+    const signature = JSON.stringify([message, agent?.name, agent?.harness, agent?.model, agent && agentPresence(agent, run), consensus, selectedWorkstream]);
     let entry = groupRows.get(message.id);
     if (!entry || signature !== entry.signature) {
       entry = {signature, node: groupMessage(message, run)};
@@ -502,12 +644,16 @@ function renderGroupChat(run) {
     if (row === cursor) cursor = cursor.nextElementSibling;
     else feed.insertBefore(row, cursor);
   }
-  if (!messages.length && run) feed.replaceChildren(element('p', 'group-empty', 'The team’s first messages will appear here. Each peer speaks in its own name.'));
+  if (!messages.length && run) feed.replaceChildren(element('p', 'group-empty', selectedWorkstream ? 'No messages in this workstream yet. Current members are available in Subagents.' : 'The team’s first messages will appear here. Each peer speaks in its own name.'));
   if (!brainView && contentView === 'chat') {
     if (stick) panel.scrollTop = panel.scrollHeight;
     else if (anchor?.isConnected) panel.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
     else panel.scrollTop = position;
   }
+  displayedMessages.clear();
+  for (const message of messages) displayedMessages.set(message.id, JSON.stringify(message));
+  reviewRendered = true;
+  updateReviewControls(run, messages);
 }
 
 function resultEntries(run) {
@@ -542,7 +688,7 @@ function renderResults(run) {
     return card;
   }));
   if (!timeline.length && run) $('#human-feed').append(element('p', 'group-empty', 'The team’s human-facing answers will appear here. Follow their conversation in Chat while they work.'));
-  panel.scrollTop = stick ? panel.scrollHeight : position;
+  if (brainView || contentView === 'results') panel.scrollTop = stick ? panel.scrollHeight : position;
 }
 function openResult(result) {
   selectedResult = result;
@@ -554,6 +700,7 @@ function openResult(result) {
 }
 
 function openAgent(id) {
+  pauseConversation();
   selectedId = id;
   messageSignature = '';
   setAgentTab('output');
@@ -627,6 +774,8 @@ function clearHumanFeed() {
   $('#human-feed').replaceChildren();
   $('#group-feed').replaceChildren();
   groupRows.clear();
+  displayedMessages.clear();
+  reviewRendered = false;
   expandedMessages.clear();
   $('#feed').replaceChildren(element('p', 'empty-feed', 'Peer messages and tool activity appear here once the work begins.'));
 }
@@ -637,11 +786,13 @@ function render() {
     lastRunId = run?.id;
     selectedId = null;
     filterId = '';
+    selectedWorkstream = '';
     feedSignature = resultsSignature = filterSignature = messageSignature = '';
     expandedEvents.clear();
     if ($('#agent-dialog').open) $('#agent-dialog').close();
     clearHumanFeed();
   }
+  renderWorkstreams(run);
   renderStatus(run, agents);
   renderChat(run, agents);
   renderCards(agents, run);
@@ -656,10 +807,12 @@ function receiveState(next) {
   state = { ...state, ...next, ...(keepSelection ? {run: state.run} : {}) };
   if (!defaultsApplied && state.defaults.team?.length) {
     defaultsApplied = true;
+    reviewing = Boolean(state.run);
     const duration = Number(state.defaults.duration) || 600;
     const option = [...$('#timeout-select').options].find((item) => Number(item.value) === duration);
     $('#timeout-select').value = option ? option.value : 'custom';
     $('#custom-duration').value = String(duration / 60);
+    $('#tools-toggle').checked = state.defaults.toolsEnabled === true;
     updateDurationLabel();
   }
   render();
@@ -815,6 +968,8 @@ async function startRun(demo = false, sourceInput = $('#task-input')) {
     };
     const response = await api('/api/run', body);
     if (revision === navigationRevision) {
+      reviewing = false;
+      reviewRendered = false;
       historicalRun = null;
       draftMode = false;
       parentRun = null;
@@ -863,6 +1018,25 @@ $('#continue-chat-button').addEventListener('click', () => newChat(true));
 $('#return-chat-button').addEventListener('click', () => { requestedChatId = state.run?.id || null; draftMode = false; parentRun = null; render(); });
 $('#chat-view-button').addEventListener('click', () => showContent('chat'));
 $('#results-view-button').addEventListener('click', () => showContent('results'));
+$('#changes-view-button').addEventListener('click', () => showContent('changes'));
+$('#workstream-filter').addEventListener('change', () => selectWorkstream($('#workstream-filter').value));
+$('#inspector-all-work').addEventListener('click', () => selectWorkstream(''));
+$('#review-toggle').addEventListener('click', () => reviewing ? followConversation() : pauseConversation());
+$('#review-updates').addEventListener('click', followConversation);
+$('#chat-scroll').addEventListener('wheel', (event) => { if (event.deltaY < 0) pauseConversation(); }, {passive: true});
+$('#chat-scroll').addEventListener('keydown', (event) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) pauseConversation(); });
+let touchY = null;
+$('#chat-scroll').addEventListener('touchstart', (event) => { touchY = event.touches[0]?.clientY ?? null; }, {passive: true});
+$('#chat-scroll').addEventListener('touchmove', (event) => {
+  const nextY = event.touches[0]?.clientY;
+  if (touchY != null && nextY > touchY + 3) pauseConversation();
+  touchY = nextY ?? null;
+}, {passive: true});
+$('#chat-scroll').addEventListener('pointerdown', (event) => {
+  // A scrollbar drag is also an explicit request to review older messages.
+  const panel = $('#chat-scroll');
+  if (event.target === panel && event.clientX >= panel.getBoundingClientRect().right - 16) pauseConversation();
+});
 $('#brain-view-button').addEventListener('click', () => setView(true));
 $('#agents-view-button').addEventListener('click', () => showInspector(!inspectorOpen));
 $('#agent-overview').addEventListener('click', () => showInspector(true));
@@ -876,6 +1050,10 @@ for (const name of ['list', 'chat']) $(`#agent-${name}-tab`).addEventListener('c
 $('#demo-button').addEventListener('click', () => startRun(true));
 $('#empty-demo-button').addEventListener('click', () => startRun(true));
 $('#team-button').addEventListener('click', openTeam);
+$('#project-button').addEventListener('click', openProject);
+$('#team-project-button').addEventListener('click', openProject);
+$('#tools-toggle').addEventListener('change', () => renderProject());
+$('#copy-workspace').addEventListener('click', () => copyText($('#workspace-path').value));
 $('#apply-team-count').addEventListener('click', () => applyTeamCount());
 $('#team-count').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); applyTeamCount(); } });
 $('#team-done').addEventListener('click', () => { if (applyTeamCount()) $('#team-dialog').close(); });
