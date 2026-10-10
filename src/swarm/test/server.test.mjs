@@ -106,8 +106,7 @@ test('HTTP view runs, streams, steers, stops, and persists a swarm with origin p
   assert.equal(state.defaults.duration, 600);
   assert.equal(state.defaults.toolsEnabled, true);
   assert.equal(state.defaults.workspace, runner.workspace);
-  assert.equal(typeof state.defaults.localActions.commands, 'boolean');
-  assert.equal(state.defaults.localActions.network, false);
+  assert.equal(state.defaults.liveAccess, true);
   assert.equal(run.toolsEnabled, true);
   assert.equal(state.run.status, 'stopped');
   assert.equal((await get('/api/runs/not-an-id')).status, 404);
