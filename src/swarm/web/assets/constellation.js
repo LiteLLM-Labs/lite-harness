@@ -57,8 +57,9 @@ export class Constellation {
   }
 
   resize() {
-    const ratio = Math.min(devicePixelRatio || 1, 2);
     const rect = this.canvas.getBoundingClientRect();
+    // Keep long, scrollable swarms below browser canvas dimension limits.
+    const ratio = Math.min(devicePixelRatio || 1, 2, 4096 / Math.max(1, rect.height, rect.width));
     this.canvas.width = Math.round(rect.width * ratio);
     this.canvas.height = Math.round(rect.height * ratio);
     this.draw(132);
