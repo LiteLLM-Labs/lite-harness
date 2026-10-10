@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
 import { access, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { LOCAL_PI_BINARY, PI_EXTENSION, prepareHarnessProfile } from './harness-profiles.mjs';
 
 export const DEFAULT_GATEWAY = 'https://gateway-dev.litellm-sandbox.ai';
 const MAX_FILE_BYTES = 256 * 1024;
@@ -15,6 +16,10 @@ const TOOLS = [
   { type: 'function', function: { name: 'read_file', description: 'Read a UTF-8 workspace file, maximum 256 KiB. Symlinks are refused.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } },
   { type: 'function', function: { name: 'write_file', description: 'Create or replace a UTF-8 workspace file, maximum 256 KiB. Parent directories are created. Symlinks are refused.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } } },
 ];
+
+export function workspaceToolDefinitions(writes = false) {
+  return TOOLS.slice(0, writes ? 3 : 2).map(({ function: tool }) => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters }));
+}
 
 export function gatewayUrl(base = DEFAULT_GATEWAY, endpoint = 'chat/completions') {
   const url = new URL(base);
@@ -34,6 +39,12 @@ function redact(value, env) {
   return text.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [redacted]');
 }
 
+function protectedPathPart(part) {
+  part = part.toLowerCase();
+  return ['.git', '.swarm', '.ssh', '.aws', '.codex', '.agents'].includes(part)
+    || ((part === '.env' || part.startsWith('.env.')) && !['.env.example', '.env.sample'].includes(part));
+}
+
 /** Reject absolute paths, traversal, and every symlink component, including the leaf. */
 async function workspacePath(cwd, path, { createParents = false } = {}) {
   if (typeof path !== 'string' || !path || path.includes('\0') || isAbsolute(path)) throw new Error('Use a relative workspace path.');
@@ -42,7 +53,7 @@ async function workspacePath(cwd, path, { createParents = false } = {}) {
   const rel = relative(root, destination);
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Path is outside the workspace.');
   const parts = rel ? rel.split(sep) : [];
-  if (parts.some(part => ['.git', '.swarm'].includes(part))) throw new Error('Git and swarm state directories are protected.');
+  if (parts.some(protectedPathPart)) throw new Error('Private configuration, Git and swarm state paths are protected.');
   let current = root;
   for (let index = 0; index < parts.length; index++) {
     current = join(current, parts[index]);
@@ -70,7 +81,7 @@ export async function executeWorkspaceTool(cwd, name, args) {
   if (name === 'write_file' && destination === root) throw new Error('Cannot replace the workspace directory.');
   if (name === 'list_files') {
     const entries = await readdir(destination, { withFileTypes: true });
-    const visible = entries.filter(entry => !['.git', '.swarm', 'node_modules'].includes(entry.name)).sort((a, b) => a.name.localeCompare(b.name));
+    const visible = entries.filter(entry => !protectedPathPart(entry.name) && entry.name !== 'node_modules').sort((a, b) => a.name.localeCompare(b.name));
     return JSON.stringify({ entries: visible.slice(0, 200).map(entry => ({ name: entry.name, type: entry.isSymbolicLink() ? 'symlink (unavailable)' : entry.isDirectory() ? 'directory' : 'file' })), truncated: visible.length > 200 });
   }
   if (name === 'read_file') {
@@ -133,7 +144,7 @@ export async function* parseSse(body) {
 
 async function runNative({ model, prompt, cwd, signal, onEvent, env, toolsEnabled }) {
   if (!env.LITELLM_API_KEY) throw new Error('Native inference needs LITELLM_API_KEY. Set it in your terminal, then run swarm again.');
-  model ||= env.LITELLM_MODEL || 'gpt-4.1-mini';
+  model ||= env.LITELLM_MODEL || 'openai/gpt-6-astra';
   const url = gatewayUrl(env.LITELLM_BASE_URL);
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: prompt }];
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -204,36 +215,68 @@ async function runNative({ model, prompt, cwd, signal, onEvent, env, toolsEnable
 
 const RUNTIME_ENV = new Set(['HOME', 'PATH', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TZ', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'CODEX_HOME']);
 function cliEnvironment(env, harness) {
-  const providerKeys = harness === 'claude' ? /^ANTHROPIC_/ : /^(OPENAI_|CODEX_API_KEY$)/;
+  const providerKeys = harness === 'claude' ? /^ANTHROPIC_/ : harness === 'codex' && !env.LITELLM_API_KEY ? /^(OPENAI_|CODEX_API_KEY$)/ : /^LITELLM_API_KEY$/;
   const filtered = Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && (RUNTIME_ENV.has(key) || providerKeys.test(key))));
   // Node CLI launchers should use the same healthy runtime as swarm itself.
   return { ...filtered, PATH: `${dirname(process.execPath)}${delimiter}${filtered.PATH || ''}` };
 }
 
+function piBinary(env) {
+  return env.SWARM_PI_BIN || (existsSync(LOCAL_PI_BINARY) ? LOCAL_PI_BINARY : 'pi');
+}
+
 export function buildCliCommand({ harness, model, cwd, toolsEnabled, env = process.env }) {
+  if (harness === 'pi') {
+    return { binary: piBinary(env), args: ['--mode', 'json', '--print', '--no-session', '--no-extensions', '--no-mcp', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-approve', '--offline', '--no-builtin-tools', '--extension', PI_EXTENSION, '--tools', toolsEnabled ? 'list_files,read_file,write_file' : 'list_files,read_file', '--provider', 'swarm', '--model', model || env.LITELLM_MODEL || 'openai/gpt-6-astra'] };
+  }
+  if (harness === 'opencode') {
+    return { binary: env.SWARM_OPENCODE_BIN || 'opencode', args: ['run', '--pure', '--format', 'json', '--model', `swarm/${model || env.LITELLM_MODEL || 'openai/gpt-6-astra'}`, '--agent', 'swarm', '--title', `swarm-${randomUUID()}`] };
+  }
   if (harness === 'codex') {
-    const args = ['exec', '--json', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '--color', 'never', '--sandbox', toolsEnabled ? 'workspace-write' : 'read-only', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '--cd', cwd];
-    if (model) args.push('--model', model);
+    const args = ['exec', '--json', '--ephemeral', '--ignore-user-config', '--disable', 'plugins', '--disable', 'apps', '--disable', 'hooks', '--disable', 'skill_mcp_dependency_install', '--skip-git-repo-check', '--color', 'never', '--sandbox', toolsEnabled ? 'workspace-write' : 'read-only', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '-c', 'shell_environment_policy.include_only=["PATH","HOME","TMPDIR","LANG","LC_ALL","TERM"]', '--cd', cwd];
+    if (env.LITELLM_API_KEY) {
+      const base = gatewayUrl(env.LITELLM_BASE_URL).replace(/\/chat\/completions$/, '');
+      for (const value of ['model_provider="swarm"', 'model_providers.swarm.name="Swarm LiteLLM gateway"', `model_providers.swarm.base_url=${JSON.stringify(base)}`, 'model_providers.swarm.env_key="LITELLM_API_KEY"', 'model_providers.swarm.wire_api="responses"', 'model_providers.swarm.requires_openai_auth=false']) args.push('-c', value);
+      const gatewayModel = model || 'gpt-6.1-sol';
+      args.push('--model', gatewayModel.includes('/') ? gatewayModel : `openai/${gatewayModel}`);
+    } else if (model) args.push('--model', model);
     args.push('-');
     return { binary: env.SWARM_CODEX_BIN || 'codex', args };
   }
   if (harness === 'claude') {
     const fileTools = toolsEnabled ? 'Read,Glob,Grep,Write,Edit' : 'Read,Glob,Grep';
-    const args = ['--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--no-session-persistence', '--safe-mode', '--restricted', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--permission-mode', 'dontAsk', '--permission-prompts', 'none', '--tools', fileTools, '--allowedTools', fileTools, '--model', model || 'sonnet'];
+    const args = ['--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--no-session-persistence', '--safe-mode', '--restricted', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--permission-mode', 'dontAsk', '--permission-prompts', 'none', '--tools', fileTools, '--allowedTools', fileTools, '--model', model || 'opus'];
     return { binary: env.SWARM_CLAUDE_BIN || 'claude', args };
   }
-  throw new Error(`Unknown harness: ${harness}. Choose native, codex, or claude.`);
+  throw new Error(`Unknown harness: ${harness}. Choose native, codex, claude, pi, or opencode.`);
 }
 
 async function runCli(options) {
-  const { harness, prompt, cwd, signal, onEvent, env } = options;
+  const { harness, env } = options;
+  if (['pi', 'opencode'].includes(harness) || (harness === 'codex' && env.LITELLM_API_KEY)) {
+    let model = options.model || (harness === 'codex' ? 'gpt-6.1-sol' : env.LITELLM_MODEL || 'openai/gpt-6-astra');
+    if (harness === 'codex' && !model.includes('/')) model = `openai/${model}`;
+    options = { ...options, model };
+    const profile = await prepareHarnessProfile({ ...options, baseUrl: gatewayUrl(env.LITELLM_BASE_URL).replace(/\/chat\/completions$/, '') });
+    try { return await runCliProcess({ ...options, childEnv: { ...cliEnvironment(env, harness), ...profile.environment } }); }
+    finally {
+      try { await profile.cleanup(); }
+      catch (error) { options.onEvent({ type: 'status', status: 'warning', text: `Temporary ${harness} files could not be removed (${error.code || 'filesystem error'}).` }); }
+    }
+  }
+  return runCliProcess({ ...options, model: options.model || (harness === 'claude' ? 'opus' : undefined), childEnv: cliEnvironment(env, harness) });
+}
+
+async function runCliProcess(options) {
+  const { harness, prompt, cwd, signal, onEvent, env, childEnv } = options;
   const { binary, args } = buildCliCommand(options);
   return new Promise((resolveResult, reject) => {
     signal.throwIfAborted();
-    const child = spawn(binary, args, { cwd, env: cliEnvironment(env, harness), shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(binary, args, { cwd, env: childEnv, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     const decoder = new StringDecoder('utf8');
     const messages = new Map();
     const seenTools = new Set();
+    const toolPaths = new Map();
     let pending = '';
     let received = 0;
     let finalText = '';
@@ -245,6 +288,8 @@ async function runCli(options) {
     let settled = false;
     let stderr = '';
     let streamedClaude = false;
+    let stepText = new Map();
+    let lastPiStop;
     function killGroup(kind) {
       try { if (process.platform !== 'win32') process.kill(-child.pid, kind); else child.kill(kind); } catch { try { child.kill(kind); } catch {} }
     }
@@ -258,20 +303,56 @@ async function runCli(options) {
       if (settled) return;
       settled = true;
       signal.removeEventListener('abort', terminate);
-      if (killTimer) { clearTimeout(killTimer); killGroup('SIGKILL'); }
+      if (killTimer) clearTimeout(killTimer);
+      // A CLI may exit before its background helpers. They belong to this turn too.
+      killGroup('SIGKILL');
       error ? reject(error) : resolveResult(result);
     }
     function tool(event, name, status, id) {
-      const key = `${id}:${status}`;
+      const path = event.path || event.args?.path || event.input?.file_path || event.input?.path || event.state?.input?.path || toolPaths.get(id);
+      if (path) toolPaths.set(id, path);
+      const key = `${id}:${status}:${path || ''}`;
       if (seenTools.has(key)) return;
       seenTools.add(key);
-      onEvent({ type: 'tool', name, text: `${name} ${status}`, status, ...(event.path ? { path: event.path } : {}) });
+      onEvent({ type: 'tool', name, text: `${name} ${status}${path ? ` · ${path}` : ''}`, status, ...(path ? { path } : {}) });
     }
     function parse(line) {
       if (!line.trim()) return;
       let event;
       try { event = JSON.parse(line); } catch { return; }
-      if (harness === 'codex') {
+      if (harness === 'pi') {
+        if (event.type === 'agent_start') onEvent({ type: 'status', text: 'Working in Pi', model });
+        if (event.type === 'message_start' && event.message?.role === 'assistant') model = event.message.model || model;
+        const delta = event.assistantMessageEvent;
+        if (event.type === 'message_update' && delta?.type === 'text_delta') onEvent({ type: 'delta', text: delta.delta || '' });
+        if (event.type === 'tool_execution_start') tool(event, event.toolName, 'running', event.toolCallId);
+        if (event.type === 'tool_execution_end') tool(event, event.toolName, event.isError ? 'error' : 'completed', event.toolCallId);
+        if (event.type === 'message_end' && event.message?.role === 'assistant') {
+          const message = event.message;
+          model = message.model || model;
+          lastPiStop = message.stopReason;
+          if (['error', 'aborted'].includes(lastPiStop)) failure = new Error(`Pi failed: ${message.errorMessage || lastPiStop}`);
+          else failure = undefined;
+          const text = (message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+          if (lastPiStop === 'stop') finalText = text;
+          for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens']) usage[key] = (usage[key] || 0) + (Number(message.usage?.[key]) || 0);
+        }
+        if (event.type === 'agent_end' && !event.willRetry) resultSeen = lastPiStop === 'stop';
+      } else if (harness === 'opencode') {
+        if (event.type === 'step_start') { stepText = new Map(); onEvent({ type: 'status', text: 'Working in OpenCode', model }); }
+        if (event.type === 'text' && typeof event.part?.text === 'string') {
+          const id = event.part.id || 'text';
+          const previous = stepText.get(id) || '';
+          if (event.part.text.startsWith(previous)) onEvent({ type: 'delta', text: event.part.text.slice(previous.length) });
+          stepText.set(id, event.part.text);
+        }
+        if (event.type === 'tool_use') tool(event.part || {}, event.part?.tool || 'Workspace tool', event.part?.state?.status === 'error' ? 'error' : event.part?.state?.status === 'completed' ? 'completed' : 'running', event.part?.id);
+        if (event.type === 'step_finish') {
+          for (const key of ['input', 'output', 'reasoning']) usage[key] = (usage[key] || 0) + (Number(event.part?.tokens?.[key]) || 0);
+          if (event.part?.reason === 'stop') { resultSeen = true; finalText = [...stepText.values()].join('\n\n'); }
+        }
+        if (event.type === 'error') failure = new Error(`OpenCode failed: ${event.error?.data?.message || event.error?.message || event.error?.name || 'check the gateway model and key'}`);
+      } else if (harness === 'codex') {
         if (event.type === 'turn.started') onEvent({ type: 'status', text: 'Working in Codex', model });
         if (event.type === 'error' || event.type === 'turn.failed') failure = new Error(`Codex failed: ${event.error?.message || event.message || 'check CLI login and model access'}`);
         if (event.type === 'turn.completed') { resultSeen = true; usage = event.usage || {}; }
@@ -342,7 +423,7 @@ async function runCli(options) {
 /** One observable agent turn; no hidden fallback to another harness or fabricated result. */
 export async function runAgent({ harness = 'native', model, prompt, cwd = process.cwd(), signal, onEvent = () => {}, env = process.env, toolsEnabled = false, timeoutMs = 600_000 }) {
   if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('Agent prompt must not be empty.');
-  if (!['native', 'codex', 'claude'].includes(harness)) throw new Error(`Unknown harness: ${harness}. Choose native, codex, or claude.`);
+  if (!['native', 'codex', 'claude', 'pi', 'opencode'].includes(harness)) throw new Error(`Unknown harness: ${harness}. Choose native, codex, claude, pi, or opencode.`);
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Agent timeout must be positive.');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error(`Agent timed out after ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs);
@@ -367,6 +448,6 @@ export async function availableHarnesses(env = process.env) {
     }
     return false;
   }
-  const [codex, claude] = await Promise.all([exists(env.SWARM_CODEX_BIN || 'codex'), exists(env.SWARM_CLAUDE_BIN || 'claude')]);
-  return { native: { available: true, configured: Boolean(env.LITELLM_API_KEY) }, codex: { available: codex }, claude: { available: claude } };
+  const [codex, claude, pi, opencode] = await Promise.all([exists(env.SWARM_CODEX_BIN || 'codex'), exists(env.SWARM_CLAUDE_BIN || 'claude'), exists(piBinary(env)), exists(env.SWARM_OPENCODE_BIN || 'opencode')]);
+  return { native: { available: true, configured: Boolean(env.LITELLM_API_KEY) }, codex: { available: codex }, claude: { available: claude }, pi: { available: pi, configured: Boolean(env.LITELLM_API_KEY) }, opencode: { available: opencode, configured: Boolean(env.LITELLM_API_KEY) } };
 }
