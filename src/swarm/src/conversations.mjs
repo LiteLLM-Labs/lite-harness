@@ -114,6 +114,13 @@ export class Conversations extends EventEmitter {
     return runner.addAgents(options);
   }
 
+  setAccess(options, id = this.selectedId) {
+    if (this.closing) throw requestError('This workspace is shutting down.', 503);
+    const {runner} = this.target(id);
+    if (!runner || runner.run.status !== 'running') throw requestError('Choose a running swarm to change its tools.', 409);
+    return runner.setAccess(options);
+  }
+
   async stop(id = this.selectedId) {
     const record = this.target(id);
     if (!record.runner) return record.run;
