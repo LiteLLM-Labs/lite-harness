@@ -45,6 +45,10 @@ test('HTTP view runs, streams, steers, stops, and persists a swarm with origin p
   assert.equal(saved.directions[0], 'Focus on speed');
   const state = await (await get('/api/state')).json();
   assert.equal(state.runs.length, 1);
+  assert.equal(state.defaults.team.length, 10);
+  assert.deepEqual([...new Set(state.defaults.team.map((peer) => peer.harness))].sort(), ['claude', 'codex', 'opencode', 'pi']);
+  assert.equal(state.defaults.harnessModels.codex, 'gpt-6.1-sol');
+  assert.equal(state.defaults.duration, 600);
   assert.equal(state.run.status, 'stopped');
   assert.equal((await get('/api/runs/not-an-id')).status, 404);
   assert.equal((await post('/api/run', {task: 'ok', agents: []})).status, 400);
