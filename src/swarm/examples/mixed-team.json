@@ -1,9 +1,75 @@
 {
   "timeoutSeconds": 600,
   "agents": [
-    {"id": "scout", "name": "Scout", "harness": "claude", "model": "sonnet", "role": "Inspect the problem and context. Report requirements and constraints. Do not edit files.", "dependsOn": []},
-    {"id": "builder", "name": "Builder", "harness": "codex", "model": "", "role": "Develop a concrete solution. Implement files when writes are enabled and report what you verified.", "dependsOn": []},
-    {"id": "critic", "name": "Critic", "harness": "native", "model": "gpt-4.1-mini", "role": "Review both contributions for concrete defects and missing evidence. Do not edit files.", "dependsOn": ["scout", "builder"]},
-    {"id": "lead", "name": "Lead", "harness": "claude", "model": "sonnet", "role": "Combine the contributions into one useful final answer. Address the review findings. Do not edit files.", "dependsOn": ["scout", "builder", "critic"]}
+    {
+      "id": "peer-01",
+      "name": "Agent 01",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "claude",
+      "model": "opus"
+    },
+    {
+      "id": "peer-02",
+      "name": "Agent 02",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "id": "peer-03",
+      "name": "Agent 03",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "opencode",
+      "model": "openai/gpt-6-astra"
+    },
+    {
+      "id": "peer-04",
+      "name": "Agent 04",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "claude",
+      "model": "opus"
+    },
+    {
+      "id": "peer-05",
+      "name": "Agent 05",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "id": "peer-06",
+      "name": "Agent 06",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "pi",
+      "model": "openai/gpt-6-astra"
+    },
+    {
+      "id": "peer-07",
+      "name": "Agent 07",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "opencode",
+      "model": "openai/gpt-6-astra"
+    },
+    {
+      "id": "peer-08",
+      "name": "Agent 08",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "id": "peer-09",
+      "name": "Agent 09",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "claude",
+      "model": "opus"
+    },
+    {
+      "id": "peer-10",
+      "name": "Agent 10",
+      "role": "You are an equal peer with no preassigned specialty. Choose a useful role from the task, tell the team what you will contribute, and adapt through collaboration.",
+      "harness": "pi",
+      "model": "openai/gpt-6-astra"
+    }
   ]
 }
