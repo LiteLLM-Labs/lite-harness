@@ -6,6 +6,7 @@ import {defaultTeam, validateTeam, validateTask, validateAgentCount} from './tea
 import {demoTeam, DEMO_TASK, runDemoAgent} from './demo.mjs';
 import {runAgent} from './adapters.mjs';
 import {parseElectionReply, parseIdentityReply, parseWorkReply, chooseCoordinator, countConsensus} from './protocol.mjs';
+import {captureRunBaseline, finalizeRunChanges} from './workspace-changes.mjs';
 
 const MAX_OUTPUT = 200000;
 const MAX_EVENTS = 600;
@@ -22,7 +23,7 @@ const SYSTEM_CLOCK = {now: () => Date.now(), setTimeout, clearTimeout};
 function newAgent(agent, activity = 'Preparing coordinator vote') {
   return {...agent, status: 'queued', output: '', currentOutput: '', currentOutputAt: null, cycleStartedAt: null, transcript: '', lastContribution: '',
     cycles: 0, cycle: 0, failures: 0, consecutiveFailures: 0, assignment: agent.role, assignmentSource: 'initial',
-    activity, startedAt: null, endedAt: null, usage: null};
+    activity, startedAt: null, endedAt: null, usage: null, workstream: null};
 }
 
 // Shrink public excerpts, never the JSON itself or the list of peers.
@@ -31,6 +32,7 @@ function boardWithinBudget(board, budget) {
   if (encoded.length <= budget) return encoded;
   for (const limit of [1000, 400, 160, 64, 24, 0]) {
     const excerpt = {
+      workstreams: board.workstreams,
       identities: board.identities.map((peer) => ({...peer, name: clip(peer.name, Math.min(60, limit)), model: clip(peer.model, Math.min(80, limit)), role: clip(peer.role, limit)})),
       contributions: board.contributions.map((peer) => ({...peer, text: clip(peer.text, Math.max(64, limit))})),
       assignments: board.assignments.map((peer) => ({...peer, assignment: clip(peer.assignment, limit)})),
@@ -42,7 +44,7 @@ function boardWithinBudget(board, budget) {
     if (text.length <= budget) return text;
   }
   // Even extreme metadata keeps a parseable roster and a contribution slot for everyone.
-  const minimal = {identities: board.identities.map(({id, harness}) => ({id, harness})), contributions: board.contributions.map(({id, cycles, status}) => ({id, cycles, status, text: ''})), assignments: [], messages: [], proposals: [], result: ''};
+  const minimal = {workstreams: board.workstreams, identities: board.identities.map(({id, harness, workstreamId}) => ({id, harness, workstreamId})), contributions: board.contributions.map(({id, cycles, status}) => ({id, cycles, status, text: ''})), assignments: [], messages: [], proposals: [], result: ''};
   const text = JSON.stringify(minimal);
   if (text.length > budget) throw new Error('The shared task context is too large. Shorten the task or directions.');
   return text;
@@ -91,6 +93,7 @@ export class SwarmRunner extends EventEmitter {
     const previousRun = this.run;
     this.persistenceError = null;
     this.previous = previous;
+    this.electionTeam = team.map(({id, name, role, harness, model}) => ({id, name, role, harness, model}));
     this.workers = new Map();
     this.workerFailure = null;
     this.workerWake = null;
@@ -101,8 +104,9 @@ export class SwarmRunner extends EventEmitter {
     this.run = {
       id: randomUUID(), task, status: 'running', phase: 'electing', startedAt, endedAt: null,
       deadlineAt: startedAt + timeoutSeconds * 1000, workspace: this.workspace, demo: Boolean(options.demo), timeoutSeconds,
-      toolsEnabled: Boolean(options.toolsEnabled), result: '', events: [], directions: [], messages: [], results: [], proposals: [],
-      coordinatorId: null, coordinatorChanges: [], parentId: previous?.id ?? null,
+      toolsEnabled: !options.demo && (options.toolsEnabled ?? true), result: '', events: [], directions: [], messages: [], results: [], proposals: [],
+      coordinatorId: null, coordinatorChanges: [], parentId: previous?.id ?? null, workstreams: [],
+      changes: {status: options.demo ? 'unavailable' : 'preparing'},
       election: {status: 'voting', votes: [], tally: {}, abstentions: [], eligibleVoters: team.length, method: null},
       agents: team.map((agent) => newAgent(agent)),
     };
@@ -125,6 +129,15 @@ export class SwarmRunner extends EventEmitter {
     }).finally(async () => {
       await Promise.allSettled([...this.workers.values()]);
       this.clock.clearTimeout(timer);
+      if (this.run.changes.status === 'ready') {
+        try {
+          const report = await finalizeRunChanges(this.changeSettings());
+          this.update({changes: {status: 'ready', frozen: true, truncated: report.truncated}});
+        } catch (error) {
+          this.update({changes: {status: 'failed', reason: String(error.message || error)}});
+          this.event({type: 'status', text: `Could not save the final change review: ${error.message}. Workspace files remain unchanged by this review.`});
+        }
+      }
       this.update({endedAt: this.now()});
       this.busy = false;
       this.flush();
@@ -176,7 +189,7 @@ export class SwarmRunner extends EventEmitter {
   }
 
   event(event) {
-    const entry = {id: randomUUID(), at: this.now(), ...event, ...(typeof event.text === 'string' ? {text: clip(event.text, 8000)} : {})};
+    const entry = {id: randomUUID(), at: this.now(), workstreamId: this.agent(event.agentId)?.workstream?.id ?? null, ...event, ...(typeof event.text === 'string' ? {text: clip(event.text, 8000)} : {})};
     this.update({events: [...this.run.events, entry].slice(-MAX_EVENTS)});
     this.emit('event', entry);
     this.scheduleFlush();
@@ -184,7 +197,7 @@ export class SwarmRunner extends EventEmitter {
   }
 
   message(from, to, text, kind = 'message', extra = {}) {
-    const entry = {id: randomUUID(), at: this.now(), from, to, text: clip(text, 8000), kind, ...extra};
+    const entry = {id: randomUUID(), at: this.now(), from, to, text: clip(text, 8000), kind, workstreamId: this.agent(from)?.workstream?.id ?? null, ...extra};
     this.update({messages: [...this.run.messages, entry].slice(-MAX_MESSAGES)});
     this.event({type: to !== 'all' && from !== 'user' ? 'handoff' : 'message', agentId: from, toAgentId: to, text, kind, ...extra});
     return entry;
@@ -263,7 +276,8 @@ export class SwarmRunner extends EventEmitter {
   board() {
     const peerExcerpt = Math.min(2000, Math.floor(20000 / this.run.agents.length));
     return {
-      identities: this.run.agents.map(({id, name, role, harness, model}) => ({id, name, role: clip(role, peerExcerpt), harness, model})),
+      workstreams: this.run.workstreams,
+      identities: this.run.agents.map(({id, name, role, harness, model, workstream}) => ({id, name, role: clip(role, peerExcerpt), harness, model, workstreamId: workstream?.id ?? null})),
       contributions: this.run.agents.map(({id, cycles, lastContribution, status}) => ({id, cycles, status, text: clip(lastContribution, peerExcerpt)})),
       messages: this.run.messages.slice(-24).map((message) => ({...message, text: clip(message.text, 1000)})),
       proposals: this.run.proposals.slice(-6).map((proposal) => ({...proposal, text: clip(proposal.text, 1200), votes: proposal.votes.map((vote) => ({...vote, reason: clip(vote.reason, 160)}))})),
@@ -286,14 +300,16 @@ export class SwarmRunner extends EventEmitter {
       `User task:\n${this.run.task}`,
       `Current assignment:\n${clip(agent.assignment, 4000)}`,
       `This is work cycle ${agent.cycle}. ${Math.ceil(this.remaining() / 1000)} seconds remain in the user's budget. Every peer works concurrently. Do useful next work now; do not wait for other peers or repeat a finished answer. Inspect, implement, verify, challenge, refine, or report a concrete blocker.`,
-      `Workspace: ${this.workspace}. File writes are ${this.run.toolsEnabled ? 'enabled only for work relevant to your assignment; coordinate ownership before overlapping edits' : 'disabled; read context and develop concrete evidence and recommendations'}.`,
+      `Workspace: ${this.workspace}. Local actions are ${this.run.toolsEnabled ? 'enabled: use available tools to edit files and run local commands for the requested work. When asked to implement or fix something, make and verify the change instead of only proposing it. Coordinate file ownership with peers before overlapping edits; do not modify private configuration, publish changes, or act outside this project' : 'disabled: inspect files and report concrete evidence; do not edit files or claim that recommendations were executed'}. Command network access is disabled. Report actual command results and file changes; explain tool errors honestly.`,
       'Report public actions, evidence, and useful conclusions only. Do not reveal hidden reasoning or invent tool use, measured improvements, consensus, or completed changes. Do not message external people or publish anything.',
       'Each proposal has an electorate fixed when it was created. Vote only if your stable peer ID is in that electorate. Newly joined peers participate in proposals created after they joined.',
+      'Organize related work into a few useful workstreams named for this task, so the human can follow progress. Join an existing shared-board workstream when it fits by returning its exact id and name; otherwise propose a concise workstream with a stable lowercase hyphenated id (at most 40 characters) and name (at most 80 characters). Return "workstream":{"id":"task-area","name":"Task area"} alongside your contribution. You may change only your own membership. Reuse existing streams instead of creating a different stream for every peer or cycle. Coordinate with peers within and across streams.',
       `Current coordinator: ${this.run.coordinatorId}. ${coordinator ? 'You are still a working peer. Coordinate assignments, resolve conflicting contributions, and publish a concise provisional human-facing result every cycle. Revisit the current result using new evidence.' : 'Send useful findings and questions to your peers. Independently review concrete proposals and explicitly vote where you have evidence.'}`,
       'You may return ordinary public text. Prefer one JSON collaboration envelope: {"identity":{"name":"your chosen name, at most 60 characters","role":"your chosen responsibility, at most 2000 characters"},"text":"public contribution","messages":[{"to":"all or a peer ID","text":"public message"}],"assignments":[{"agentId":"peer ID","task":"concrete task"}],"proposal":{"id":"optional short key","text":"specific proposal"},"votes":[{"proposalId":"exact board ID","stance":"agree|disagree|abstain","reason":"brief public evidence"}],"result":"provisional human-facing result"}. Identity changes apply only to you; stable IDs, harnesses and model configuration cannot be changed this way. Omit identity when unchanged. Only the coordinator can assign tasks or publish result; changing your role does not erase an explicit coordinator assignment. An independent vote counts once per peer per proposal; your own proposal cannot receive your own vote. Never manufacture votes for another peer. Consensus is calculated by the runner, not asserted in text.',
       previous ? `Previous task:\n${clip(previous.task, 16000)}\nPrevious result:\n${clip(previous.result, 8000)}` : '',
       ...priorDirections.map((text) => `Previous user direction (from the continued run):\n${clip(text, 1000)}`),
       priorContribution ? `Your prior public work from the continued run (verify and continue):\n${clip(priorContribution, 4000)}` : '',
+      priorPeer?.workstream ? `Your previous workstream was ${JSON.stringify(priorPeer.workstream)}. Rejoin it in your reply if it still fits this task.` : '',
       agent.lastContribution ? `Your previous contribution (extend or verify it):\n${clip(agent.lastContribution, 6000)}` : '',
       ...this.run.directions.slice(-20).map((text) => `Latest user direction (full directions remain saved):\n${clip(text, 2000)}`),
     ].filter(Boolean);
@@ -303,6 +319,17 @@ export class SwarmRunner extends EventEmitter {
   }
 
   async execute(previous) {
+    if (!this.run.demo) {
+      this.event({type: 'status', text: 'Recording the project baseline for Changes'});
+      try {
+        const baseline = await captureRunBaseline(this.changeSettings());
+        this.update({changes: {status: 'ready', frozen: false, ...baseline}});
+      } catch (error) {
+        this.update({changes: {status: 'failed', reason: String(error.message || error)}});
+        throw new Error(`Could not record the project change baseline: ${error.message}`);
+      }
+      if (this.controller.signal.aborted) return;
+    }
     await this.elect();
     if (this.controller.signal.aborted) return;
     this.update({phase: 'working'});
@@ -318,8 +345,10 @@ export class SwarmRunner extends EventEmitter {
     this.event({type: 'status', text: 'Every peer is blocked after repeated failures. Partial work is preserved; no further work is being simulated.'});
   }
 
+  changeSettings() {return {workspace: this.workspace, directory: this.store.directory, runId: this.run.id};}
+
   async elect() {
-    const team = this.run.agents.map(({id, name, role, harness, model}) => ({id, name, role, harness, model}));
+    const team = this.electionTeam;
     const priorContext = this.previous ? `\nPrevious task:\n${clip(this.previous.task, 4000)}\nPrevious result:\n${clip(this.previous.result, 4000)}` : '';
     const roster = electionRoster(team, 60000 - priorContext.length);
     const ids = team.map(({id}) => id);
@@ -392,7 +421,7 @@ export class SwarmRunner extends EventEmitter {
   acceptContribution(id, cycle, response) {
     const agent = this.agent(id);
     const reply = parseWorkReply(response.text, this.run.agents.map(({id: peerId}) => peerId));
-    if (!reply.text && !reply.votes.length && !reply.messages.length && !reply.assignments.length && !reply.identity) throw new Error('Agent returned no public contribution or collaboration action.');
+    if (!reply.text && !reply.votes.length && !reply.messages.length && !reply.assignments.length && !reply.identity && !reply.workstream) throw new Error('Agent returned no public contribution or collaboration action.');
     const stream = agent.currentOutput.trim();
     const finalText = response.text.trim();
     const progress = stream === reply.text.trim() ? '' : stream.endsWith(finalText) ? stream.slice(0, -finalText.length).trim() : stream !== finalText ? stream : '';
@@ -401,6 +430,7 @@ export class SwarmRunner extends EventEmitter {
     this.updateAgent(id, {cycles: agent.cycles + 1, consecutiveFailures: 0, output: reply.text || finalText, currentOutput: '', currentOutputAt: null, lastContribution: reply.text || agent.lastContribution,
       transcript, model: response.model || agent.model, usage: response.usage ?? agent.usage, activity: `Cycle ${cycle} shared; continuing work`});
     this.applyIdentity(id, reply.identity, cycle);
+    this.applyWorkstream(id, reply.workstream, cycle);
     if (reply.text) this.message(id, 'all', reply.text, 'contribution', {cycle});
     for (const message of reply.messages) this.message(id, message.to, message.text, 'message', {cycle});
     this.acceptProposal(id, reply.proposal);
@@ -429,6 +459,18 @@ export class SwarmRunner extends EventEmitter {
       ? {assignment: role, assignmentSource: 'self'} : {};
     this.updateAgent(id, {name, role, ...assignment});
     this.message(id, 'all', `${name} chose responsibility: ${role}`, 'identity', {cycle, name, role});
+  }
+
+  applyWorkstream(id, workstream, cycle) {
+    if (!workstream) return;
+    const existing = this.run.workstreams.find((stream) => stream.id === workstream.id)
+      || this.run.workstreams.find((stream) => stream.name.toLowerCase() === workstream.name.toLowerCase());
+    if (!existing && this.run.workstreams.length >= 100) return;
+    const selected = existing ?? workstream;
+    if (this.agent(id).workstream?.id === selected.id) return;
+    if (!existing) this.update({workstreams: [...this.run.workstreams, selected]});
+    this.updateAgent(id, {workstream: selected});
+    this.message(id, 'all', `Joined ${selected.name}`, 'workstream', {cycle});
   }
 
   acceptProposal(from, proposal) {
@@ -511,7 +553,16 @@ export class SwarmRunner extends EventEmitter {
           } else {
             const activity = String(event.text || event.type).slice(0, 2000);
             this.updateAgent(id, {activity});
-            this.event({type: event.type === 'tool' ? 'tool' : 'status', agentId: id, phase: context.phase, cycle: context.cycle, text: activity});
+            const detail = {};
+            if (event.type === 'tool') {
+              for (const [key, limit] of [['name', 160], ['status', 40], ['command', 16000], ['path', 2000], ['stdout', 16000], ['stderr', 8000]]) {
+                if (typeof event[key] === 'string') detail[key] = clip(event[key], limit);
+              }
+              if (Number.isInteger(event.exitCode)) detail.exitCode = event.exitCode;
+              for (const key of ['timedOut', 'truncated']) if (typeof event[key] === 'boolean') detail[key] = event[key];
+              if ((event.stdout?.length ?? 0) > 16000 || (event.stderr?.length ?? 0) > 8000) detail.truncated = true;
+            }
+            this.event({type: event.type === 'tool' ? 'tool' : 'status', agentId: id, phase: context.phase, cycle: context.cycle, text: activity, ...detail});
           }
         },
       });
