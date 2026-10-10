@@ -367,3 +367,62 @@ body { background:#17191d; }
 .presence-inactive .node-presence { color:#9cafbf; }
 .presence-inactive .node-presence .status-dot,.presence-inactive .card-status .status-dot { background:#8195a7; box-shadow:none; }
 @media(max-width:760px) { .brain-mode #coordinator-label { font-size:13px; } .brain-mode .agent-card-name { font-size:11px; } .node-presence { font-size:12px; } }
+
+/* Teams can grow without replacing their existing peers or configuration. */
+.add-agents-button { padding:7px 10px; border:1px solid #a8cbe338; border-radius:6px; color:#cbdce9; background:#112031; font-size:11px; white-space:nowrap; }
+.add-agents-button:hover { border-color:#bad9ef7d; background:#19304a; }
+.add-agents-button:disabled { opacity:.45; cursor:default; }
+.brain-controls { display:flex; gap:16px; align-items:center; }
+.inspector-add { margin:0 20px 12px; align-self:flex-start; }
+.team-size-control { display:flex; gap:13px; align-items:center; flex-wrap:wrap; margin:20px 0; color:#bed0dd; font-size:12px; }
+.team-size-control label { display:flex; gap:12px; align-items:center; }
+.team-size-control input { width:75px; padding:9px 10px; border:1px solid #a8cbe333; border-radius:5px; color:#e0ecf3; background:#0b1621; }
+.team-size-control>span { color:#8ea8bb; font-size:11px; }
+.count-shortcuts { display:flex; gap:5px; }
+.count-shortcuts button { padding:7px 9px; border:1px solid #a8cbe329; border-radius:5px; color:#bacddd; }
+.count-shortcuts button:hover { background:#1b3146; }
+.add-agent-config { display:flex; gap:16px; margin:24px 0; }
+.add-agent-config label { flex:1; display:flex; flex-direction:column; gap:8px; color:#91aabd; font-size:11px; }
+.add-agent-config input,.add-agent-config select { width:100%; padding:10px; border:1px solid #a8cbe333; border-radius:5px; background:#0b1621; color:#d6e4ed; font-size:12px; }
+.brain-mode.large-brain .workspace { height:auto; min-height:0; grid-template-rows:var(--brain-height) auto; }
+.brain-mode.large-brain .stage { height:var(--brain-height); min-height:0; }
+.brain-mode.large-brain .chat-scroll { position:sticky; top:62px; height:calc(100dvh - 62px); align-self:start; }
+.brain-mode.large-brain .agent-card { width:148px; }
+@media(max-width:1100px) { .brain-mode.large-brain .workspace { grid-template-rows:var(--brain-height) auto auto; } .brain-mode.large-brain .chat-scroll { position:static; height:560px; } }
+@media(max-width:760px) { .topbar-add { padding:6px 8px; } .topbar-add span { display:none; } .brain-controls { gap:10px; } .brain-controls .add-agents-button { font-size:10px; } .brain-mode.large-brain .agent-card { width:133px; } .team-size-control { gap:10px; } .team-size-control>span { width:100%; } .add-agent-config { flex-direction:column; } }
+#team-editor { max-height:42dvh; overflow-y:auto; scrollbar-width:thin; scrollbar-color:#354656 transparent; padding-right:5px; }
+
+/* A shared conversation has distinct authors; human-facing answers live in Results. */
+.conversation-label { color:#7d94a8; font-size:10px; letter-spacing:.3px; padding:1px 0 20px; }
+.group-feed { display:flex; flex-direction:column; gap:23px; }
+.group-message { display:flex; align-items:flex-start; gap:12px; min-width:0; }
+.group-message>.identity-logos { margin-top:2px; width:28px; flex-shrink:0; }
+.group-message>.identity-logos>img { width:27px; height:27px; }
+.group-message>.identity-logos>.model-logo { width:13px; height:13px; }
+.group-message-main { min-width:0; flex:1; }
+.group-message-header { display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-height:20px; }
+.group-author { font-size:12px; font-weight:500; color:#e0e8ef; text-align:left; overflow-wrap:anywhere; }
+button.group-author:hover { color:#c9e4f7; text-decoration:underline; text-underline-offset:3px; }
+.group-leader { font-size:9px; color:#e0c594; padding:2px 5px; border:1px solid #c6ae763f; border-radius:4px; }
+.group-presence { display:flex; align-items:center; gap:4px; color:#7c8e9f; font-size:9px; }
+.group-presence .status-dot { width:4px; height:4px; background:#718596; }
+.group-presence.active { color:#a1c6b6; }
+.group-presence.active .status-dot { background:#abd2bd; }
+.group-recipient { font-size:10px; color:#9db4c7; }
+.group-time { font:9px var(--mono); color:#688194; margin-left:auto; white-space:nowrap; }
+.group-model { font-size:10px; color:#788fa2; margin:4px 0 9px; overflow-wrap:anywhere; }
+.group-bubble { background:#151e28; border:1px solid #b8d4e60d; border-radius:2px 12px 12px 12px; padding:13px 16px; color:#cdd9e4; }
+.group-kind { font-size:9px; color:#88a1b6; margin-bottom:7px; }
+.group-message-text { font-size:13px; line-height:1.75; white-space:pre-wrap; overflow-wrap:anywhere; }
+.group-message-text.collapsed { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:8; overflow:hidden; }
+.group-expand { display:block; font-size:10px; color:#9cbace; margin-top:10px; padding:3px 0; }
+.group-consensus { font-size:10px; color:#b6cfa9; padding-top:10px; }
+.group-user { width:88%; margin-left:auto; }
+.group-user .group-message-header { margin-bottom:7px; }
+.group-user .group-bubble { background:#25303c; border-radius:12px 2px 12px 12px; }
+.group-streaming .group-bubble { border-color:#b7d7e52b; }
+.group-streaming .group-kind,.group-writing { color:#a4c7d5; }
+.group-empty { font-size:12px; line-height:1.8; color:#8099ad; margin:0 0 25px; }
+.group-feed:not(:empty)+.human-feed+.chat-run-status { margin-top:25px; }
+@media(max-width:760px) { .topbar-actions { gap:7px; } .view-switch button { padding:6px; font-size:10px; } .chat-heading { min-width:0; overflow:hidden; } #chat-title { max-width:13vw; } .group-feed { gap:20px; } .group-message { gap:8px; } .group-message>.identity-logos { width:23px; } .group-message>.identity-logos>img { width:22px; height:22px; } .group-message>.identity-logos>.model-logo { width:11px; height:11px; } .group-bubble { padding:11px 12px; } .group-message-text { font-size:12px; line-height:1.75; } .group-message-header { gap:6px; } .group-author { font-size:11px; } .group-user { width:95%; } .group-model { font-size:9px; } }
+body:not(.brain-mode) #agent-overview { position:sticky; top:0; z-index:4; background:#17191d; box-shadow:0 -12px #17191d,0 9px 12px #17191d; padding-top:13px; }
