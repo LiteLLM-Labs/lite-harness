@@ -122,8 +122,9 @@ for await (const message of query({
 ### Swarm CLI
 
 Run ten peers across Claude Code, Codex, OpenCode, and Pi. They choose their own roles, elect a coordinator,
-share findings, and work concurrently for the requested duration. The local brain
-view shows each peer’s work beside a live conversation and evolving answer.
+share findings, and work concurrently for the requested duration. A local chat
+workspace keeps independent conversations in a sidebar, with each peer's work
+available through Subagents or a spatial Brain view beside the evolving answer.
 Requires Node 22+; no UI build step:
 
 ```sh
@@ -135,7 +136,7 @@ cd src/swarm
 The demo is simulated and needs no API key. Real runs use your configured model
 credentials. See [Swarm setup and usage](src/swarm/README.md).
 
-![Swarm live view showing a simulated multi-harness team](docs/swarm/demo-active.jpg)
+![Swarm chat with visible sub-agent work in a simulated demo](docs/swarm/chat-subagents.jpg)
 
 [SDK](src/sdk/README.md)
 
