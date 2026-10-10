@@ -20,7 +20,7 @@ export function layoutAgents(agents) {
   ];
   return agents.map((agent, index) => ({
     ...agent,
-    ...(agents.length <= 4 ? points[index] : {
+    ...(Number.isFinite(agent.x) && Number.isFinite(agent.y) ? { x: agent.x, y: agent.y } : agents.length <= 4 ? points[index] : {
       x: 960 + Math.cos((index / agents.length) * TAU - Math.PI / 2) * 600,
       y: 725 + Math.sin((index / agents.length) * TAU - Math.PI / 2) * 200,
     }),
@@ -42,6 +42,7 @@ export class Constellation {
     this.agents = [];
     this.selectedId = null;
     this.active = false;
+    this.hub = HUB;
     this.reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
     this.startedAt = performance.now();
     this.lastFrame = 0;
@@ -61,7 +62,8 @@ export class Constellation {
     this.draw(132);
   }
 
-  update(agents, selectedId, active) {
+  update(agents, selectedId, active, hub = HUB) {
+    this.hub = hub;
     this.agents = layoutAgents(agents);
     this.selectedId = selectedId;
     this.active = active;
@@ -130,6 +132,7 @@ export class Constellation {
 
   drawAgent(agent, index, frame) {
     const context = this.context;
+    const hub = this.hub;
     const working = this.active && agent.status === 'running';
     const dimmed = this.selectedId && agent.id !== this.selectedId;
     const opacity = dimmed ? 0.2 : working ? 0.8 : agent.status === 'queued' ? 0.32 : 0.5;
@@ -144,7 +147,7 @@ export class Constellation {
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(agent.x, agent.y);
-    context.quadraticCurveTo((agent.x + HUB.x) / 2 + bend, (agent.y + HUB.y) / 2, HUB.x, HUB.y);
+    context.quadraticCurveTo((agent.x + hub.x) / 2 + bend, (agent.y + hub.y) / 2, hub.x, hub.y);
     context.stroke();
     for (let worker = 0; worker < 19; worker += 1) {
       const angle = worker * 2.39996 + Math.sin(frame / 45 + index) * 0.11;
@@ -161,7 +164,7 @@ export class Constellation {
     if (!working) return;
     for (let packet = 0; packet < 4; packet += 1) {
       const progress = (frame * 0.009 + packet * 0.25 + index * 0.17) % 1;
-      const position = between(agent, HUB, progress, index % 2 ? 22 : -22);
+      const position = between(agent, hub, progress, index % 2 ? 22 : -22);
       const alpha = Math.sin(progress * Math.PI) * opacity;
       this.dot(position.x, position.y, 13, color, alpha * 0.08);
       context.globalAlpha = alpha;
