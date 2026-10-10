@@ -121,14 +121,15 @@ for await (const message of query({
 
 ### Swarm CLI
 
-Run a small team across Codex, Claude Code, and LiteLLM, with a local constellation
-view of agent progress, tool activity, handoffs, and public conversations. Requires
-Node 22+, with no npm dependencies or build step:
+Run ten peers across Claude Code, Codex, OpenCode, and Pi. They choose their own roles, elect a coordinator,
+share findings, and work concurrently for the requested duration. The local brain
+view shows each peer’s work beside a live conversation and evolving answer.
+Requires Node 22+; no UI build step:
 
 ```sh
 cd src/swarm
 ./swarm demo --open
-./swarm run "Review this project" --harness claude --cwd ../.. --open
+./swarm run "Review this project" --cwd ../.. --duration 600 --open
 ```
 
 The demo is simulated and needs no API key. Real runs use your configured model
