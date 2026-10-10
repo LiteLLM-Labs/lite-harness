@@ -5,6 +5,7 @@ import {extname, resolve, sep} from 'node:path';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {defaultModel, defaultTeam, HARNESSES} from './team.mjs';
 import {availableHarnesses} from './adapters.mjs';
+import {Conversations} from './conversations.mjs';
 
 const WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
 const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2'};
@@ -25,21 +26,12 @@ async function readJSON(request) {
 
 export async function startServer({runner, store, port = 4318, capabilities: suppliedCapabilities, token = randomBytes(32).toString('hex')}) {
   const clients = new Set();
+  const conversations = new Conversations({runner, store});
   const found = suppliedCapabilities ?? await availableHarnesses();
   const capabilities = Array.isArray(found) ? found : Object.entries(found).map(([id, value]) => ({id, name: {native: 'Swarm · LiteLLM', codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi'}[id], ...value}));
-  const history = store.list().slice(0, 30).map(({id, task, status, startedAt, demo}) => ({id, task, status, startedAt, demo}));
-  const summaries = () => {
-    if (!runner.run) return history;
-    const {id, task, status, startedAt, demo} = runner.run;
-    const prior = history.findIndex((run) => run.id === id);
-    if (prior >= 0) history.splice(prior, 1);
-    history.unshift({id, task, status, startedAt, demo});
-    history.splice(30);
-    return history;
-  };
   const state = () => ({
-    run: runner.run,
-    runs: summaries(),
+    run: conversations.run,
+    runs: conversations.summaries(),
     defaults: {team: defaultTeam(), harnessModels: Object.fromEntries(HARNESSES.map((id) => [id, defaultModel(id)])), duration: 600, model: defaultModel('native'), baseUrl: process.env.LITELLM_BASE_URL || 'https://gateway-dev.litellm-sandbox.ai'},
     capabilities,
   });
@@ -94,15 +86,11 @@ export async function startServer({runner, store, port = 4318, capabilities: sup
       if (request.method === 'POST') {
         const body = await readJSON(request);
         if (path === '/api/run') {
-          if (runner.busy) return json(409, {error: 'A swarm is already running or stopping.'});
-          return json(201, runner.start(body));
+          return json(201, conversations.start(body));
         }
-        if (path === '/api/message') return json(200, runner.steer(body.text));
-        if (path === '/api/stop') {
-          runner.stop();
-          await runner.done;
-          return json(200, runner.run);
-        }
+        if (path === '/api/select') return json(200, conversations.select(body.id));
+        if (path === '/api/message') return json(200, conversations.steer(body.text, body.runId));
+        if (path === '/api/stop') return json(200, await conversations.stop(body.runId));
       }
       if (path.startsWith('/api/')) return json(404, {error: 'Endpoint not found.'});
       if (!['GET', 'HEAD'].includes(request.method)) return json(405, {error: 'Method not allowed.'});
@@ -113,7 +101,7 @@ export async function startServer({runner, store, port = 4318, capabilities: sup
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
       if (response.headersSent) response.end();
-      else json(error.code === 'ENOENT' ? 404 : 400, {error: String(error.message || error)});
+      else json(error.statusCode || (error.code === 'ENOENT' ? 404 : 400), {error: String(error.message || error)});
     }
   });
   server.requestTimeout = 15000;
@@ -122,15 +110,17 @@ export async function startServer({runner, store, port = 4318, capabilities: sup
     server.once('error', reject);
     server.listen(port, '127.0.0.1', accept);
   });
-  runner.on('state', broadcast);
+  conversations.on('state', broadcast);
   const heartbeat = setInterval(() => {for (const client of clients) client.write(': heartbeat\n\n');}, 15000);
   heartbeat.unref();
   return {
     url: `http://127.0.0.1:${server.address().port}`,
     token,
+    conversations,
     close: async () => {
+      await conversations.close();
       clearInterval(heartbeat);
-      runner.off('state', broadcast);
+      conversations.off('state', broadcast);
       for (const client of clients) client.end();
       await new Promise((accept) => server.close(accept));
     },
