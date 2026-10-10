@@ -1,10 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {groupChatEntries} from '../web/assets/chat-feed.js';
+import {publicOutput, publicTranscript} from '../web/assets/ui.js';
 
 const peer = (id, changes = {}) => ({id, name: id, harness: 'native', model: 'test-model', status: 'complete', cycle: 1, cycles: 1, currentOutput: '', output: '', lastContribution: '', ...changes});
 const run = (changes = {}) => ({id: 'chat-one', task: 'Original human task', startedAt: 1000, status: 'complete', agents: [peer('alpha'), peer('beta')], messages: [], events: [], ...changes});
 const message = (id, changes = {}) => ({id, at: 2000, from: 'alpha', to: 'all', text: 'An actual public contribution.', kind: 'contribution', cycle: 1, ...changes});
+
+test('public output unwraps a collaboration envelope without losing surrounding authored prose', () => {
+  const reply = 'Checked the file.\n\n```json\n' + JSON.stringify({text: 'The fix is verified.\nNo failing checks.', identity: {name: 'Verifier', role: 'Verify the result'}, votes: []}) + '\n```\n\nReady for review.';
+  assert.equal(publicOutput(reply), 'Checked the file.\n\nThe fix is verified.\nNo failing checks.\n\nReady for review.');
+  assert.equal(publicOutput('```json\n{"result":"An answer for the human","votes":[]}\n```'), 'An answer for the human');
+});
+
+test('partial fenced output decodes complete escapes and waits for unfinished unicode characters', () => {
+  assert.equal(publicOutput('Progress:\n```json\n{"text":"Line one\\nQuoted \\"text\\" and \\u'), 'Progress:\nLine one\nQuoted "text" and');
+  assert.equal(publicOutput('```json\n{"identity":{"name":"Peer"},"text":"Public \\u263A'), 'Public ☺');
+  assert.equal(publicOutput('```json\n{"identity":{"name":"Still choosing'), '');
+});
+
+test('unrelated JSON and ordinary code examples remain literal public content', () => {
+  for (const value of ['{"status":"ok","count":2}', 'Example:\n```json\n{"status":"ok","count":2}\n```', '```js\nconst value = {text: "example"};\n```', '```python\nprint("text")\n```']) {
+    assert.equal(publicOutput(value), value);
+  }
+});
+
+test('stored transcripts unwrap each cycle independently and preserve interrupted public output', () => {
+  const transcript = 'Cycle 1\n{"text":"Completed evidence","votes":[]}\n\nCycle 2 — interrupted public output\nStill checking.\n```json\n{"text":"Partial finding';
+  assert.equal(publicTranscript(transcript), 'Cycle 1\nCompleted evidence\n\nCycle 2 — interrupted public output\nStill checking.\nPartial finding');
+});
 
 test('canonical conversation does not duplicate mirrored events or include tool and status noise', () => {
   const entry = message('canonical');
