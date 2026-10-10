@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {countConsensus} from '../src/protocol.mjs';
+import {countConsensus, parseWorkReply} from '../src/protocol.mjs';
 
 const vote = (voterId, stance = 'agree') => ({voterId, stance});
 
@@ -67,4 +67,45 @@ test('electorates discard invalid IDs and duplicates without mutating saved data
   assert.equal(consensus.cast, 1);
   assert.equal(consensus.status, 'accepted');
   assert.equal(electorate.length, 8);
+});
+
+test('workstream declarations preserve stable task-derived IDs and only supported metadata', () => {
+  const reply = parseWorkReply(JSON.stringify({
+    text: 'I will verify the parser changes.',
+    identity: {name: 'Verifier', role: 'Verify parser behavior'},
+    workstream: {id: 'parser-verification', name: '  Parser verification  ', agentId: 'other-peer', members: ['other-peer']},
+    messages: [{to: 'peer-02', text: 'Please share the changed parser cases.'}],
+  }), ['peer-01', 'peer-02']);
+  assert.deepEqual(reply.workstream, {id: 'parser-verification', name: 'Parser verification'});
+  assert.equal(reply.text, 'I will verify the parser changes.');
+  assert.deepEqual(reply.messages, [{to: 'peer-02', text: 'Please share the changed parser cases.'}]);
+  assert.deepEqual(reply.identity, {name: 'Verifier', role: 'Verify parser behavior'});
+});
+
+test('a workstream-only envelope changes membership without inventing a contribution', () => {
+  const reply = parseWorkReply('{"workstream":{"id":"api","name":"API implementation"}}', ['peer-01']);
+  assert.deepEqual(reply.workstream, {id: 'api', name: 'API implementation'});
+  assert.equal(reply.text, '');
+  assert.equal(reply.result, '');
+  assert.deepEqual(reply.messages, []);
+});
+
+test('invalid workstreams are ignored without losing useful public work', () => {
+  const invalid = [null, [], 'parser', {}, {id: 'api'}, {id: 'api', name: 42},
+    ...['', 'UPPER', ' api', 'api ', 'a/b', '__proto__', `a${'b'.repeat(40)}`].map((id) => ({id, name: 'Parser'})),
+    ...['', ' ', 'N'.repeat(81), 'Hidden\nline', 'Bad\u0000name', 'Bad\u007fname'].map((name) => ({id: 'api', name}))];
+  for (const workstream of invalid) {
+    const reply = parseWorkReply(JSON.stringify({text: 'Verified evidence remains visible.', workstream}), ['peer-01']);
+    assert.equal(reply.workstream, null);
+    assert.equal(reply.text, 'Verified evidence remains visible.');
+  }
+});
+
+test('workstream bounds accept exact limits while older plain and structured replies stay ungrouped', () => {
+  const workstream = {id: `a${'b'.repeat(39)}`, name: 'N'.repeat(80)};
+  assert.deepEqual(parseWorkReply(JSON.stringify({workstream}), ['peer-01']).workstream, workstream);
+  for (const text of ['Useful plain answer', '{"text":"Legacy contribution"}', '{"identity":{"name":"Peer"}}']) {
+    assert.equal(parseWorkReply(text, ['peer-01']).workstream, null);
+  }
+  assert.equal(parseWorkReply('Useful plain answer', ['peer-01']).text, 'Useful plain answer');
 });
