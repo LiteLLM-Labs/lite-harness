@@ -8,6 +8,7 @@ import {request} from 'node:http';
 import {RunStore} from '../src/store.mjs';
 import {SwarmRunner} from '../src/runner.mjs';
 import {startServer} from '../src/server.mjs';
+import {defaultTeam, MAX_AGENTS} from '../src/team.mjs';
 
 function manualClock() {
   let now = 1000000;
@@ -143,6 +144,40 @@ test('new chats reset state after completed or stopped runs and retain both hist
     assert.equal(state.runs.find(({id}) => id === first.id).status, terminalStatus);
     assert.deepEqual(await (await get(`/api/runs/${first.id}`)).json(), previous);
   });
+});
+
+test('reading a live run returns unpersisted public progress without changing the selected chat', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'swarm-live-read-'));
+  const store = new RunStore(directory);
+  const clock = manualClock();
+  const runner = new SwarmRunner({store, workspace: directory, clock, adapter: async ({phase, id, onEvent, signal}) => {
+    if (phase === 'election') return {text: JSON.stringify({candidateId: 'peer-01'})};
+    onEvent({type: 'delta', text: `Unpersisted evidence from ${id}`});
+    await delay(10000, undefined, {signal});
+    return {text: 'Should remain pending until stopped'};
+  }});
+  const server = await startServer({runner, store, port: 0, capabilities: []});
+  t.after(async () => {await server.close(); rmSync(directory, {recursive: true, force: true});});
+  const headers = {Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json'};
+  const start = async (task) => {
+    const response = await fetch(`${server.url}/api/run`, {method: 'POST', headers, body: JSON.stringify({task, agentCount: 2, timeoutSeconds: 5})});
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const first = await start('Read this background chat');
+  await until(() => runner.run.agents.every((agent) => agent.currentOutput));
+  const second = await start('Keep this chat selected');
+  assert(store.get(first.id).agents.every((agent) => agent.currentOutput === ''));
+  const response = await fetch(`${server.url}/api/runs/${first.id}`, {headers});
+  assert.equal(response.status, 200);
+  const live = await response.json();
+  assert.equal(live.id, first.id);
+  assert(live.agents.every((agent) => agent.currentOutput === `Unpersisted evidence from ${agent.id}`));
+  assert.equal(server.conversations.run.id, second.id);
+  assert(store.get(first.id).agents.every((agent) => agent.currentOutput === ''));
+  assert.equal((await fetch(`${server.url}/api/runs/missing-run`, {headers})).status, 404);
+  clock.advance(100);
+  assert.deepEqual(store.get(first.id).agents.map(({currentOutput}) => currentOutput), live.agents.map(({currentOutput}) => currentOutput));
 });
 
 test('only explicit parentId continues a prior answer, while each API chat stays independently saved', async (t) => {
@@ -294,4 +329,55 @@ test('manager forwards public events and deltas with their chat identity and det
   const runners = [first, second].map(({id}) => server.conversations.getRunner(id));
   await server.close();
   for (const runner of runners) for (const type of ['event', 'delta', 'state']) assert.equal(runner.listenerCount(type), 0);
+});
+
+test('adding peers targets one live chat and preserves its leader, deadline and neighboring chat', async (t) => {
+  const {get, post, start, server} = await chatFixture(t);
+  const first = await start('GROW_THIS_TEAM');
+  const second = await start('KEEP_THIS_TEAM');
+  const firstRunner = server.conversations.getRunner(first.id);
+  await until(() => firstRunner.run.phase === 'working');
+  const leader = firstRunner.run.coordinatorId;
+  const response = await post('/api/agents', {runId: first.id, count: 13});
+  assert.equal(response.status, 200);
+  const grown = await response.json();
+  assert.equal(grown.id, first.id);
+  assert.equal(grown.agents.length, 15);
+  assert.equal(grown.coordinatorId, leader);
+  assert.equal(grown.deadlineAt, first.deadlineAt);
+  assert.equal(grown.election.eligibleVoters, 2);
+  assert.equal(new Set(grown.agents.map(({id}) => id)).size, 15);
+  await until(() => firstRunner.run.agents.every(({cycles}) => cycles > 0));
+  const state = await (await get('/api/state')).json();
+  assert.equal(state.run.id, second.id);
+  assert.equal(state.run.agents.length, 2);
+  assert.equal(state.defaults.maxAgents, MAX_AGENTS);
+  for (const count of [0, -1, 1.5, MAX_AGENTS]) {
+    assert.equal((await post('/api/agents', {runId: first.id, count})).status, 400);
+    assert.equal(firstRunner.run.agents.length, 15);
+  }
+  assert.equal((await post('/api/agents', {runId: 'missing', count: 1})).status, 404);
+  const unauthenticated = await fetch(`${server.url}/api/agents`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({count: 1})});
+  assert.equal(unauthenticated.status, 401);
+  await post('/api/stop', {runId: first.id});
+  assert.equal((await post('/api/agents', {runId: first.id, count: 1})).status, 409);
+  assert.equal(server.conversations.getRunner(second.id).run.status, 'running');
+});
+
+test('API accepts initial teams beyond twelve and bounded large custom configurations', async (t) => {
+  const {get, post, start, server} = await chatFixture(t);
+  const generated = await start('GENERATED_THIRTY', {agents: undefined, agentCount: 30});
+  assert.equal(generated.agents.length, 30);
+  await post('/api/stop', {runId: generated.id});
+  const agents = defaultTeam({count: MAX_AGENTS}).map((agent) => ({...agent, role: 'Discuss evidence. '.repeat(100)}));
+  assert(Buffer.byteLength(JSON.stringify(agents)) > 64000);
+  const custom = await start('LARGE_CUSTOM_TEAM', {agents});
+  assert.equal(custom.agents.length, MAX_AGENTS);
+  await post('/api/stop', {runId: custom.id});
+  const bad = await post('/api/run', {task: 'Beyond maximum', agentCount: MAX_AGENTS + 1});
+  assert.equal(bad.status, 400);
+  const state = await (await get('/api/state')).json();
+  assert.equal(state.runs.length, 2);
+  const oversized = await fetch(`${server.url}/api/run`, {method: 'POST', headers: {Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json'}, body: JSON.stringify({task: 'x'.repeat(2 * 1024 * 1024)})});
+  assert.equal(oversized.status, 400);
 });
