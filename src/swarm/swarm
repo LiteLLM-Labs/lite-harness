@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+SWARM_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SWARM_BUNDLED_NODE="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+if [ -z "${SWARM_NODE:-}" ]; then
+  if [ -x "$SWARM_BUNDLED_NODE" ]; then SWARM_NODE="$SWARM_BUNDLED_NODE"; else SWARM_NODE=node; fi
+fi
+if [ -f "$SWARM_ROOT/.env" ]; then
+  exec "$SWARM_NODE" "$SWARM_ROOT/bin/swarm.mjs" --env-file "$SWARM_ROOT/.env" "$@"
+fi
+exec "$SWARM_NODE" "$SWARM_ROOT/bin/swarm.mjs" "$@"
