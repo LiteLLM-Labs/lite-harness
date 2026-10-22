@@ -1,7 +1,8 @@
 // Pi AI provider: drives @earendil-works/pi-agent-core in-process and maps
-// its AgentEvents to the canonical wire. Routes through LiteLLM via env when
-// LITELLM_API_BASE + LITELLM_API_KEY are set (OpenAI-compatible completions
-// endpoint); otherwise falls through to OPENAI_API_KEY direct.
+// its AgentEvents to the canonical wire. Routes through an AI gateway via env
+// when LITELLM_API_BASE + LITELLM_API_KEY (or the generic AI_GATEWAY_API_BASE +
+// AI_GATEWAY_API_KEY) are set (OpenAI-compatible completions endpoint);
+// otherwise falls through to OPENAI_API_KEY direct. LITELLM_* takes precedence.
 import { agentLoop } from "@earendil-works/pi-agent-core";
 import { eventToFrames } from "./transformation.mjs";
 
@@ -9,7 +10,7 @@ export const id = "pi-ai";
 export const aliases = ["pi"];
 
 function buildModel(modelId, env) {
-  const raw = env.LITELLM_API_BASE || "https://api.openai.com";
+  const raw = env.LITELLM_API_BASE || env.AI_GATEWAY_API_BASE || "https://api.openai.com";
   const stripped = raw.replace(/\/+$/, "");
   const baseUrl = stripped.endsWith("/v1") ? stripped : `${stripped}/v1`;
   return {
@@ -67,7 +68,7 @@ export function createRuntime({ model, env = process.env, diagnostics = () => {}
       const config = {
         model: modelObj,
         convertToLlm,
-        getApiKey: async () => env.LITELLM_API_KEY || env.OPENAI_API_KEY,
+        getApiKey: async () => env.LITELLM_API_KEY || env.AI_GATEWAY_API_KEY || env.OPENAI_API_KEY,
       };
 
       const stream = agentLoop([userMsg], context, config, signal);
