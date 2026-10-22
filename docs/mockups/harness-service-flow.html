@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lite Harness v0 Mockup</title>
+  <style>
+    :root {
+      --bg: #f7f8f5;
+      --surface: #ffffff;
+      --ink: #17201b;
+      --muted: #637069;
+      --line: #dfe6df;
+      --soft: #edf4ef;
+      --green: #176b4b;
+      --green-2: #0f5138;
+      --lime: #cce66a;
+      --blue: #315fd0;
+      --gold: #b77716;
+      --shadow: 0 18px 50px rgba(35, 52, 42, 0.13);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    body {
+      padding: 28px;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .shell {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.86);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      border-radius: 7px;
+      background:
+        linear-gradient(135deg, var(--lime) 0 44%, transparent 44%),
+        linear-gradient(315deg, #7ed7a1 0 46%, var(--green) 46%);
+    }
+
+    .brand strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.1;
+    }
+
+    .brand span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--green);
+      background: #eef8f1;
+      border: 1px solid #cce8d4;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+      gap: 24px;
+      padding: 28px;
+      background:
+        linear-gradient(180deg, rgba(204, 230, 106, 0.2), transparent 280px),
+        var(--bg);
+    }
+
+    .intro {
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      min-width: 0;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      width: fit-content;
+      color: var(--green);
+      background: #eaf5ec;
+      border: 1px solid #cfe5d4;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    h1 {
+      margin: 14px 0 0;
+      max-width: 740px;
+      font-size: 42px;
+      line-height: 1.05;
+    }
+
+    .intro p {
+      margin: 14px 0 0;
+      max-width: 650px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .value-list {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .value {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 118px;
+    }
+
+    .value svg {
+      width: 22px;
+      height: 22px;
+      color: var(--green);
+      stroke-width: 1.8;
+      margin-bottom: 10px;
+    }
+
+    .value strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .value span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .setup {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .setup-head {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .setup-head h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    .setup-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .setup-body {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 7px;
+    }
+
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      min-width: 0;
+    }
+
+    .step b {
+      width: 23px;
+      height: 23px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--green);
+      font-size: 11px;
+      flex: 0 0 auto;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 11px 12px;
+      background: #fff;
+      color: var(--ink);
+      outline: 0;
+    }
+
+    textarea {
+      min-height: 92px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: #91c79e;
+      box-shadow: 0 0 0 3px rgba(23, 107, 75, 0.12);
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .template-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .choice {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      background: #fff;
+      min-height: 104px;
+    }
+
+    .choice.active {
+      border-color: #8dcc9d;
+      box-shadow: 0 0 0 3px rgba(23, 107, 75, 0.1);
+    }
+
+    .choice header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+
+    .choice strong {
+      font-size: 13px;
+    }
+
+    .choice p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    .mini-pill {
+      display: inline-flex;
+      color: var(--green);
+      background: #eef8f1;
+      border: 1px solid #cce8d4;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .mini-pill.warn {
+      color: var(--gold);
+      background: #fff7e8;
+      border-color: #edd3a4;
+    }
+
+    .tool-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .tool-row strong {
+      display: block;
+      font-size: 13px;
+    }
+
+    .tool-row span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+
+    .switch {
+      position: relative;
+      width: 38px;
+      height: 22px;
+      flex: 0 0 auto;
+      border: 0;
+      border-radius: 999px;
+      background: var(--green);
+    }
+
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+    }
+
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      padding: 11px 14px;
+      font-size: 13px;
+      font-weight: 850;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+    }
+
+    .btn svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2;
+    }
+
+    .run {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      padding: 0 28px 28px;
+      background: var(--bg);
+    }
+
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .panel-head span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .timeline {
+      padding: 16px 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .event b {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #eaf5ec;
+      color: var(--green);
+      font-size: 12px;
+    }
+
+    .event strong {
+      display: block;
+      font-size: 13px;
+    }
+
+    .event span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      margin-top: 2px;
+    }
+
+    .terminal-wrap {
+      padding: 16px 18px;
+    }
+
+    .terminal {
+      margin: 0;
+      background: #101713;
+      color: #d8f2df;
+      border-radius: 8px;
+      padding: 15px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-x: auto;
+    }
+
+    .terminal .muted { color: #88bf97; }
+    .terminal .key { color: var(--lime); }
+
+    @media (max-width: 980px) {
+      body { padding: 0; }
+      .shell {
+        border: 0;
+        border-radius: 0;
+      }
+      .hero,
+      .run,
+      .value-list {
+        grid-template-columns: 1fr;
+      }
+      h1 {
+        font-size: 34px;
+      }
+    }
+
+    @media (max-width: 620px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .top-actions {
+        width: 100%;
+        justify-content: space-between;
+      }
+      .hero {
+        padding: 16px;
+      }
+      .run {
+        padding: 0 16px 16px;
+      }
+      .field-grid,
+      .template-row,
+      .steps {
+        grid-template-columns: 1fr;
+      }
+      h1 {
+        font-size: 28px;
+      }
+      .actions {
+        flex-direction: column;
+      }
+      .btn {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <strong>Lite Harness</strong>
+          <span>Agent setup v0</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="pill">LiteLLM gateway connected</span>
+        <span class="pill">Temporal ready</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="intro">
+        <div>
+          <div class="eyebrow">First value: deploy a useful agent in minutes</div>
+          <h1>Start with one managed coding agent for the analytics team.</h1>
+          <p>
+            The v0 does not try to model the whole enterprise. It gets a team from
+            “we built a helpful CI-fixing assistant” to “any repo owner can launch
+            it safely through UI or API.”
+          </p>
+        </div>
+
+        <div class="value-list">
+          <article class="value">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 9l-4 3 4 3"/><path d="M16 9l4 3-4 3"/><path d="M14 5l-4 14"/></svg>
+            <strong>Pick the agent job</strong>
+            <span>CI fixer first, then Power BI and customer-facing agents later.</span>
+          </article>
+          <article class="value">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg>
+            <strong>Scope the tools</strong>
+            <span>Show only the MCPs this agent needs; hide broad AWS access by default.</span>
+          </article>
+          <article class="value">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+            <strong>Run it once</strong>
+            <span>Prove it can diagnose a pipeline and ask approval before it writes.</span>
+          </article>
+        </div>
+      </div>
+
+      <section class="setup">
+        <div class="setup-head">
+          <div>
+            <h2>Create agent</h2>
+            <p>Simple setup for the first harness-as-a-service workflow.</p>
+          </div>
+          <span class="pill">3 min setup</span>
+        </div>
+
+        <div class="setup-body">
+          <div class="steps" aria-label="Setup steps">
+            <div class="step"><b>1</b><span>Goal</span></div>
+            <div class="step"><b>2</b><span>Harness</span></div>
+            <div class="step"><b>3</b><span>Tools</span></div>
+            <div class="step"><b>4</b><span>Run</span></div>
+          </div>
+
+          <label>
+            Agent goal
+            <textarea>Watch failed CI runs, propose a fix, and request approval before opening a merge request.</textarea>
+          </label>
+
+          <div class="field-grid">
+            <label>
+              Harness
+              <select>
+                <option>OpenCode</option>
+                <option>Claude Code</option>
+                <option>Inline harness</option>
+              </select>
+            </label>
+            <label>
+              Repo provider
+              <select>
+                <option>GitLab</option>
+                <option>GitHub</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="template-row">
+            <article class="choice active">
+              <header>
+                <strong>GitLab MCP</strong>
+                <span class="mini-pill">On</span>
+              </header>
+              <p>Read pipeline state, clone repo, comment on MR, and propose patch.</p>
+            </article>
+            <article class="choice">
+              <header>
+                <strong>AWS MCP</strong>
+                <span class="mini-pill warn">Hidden</span>
+              </header>
+              <p>Not shown to this agent until a policy explicitly requires it.</p>
+            </article>
+          </div>
+
+          <div class="tool-row">
+            <div>
+              <strong>Human approval before writes</strong>
+              <span>Any repo change pauses for approve/reject instead of acting silently.</span>
+            </div>
+            <button class="switch" type="button" aria-label="Human approval enabled"></button>
+          </div>
+
+          <div class="actions">
+            <button class="btn" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+              Save draft
+            </button>
+            <button class="btn primary" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+              Deploy and test
+            </button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="run">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>First successful run</h2>
+            <span>What the user sees after deploy</span>
+          </div>
+          <span class="pill">Ready</span>
+        </div>
+        <div class="timeline">
+          <div class="event">
+            <b>1</b>
+            <div><strong>CI failure detected</strong><span>Temporal starts the agent when the analytics pipeline fails.</span></div>
+          </div>
+          <div class="event">
+            <b>2</b>
+            <div><strong>Agent diagnoses the failure</strong><span>OpenCode runs in the sandbox with only GitLab MCP access.</span></div>
+          </div>
+          <div class="event">
+            <b>3</b>
+            <div><strong>Approval requested</strong><span>The repo owner reviews the patch before any write happens.</span></div>
+          </div>
+          <div class="event">
+            <b>4</b>
+            <div><strong>MR opened</strong><span>The same run can be called from UI or <code>POST /api/agents/:id/run</code>.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>API equivalent</h2>
+            <span>For teams that do not want the UI</span>
+          </div>
+        </div>
+        <div class="terminal-wrap">
+          <pre class="terminal"><span class="muted">$ curl -X POST /api/agents</span>
+{
+  "name": <span class="key">"analytics-ci-fixer"</span>,
+  "harness": <span class="key">"opencode"</span>,
+  "repo_provider": <span class="key">"gitlab"</span>,
+  "mcp_policy": <span class="key">"gitlab-ci-only"</span>,
+  "approval_required": <span class="key">true</span>
+}
+
+<span class="muted">agent_7k29 deployed. Run test pipeline?</span></pre>
+        </div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
