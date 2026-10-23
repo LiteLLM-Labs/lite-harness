@@ -23,11 +23,29 @@ function buildCodexOptions(env) {
   return { baseUrl };
 }
 
-export function createRuntime({ model, env = process.env, diagnostics = () => {} }) {
-  let currentModel = model || env.LITELLM_DEFAULT_MODEL || "gpt-4o";
-  let aborter = null;
+// Codex has no per-tool approval prompt in headless runs, so the Claude
+// permission modes map onto its sandbox levels instead.
+const SANDBOX_BY_PERMISSION_MODE = {
+  default: "read-only",
+  plan: "read-only",
+  acceptEdits: "workspace-write",
+  bypassPermissions: "danger-full-access",
+};
 
-  const codex = new Codex(buildCodexOptions(env));
+function sandboxFor(mode) {
+  return SANDBOX_BY_PERMISSION_MODE[mode] ?? "read-only";
+}
+
+export function createRuntime({ model, permissionMode, cwd, env = process.env, diagnostics = () => {}, codex }) {
+  let currentModel = model || env.LITELLM_DEFAULT_MODEL || "gpt-4o";
+  let mode = permissionMode || "default";
+  let aborter = null;
+  // Codex persists conversation state on disk keyed by thread id. Keep only the
+  // id across turns and resume it with the current options, so model and
+  // permission-mode changes apply without losing context.
+  let threadId = null;
+
+  codex ??= new Codex(buildCodexOptions(env));
 
   return {
     get model() {
@@ -36,17 +54,27 @@ export function createRuntime({ model, env = process.env, diagnostics = () => {}
     setModel(next) {
       if (next) currentModel = next;
     },
-    setPermissionMode() {},
+    setPermissionMode(next) {
+      mode = next || "default";
+    },
     interrupt() {
       aborter?.abort();
     },
     async *runTurn({ prompt, session }) {
       aborter = new AbortController();
-      const thread = codex.startThread({ model: currentModel, skipGitRepoCheck: true });
+      const threadOptions = {
+        model: currentModel,
+        workingDirectory: cwd,
+        sandboxMode: sandboxFor(mode),
+        approvalPolicy: "never",
+        skipGitRepoCheck: true,
+      };
+      const thread = threadId ? codex.resumeThread(threadId, threadOptions) : codex.startThread(threadOptions);
       const { events } = await thread.runStreamed(prompt, { signal: aborter.signal });
-      const toFrames = createEventTransformer();
+      const toFrames = createEventTransformer({ startedAt: session.startedAt });
       try {
         for await (const event of events) {
+          if (event?.type === "thread.started" && event.thread_id) threadId = event.thread_id;
           for (const frame of toFrames(event, { sessionId: session.sessionId, model: currentModel })) {
             yield frame;
           }
